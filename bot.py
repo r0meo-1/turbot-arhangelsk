@@ -1,10 +1,10 @@
 import os
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import logging
 from flask import Flask, request
-import threading
+import asyncio
+from threading import Thread
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ DESTINATION, DATES, PEOPLE, BUDGET = range(4)
 user_data = {}
 
 app = Flask(__name__)
-tg_app = None
+bot_app = None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -68,8 +68,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Отменено. /start")
     return ConversationHandler.END
 
-def setup_application():
-    application = Application.builder().token(BOT_TOKEN).build()
+def setup_bot_app():
+    global bot_app
+    bot_app = Application.builder().token(BOT_TOKEN).build()
     
     conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -82,16 +83,10 @@ def setup_application():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     
-    application.add_handler(conv)
-    return application
-
-async def setup_webhook():
-    global tg_app
-    tg_app = setup_application()
-    await tg_app.initialize()
-    webhook_url = f"{WEBHOOK_URL}/webhook"
-    await tg_app.bot.set_webhook(url=webhook_url)
-    logger.info(f"🤖 Webhook установлен: {webhook_url}")
+    bot_app.add_handler(conv)
+    asyncio.run(bot_app.initialize())
+    asyncio.run(bot_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook"))
+    logger.info(f"🤖 Webhook установлен: {WEBHOOK_URL}/webhook")
 
 @app.route('/', methods=['GET'])
 def index():
@@ -99,16 +94,18 @@ def index():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if tg_app is None:
+    if bot_app is None:
         return 'Bot not initialized', 503
     
-    update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    asyncio.run(tg_app.process_update(update))
+    update = Update.de_json(request.get_json(force=True), bot_app.bot)
+    asyncio.run(bot_app.process_update(update))
     return 'OK'
 
 if __name__ == "__main__":
-    # Устанавливаем webhook перед запуском Flask
-    asyncio.run(setup_webhook())
+    # Инициализируем бота в отдельном потоке
+    setup_thread = Thread(target=setup_bot_app)
+    setup_thread.start()
+    setup_thread.join()
     
     port = int(os.getenv("PORT", 10000))
     logger.info(f"🚀 Запуск Flask на порту {port}")
