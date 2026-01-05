@@ -64,9 +64,9 @@ def send_to_uon_crm(chat_id, destination, dates, people, budget, phone):
         
 
         def generate_ai_selection(destination, dates, people, budget):
-    """
-    Генерирует AI-подборку с партнерской ссылкой Travelata
-    """
+        """
+        Генерирует AI-подборку с партнерской ссылкой Travelata
+        """
     try:
         if not GROQ_API_KEY:
             # Если нет GROQ API, просто возвращаем базовое сообщение
