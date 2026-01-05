@@ -17,8 +17,7 @@ STATES = {'destination': 1, 'dates': 2, 'people': 3, 'budget': 4}
 
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        onse = requests.post(url, json={'chat_id': chat_id, 'text': text})
-
+    requests.post(url, json={'chat_id': chat_id, 'text': text})
 @app.route('/')
 def index():
     return 'TurBot Архангельск is running!'
