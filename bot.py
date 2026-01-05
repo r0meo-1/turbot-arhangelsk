@@ -78,8 +78,6 @@ def setup_bot_app():
             PEOPLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people)],
             BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_budget)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
     
     bot_app.add_handler(conv)
 
