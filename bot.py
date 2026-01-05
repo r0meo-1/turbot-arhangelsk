@@ -2,14 +2,12 @@ import os
 import logging
 from flask import Flask, request
 import requests
-from urllib.parse import urlencode
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 UON_API_KEY = os.getenv("UON_API_KEY", "SqHP1egva6LTrL08U763")  # API-ключ U-ON
-UON_URL = "https://apreltour.u-on.ru"  # URL вашей системы U-ON
 
 app = Flask(__name__)
 user_data = {}
@@ -32,20 +30,15 @@ def send_to_uon_crm(chat_id, destination, dates, people, budget, phone):
     try:
         # Формируем данные для создания лида
         lead_data = {
-            "r_name": f"Telegram заявка {chat_id}",
-            "r_u_name": destination,
-            "r_cl_company": f"Telegram ID: {chat_id}",
-            "r_phone": phone,
-            "r_note": f"Направление: {destination}\nДаты: {dates}\nЛюдей: {people}\nБюджет: {budget}\nТелефон: {phone}",
-            "tourists": people,
-            "price": budget
+            "u_name": destination,
+            "u_phone": phone,
+            "u_note": f"Направление: {destination}\nДаты: {dates}\nЛюдей: {people}\nБюджет: {budget}\nТелефон: {phone}"
         }
         
         # Отправляем запрос в U-ON API
         response = requests.post(
-            f"{UON_URL}/api/lead/create",
-            params={"token": UON_API_KEY},
-            json=lead_data
+            f"https://api.u-on.ru/{UON_API_KEY}/lead/create.json",
+            data=lead_data
         )
         
         if response.status_code == 200:
