@@ -8,16 +8,22 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 UON_API_KEY = os.getenv("UON_API_KEY", "SqHP1egva6LTrL08U763")  # API-ключ U-ON
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # ID админа (мамы) для пересылки подборок
 
 app = Flask(__name__)
 user_data = {}
+all_users = set()  # Хранение всех chat_id пользователей
 
 STATES = {'destination': 1, 'dates': 2, 'people': 3, 'budget': 4, 'phone': 5}
 
-def send_message(chat_id, text):
+def send_message(chat_id, text, parse_mode=None):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    response = requests.post(url, json={'chat_id': chat_id, 'text': text})
+    payload = {'chat_id': chat_id, 'text': text}
+    if parse_mode:
+        payload['parse_mode'] = parse_mode
+    response = requests.post(url, json=payload)
     logger.info(f"Sent to {chat_id}: {response.status_code} - {response.text[:100]}")
+    return response
 
 @app.route('/')
 def index():
@@ -63,6 +69,67 @@ def webhook():
         chat_id = message['chat']['id']
         text = message.get('text', '')
         
+        # Сохраняем chat_id всех пользователей
+        all_users.add(chat_id)
+        
+        # Команды для админа (мамы)
+        if chat_id == ADMIN_ID:
+            # Команда /send {chat_id} {message} - отправить сообщение конкретному пользователю
+            if text.startswith('/send '):
+                parts = text.split(' ', 2)
+                if len(parts) >= 3:
+                    target_chat_id = parts[1]
+                    msg_text = parts[2]
+                    try:
+                        send_message(int(target_chat_id), msg_text, parse_mode='HTML')
+                        send_message(chat_id, f"✅ Сообщение отправлено пользователю {target_chat_id}")
+                    except Exception as e:
+                        send_message(chat_id, f"❌ Ошибка: {e}")
+                else:
+                    send_message(chat_id, "Использование: /send {chat_id} {сообщение}")
+                return 'OK'
+            
+            # Команда /broadcast {message} - отправить всем пользователям
+            elif text.startswith('/broadcast '):
+                msg_text = text.replace('/broadcast ', '', 1)
+                count = 0
+                for user_id in all_users:
+                    if user_id != ADMIN_ID:  # Не отправляем админу
+                        try:
+                            send_message(user_id, msg_text, parse_mode='HTML')
+                            count += 1
+                        except:
+                            pass
+                send_message(chat_id, f"✅ Подборка отправлена {count} пользователям")
+                return 'OK'
+            
+            # Команда /users - показать всех пользователей
+            elif text == '/users':
+                users_list = "📋 Список пользователей бота:\n\n"
+                for user_id in all_users:
+                    if user_id != ADMIN_ID:
+                        users_list += f"• ID: {user_id}\n"
+                users_list += f"\nВсего: {len(all_users) - 1} пользователей"
+                send_message(chat_id, users_list)
+                return 'OK'
+            
+            # Команда /help - помощь для админа
+            elif text == '/help':
+                help_text = """🔧 Команды админа:
+
+/send {chat_id} {текст} - отправить сообщение пользователю
+/broadcast {текст} - разослать всем пользователям
+/users - список всех пользователей
+/help - эта справка
+
+Пример отправки подборки:
+/send 123456789 🌴 <b>Ваша подборка туров!</b>\n\nЕгипет, Хургада\n7 ночей - 60000₽\n\n👉 https://qui-quo.ru/abc123
+
+HTML-теги работают: <b>жирный</b>, <i>курсив</i>"""
+                send_message(chat_id, help_text, parse_mode='HTML')
+                return 'OK'
+        
+        # Обычный диалог для клиентов
         if text == '/start':
             user_data[chat_id] = {'state': 'destination'}
             send_message(chat_id, "🌴 Здравствуйте! Я помогу подобрать тур под ваши пожелания.\n\n📍 Куда бы вы хотели отправиться?")
@@ -96,6 +163,11 @@ def webhook():
                 
                 # Отправляем подтверждение заявки
                 send_message(chat_id, f"✅ Ваша заявка принята! Наш менеджер свяжется с вами в ближайшее время.\n\n📍 Направление: {data_info['destination']}\n📅 Даты: {data_info['dates']}\n👥 Человек: {data_info['people']}\n💰 Бюджет: {data_info['budget']}\n📱 Телефон: {phone}\n\nСпасибо за обращение в турагентство Апрель Тур! 🌺")
+                
+                # Уведомляем админа о новой заявке
+                if ADMIN_ID:
+                    admin_msg = f"🔔 Новая заявка!\n\nОт пользователя: {chat_id}\n📍 {data_info['destination']}\n📅 {data_info['dates']}\n👥 {data_info['people']} чел\n💰 {data_info['budget']}₽\n📱 {phone}\n\nОтветить: /send {chat_id} ваше сообщение"
+                    send_message(ADMIN_ID, admin_msg)
                 
                 # Отправляем заявку в U-ON CRM
                 send_to_uon_crm(
