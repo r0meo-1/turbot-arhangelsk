@@ -1,104 +1,73 @@
 import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import logging
 from flask import Flask, request
-import asyncio
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = "https://turbot-arhangelsk.onrender.com"
 PARTNER_LINK = "https://partners.travelata.ru/?sid=kg87ezvoan"
 
-DESTINATION, DATES, PEOPLE, BUDGET = range(4)
+app = Flask(__name__)
+
 user_data = {}
 
-app = Flask(__name__)
-bot_app = None
+STATES = {'destination': 1, 'dates': 2, 'people': 3, 'budget': 4}
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_text(
-        f"🌴 Привет, {user.first_name}!\\n\\n"
-        f"Я помогу подобрать идеальный тур! 🔥\\n\\n"
-        f"Куда хотите поехать?"
-    )
-    return DESTINATION
+def send_message(chat_id, text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, json={'chat_id': chat_id, 'text': text})
 
-async def get_destination(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data[user_id] = {'destination': update.message.text}
-    await update.message.reply_text("📅 Когда планируете поездку?")
-    return DATES
-
-async def get_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data[user_id]['dates'] = update.message.text
-    await update.message.reply_text("👥 Сколько человек поедет?")
-    return PEOPLE
-
-async def get_people(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    user_data[user_id]['people'] = update.message.text
-    await update.message.reply_text("💰 Какой бюджет на человека?")
-    return BUDGET
-
-async def get_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    data = user_data[user_id]
-    data['budget'] = update.message.text
-    
-    await update.message.reply_text(
-        f"✅ Заявка принята!\\n\\n"
-        f"📍 {data['destination']}\\n"
-        f"📅 {data['dates']}\\n"
-        f"👥 {data['people']}\\n"
-        f"💰 {data['budget']}"
-    )
-    await update.message.reply_text(f"🔥 Лучшие туры:\\n\\n👉 {PARTNER_LINK}")
-    
-    user_data.pop(user_id, None)
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено. /start")
-    return ConversationHandler.END
-
-def setup_bot_app():
-    global bot_app
-    bot_app = Application.builder().token(BOT_TOKEN).build()
-    
-    conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_destination)],
-            DATES: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_dates)],
-            PEOPLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_people)],
-            BUDGET: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_budget)],
-        },
-    
-    bot_app.add_handler(conv)
-
-@app.route('/', methods=['GET'])
+@app.route('/')
 def index():
     return 'TurBot Архангельск is running!'
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if bot_app is None:
-        return 'Bot not initialized', 503
-    
-    update = Update.de_json(request.get_json(force=True), bot_app.bot)
-    asyncio.run(bot_app.process_update(update))
-    return 'OK'
+    try:
+        data = request.get_json()
+        if 'message' not in data:
+            return 'OK'
+        
+        message = data['message']
+        chat_id = message['chat']['id']
+        text = message.get('text', '')
+        
+        if text == '/start':
+            user_data[chat_id] = {'state': 'destination'}
+            send_message(chat_id, "🌴 Привет! Я помогу подобрать идеальный тур! 🔥\n\nКуда хотите поехать?")
+        
+        elif chat_id in user_data:
+            state = user_data[chat_id].get('state')
+            
+            if state == 'destination':
+                user_data[chat_id]['destination'] = text
+                user_data[chat_id]['state'] = 'dates'
+                send_message(chat_id, "📅 Когда планируете поездку?")
+            
+            elif state == 'dates':
+                user_data[chat_id]['dates'] = text
+                user_data[chat_id]['state'] = 'people'
+                send_message(chat_id, "👥 Сколько человек поедет?")
+            
+            elif state == 'people':
+                user_data[chat_id]['people'] = text
+                user_data[chat_id]['state'] = 'budget'
+                send_message(chat_id, "💰 Какой бюджет на человека?")
+            
+            elif state == 'budget':
+                data_info = user_data[chat_id]
+                send_message(chat_id, f"✅ Заявка принята!\n\n📍 {data_info['destination']}\n📅 {data_info['dates']}\n👥 {data_info['people']}\n💰 {text}")
+                send_message(chat_id, f"🔥 Лучшие туры:\n\n👉 {PARTNER_LINK}")
+                del user_data[chat_id]
+        
+        return 'OK'
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        return 'OK'
 
-if __name__ == "__main__":
-    setup_bot_app()
-        loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(bot_app.initialize())
+if __name__ == '__main__':
     port = int(os.getenv("PORT", 10000))
     logger.info(f"🚀 Запуск Flask на порту {port}")
     app.run(host='0.0.0.0', port=port)
