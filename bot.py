@@ -37,6 +37,7 @@ def send_to_uon_crm(chat_id, destination, dates, people, budget, phone):
         # Формируем данные для создания лида
         lead_data = {
             "u_name": destination,
+                        "source": "Telegram бот",
             "u_phone": phone,
             "u_note": f"Направление: {destination}\nДаты: {dates}\nЛюдей: {people}\nБюджет: {budget}\nТелефон: {phone}"
         }
