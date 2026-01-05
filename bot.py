@@ -17,8 +17,8 @@ STATES = {'destination': 1, 'dates': 2, 'people': 3, 'budget': 4}
 
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        response = requests.post(url, json={'chat_id': chat_id, 'text': text})
-    logger.info(f"Send message response: {response.status_code}, {response.text}")
+        onse = requests.post(url, json={'chat_id': chat_id, 'text': text})
+    er.info(f"Send message response: {response.status_code}, {response.text}")
 
 @app.route('/')
 def index():
