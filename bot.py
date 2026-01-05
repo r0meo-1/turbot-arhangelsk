@@ -98,7 +98,9 @@ def webhook():
 
 if __name__ == "__main__":
     setup_bot_app()
-    
+        loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(bot_app.initialize())
     port = int(os.getenv("PORT", 10000))
     logger.info(f"🚀 Запуск Flask на порту {port}")
     app.run(host='0.0.0.0', port=port)
