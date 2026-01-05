@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PARTNER_SID = "kg87ezvoan"  # Ваш партнерский ID Travelata
+UON_API_KEY = os.getenv("UON_API_KEY", "SqHP1egva6LTrL08U763")  # API-ключ U-ON
+UON_URL = "https://apreltour.u-on.ru"  # URL вашей системы U-ON
 
 app = Flask(__name__)
 user_data = {}
@@ -43,6 +45,39 @@ def generate_partner_link(destination, people):
 @app.route('/')
 def index():
     return 'TurBot Архангельск is running!'
+
+def send_to_uon_crm(chat_id, destination, dates, people, budget):
+    """
+    Отправляет заявку в U-ON CRM
+    """
+    try:
+        # Формируем данные для создания лида
+        lead_data = {
+            "r_name": f"Telegram заявка {chat_id}",
+            "r_u_name": destination,
+            "r_cl_company": f"Telegram ID: {chat_id}",
+            "r_note": f"Направление: {destination}\nДаты: {dates}\nЛюдей: {people}\nБюджет: {budget}",
+            "tourists": people,
+            "price": budget
+        }
+        
+        # Отправляем запрос в U-ON API
+        response = requests.post(
+            f"{UON_URL}/api/lead/create",
+            params={"token": UON_API_KEY},
+            json=lead_data
+        )
+        
+        if response.status_code == 200:
+            logger.info(f"Lead created in U-ON CRM: {response.json()}")
+            return True
+        else:
+            logger.error(f"Failed to create lead in U-ON: {response.status_code} - {response.text}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error sending to U-ON CRM: {e}")
+        return False
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -82,6 +117,15 @@ def webhook():
                 
                 # Отправляем подтверждение заявки
                 send_message(chat_id, f"✅ Заявка принята!\n\n📍 {data_info['destination']}\n📅 {data_info['dates']}\n👥 {data_info['people']}\n💰 {text}")
+
+                                # Отправляем заявку в U-ON CRM
+                send_to_uon_crm(
+                    chat_id,
+                    data_info['destination'],
+                    data_info['dates'],
+                    data_info['people'],
+                    text
+                )
                 
                 # Генерируем персонализированную партнерскую ссылку
                 try:
