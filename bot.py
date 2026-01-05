@@ -2,6 +2,7 @@ import os
 import logging
 from flask import Flask, request
 import requests
+from groq import Groq
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -9,6 +10,8 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 UON_API_KEY = os.getenv("UON_API_KEY", "SqHP1egva6LTrL08U763")  # API-ключ U-ON
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # ID админа (мамы) для пересылки подборок
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # Groq API для AI-подборок
+TRAVELATA_PARTNER_ID = os.getenv("TRAVELATA_PARTNER_ID", "hoevf8zmd4")  # Партнерский ID Travelata
 
 app = Flask(__name__)
 user_data = {}
@@ -57,7 +60,59 @@ def send_to_uon_crm(chat_id, destination, dates, people, budget, phone):
     
     except Exception as e:
         logger.error(f"Error sending to U-ON CRM: {e}")
-        return False
+        return 
+        
+        
+        def generate_ai_selection(destination, dates, people, budget):
+    """
+    Генерирует AI-подборку с партнерской ссылкой Travelata
+    """
+    try:
+        if not GROQ_API_KEY:
+            # Если нет GROQ API, просто возвращаем базовое сообщение
+            travelata_url = f"https://partners.travelata.ru/search?fromCity=2&toCountry={destination}&sid={TRAVELATA_PARTNER_ID}"
+            return f"🔍 🌴 Подбираю для вас лучшие туры!\n\n👉 Посмотреть актуальные предложения: {travelata_url}\n\nℹ️ Наш менеджер свяжется с вами и подготовит персональную подборку!"
+        
+        # Инициализируем Groq клиент
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        
+        # Генерируем промпт для AI
+        prompt = f"""Ты - эксперт по туризму турагентства "Апрель Тур" из Архангельска.
+
+Клиент хочет:
+- Направление: {destination}
+- Даты: {dates}
+- Количество человек: {people}
+- Бюджет: {budget} рублей
+
+Напиши короткое (3-4 предложения), дружелюбное сообщение с:
+- Что ожидает в этом направлении
+- Почему это отличный выбор
+- Что взять с собой
+
+Используй эмодзи. Не упоминай цены и конкретные отели."""
+        
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=300,
+            temperature=0.7
+        )
+        
+        ai_text = response.choices[0].message.content
+        
+        # Формируем партнерскую ссылку Travelata
+        travelata_url = f"https://partners.travelata.ru/search?fromCity=2&toCountry={destination}&sid={TRAVELATA_PARTNER_ID}"
+        
+        result = f"🌴 Ваша подборка туров\n\n{ai_text}\n\n🔍 Посмотреть актуальные предложения: {travelata_url}\n\nℹ️ Наш менеджер скоро свяжется с вами для уточнения деталей!"
+        
+        logger.info(f"AI selection generated for {destination}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Error generating AI selection: {e}")
+        travelata_url = f"https://partners.travelata.ru/search?fromCity=2&toCountry={destination}&sid={TRAVELATA_PARTNER_ID}"
+        return f"🔍 🌴 Подбираю для вас лучшие туры!\n\n👉 Посмотреть: {travelata_url}"False
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -169,6 +224,15 @@ HTML-теги работают: <b>жирный</b>, <i>курсив</i>"""
                 if ADMIN_ID:
                     admin_msg = f"🔔 Новая заявка!\n\nОт пользователя: {chat_id}\n📍 {data_info['destination']}\n📅 {data_info['dates']}\n👥 {data_info['people']} чел\n💰 {data_info['budget']}₽\n📱 {phone}\n\nОтветить: /send {chat_id} ваше сообщение"
                     send_message(ADMIN_ID, admin_msg)
+
+                                # Генерируем и отправляем AI-подборку
+                ai_selection = generate_ai_selection(
+                    data_info['destination'],
+                    data_info['dates'],
+                    data_info['people'],
+                    data_info['budget']
+                )
+                send_message(chat_id, ai_selection)
                 
                 # Отправляем заявку в U-ON CRM
                 send_to_uon_crm(
