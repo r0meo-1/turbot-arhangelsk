@@ -1,14 +1,16 @@
 import os
+import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import logging
 from flask import Flask, request
+import threading
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # https://your-app.onrender.com
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "https://turbot-arhangelsk.onrender.com")
 PARTNER_LINK = "https://partners.travelata.ru/?sid=kg87ezvoan"
 
 DESTINATION, DATES, PEOPLE, BUDGET = range(4)
@@ -83,24 +85,31 @@ def setup_application():
     application.add_handler(conv)
     return application
 
+async def setup_webhook():
+    global tg_app
+    tg_app = setup_application()
+    await tg_app.initialize()
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    await tg_app.bot.set_webhook(url=webhook_url)
+    logger.info(f"🤖 Webhook установлен: {webhook_url}")
+
 @app.route('/', methods=['GET'])
 def index():
     return 'TurBot Архангельск is running!'
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
-    global tg_app
+def webhook():
     if tg_app is None:
-        tg_app = setup_application()
-        await tg_app.initialize()
-        await tg_app.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-        logger.info(f"🤖 Webhook установлен: {WEBHOOK_URL}/webhook")
+        return 'Bot not initialized', 503
     
     update = Update.de_json(request.get_json(force=True), tg_app.bot)
-    await tg_app.process_update(update)
+    asyncio.run(tg_app.process_update(update))
     return 'OK'
 
 if __name__ == "__main__":
+    # Устанавливаем webhook перед запуском Flask
+    asyncio.run(setup_webhook())
+    
     port = int(os.getenv("PORT", 10000))
     logger.info(f"🚀 Запуск Flask на порту {port}")
     app.run(host='0.0.0.0', port=port)
