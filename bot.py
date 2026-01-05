@@ -82,8 +82,6 @@ def setup_bot_app():
     )
     
     bot_app.add_handler(conv)
-    asyncio.run(bot_app.initialize())
-    logger.info("🤖 Bot initialized")
 
 @app.route('/', methods=['GET'])
 def index():
