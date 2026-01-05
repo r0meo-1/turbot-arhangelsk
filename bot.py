@@ -2,15 +2,15 @@ import os
 import logging
 from flask import Flask, request
 import requests
+from urllib.parse import urlencode
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-PARTNER_LINK = "https://partners.travelata.ru/?sid=kg87ezvoan"
+PARTNER_SID = "kg87ezvoan"  # Ваш партнерский ID Travelata
 
 app = Flask(__name__)
-
 user_data = {}
 
 STATES = {'destination': 1, 'dates': 2, 'people': 3, 'budget': 4}
@@ -18,9 +18,29 @@ STATES = {'destination': 1, 'dates': 2, 'people': 3, 'budget': 4}
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     response = requests.post(url, json={'chat_id': chat_id, 'text': text})
-    logger.info(f"Sent to {chat_id}: {response.status_code} - {response.text[:100]}")@app.route('/')
+    logger.info(f"Sent to {chat_id}: {response.status_code} - {response.text[:100]}")
 
+def generate_partner_link(destination, people):
+    """
+    Генерирует партнерскую ссылку Travelata с параметрами клиента
+    """
+    # Базовая ссылка поиска туров
+    base_url = "https://partners.travelata.ru/search"
+    
+    # Параметры поиска
+    params = {
+        'fromCity': 2,  # Москва (по умолчанию)
+        'adults': people,
+        'sid': PARTNER_SID  # Ваш партнерский ID - комиссия идет вам!
+    }
+    
+    # Формируем URL с параметрами
+    query_string = urlencode(params)
+    partner_url = f"{base_url}?{query_string}"
+    
+    return partner_url
 
+@app.route('/')
 def index():
     return 'TurBot Архангельск is running!'
 
@@ -59,8 +79,31 @@ def webhook():
             
             elif state == 'budget':
                 data_info = user_data[chat_id]
+                
+                # Отправляем подтверждение заявки
                 send_message(chat_id, f"✅ Заявка принята!\n\n📍 {data_info['destination']}\n📅 {data_info['dates']}\n👥 {data_info['people']}\n💰 {text}")
-                send_message(chat_id, f"🔥 Лучшие туры:\n\n👉 {PARTNER_LINK}")
+                
+                # Генерируем персонализированную партнерскую ссылку
+                try:
+                    people_count = int(data_info['people'])
+                                    except:
+except:
+                    people_count = 2
+                
+                partner_link = generate_partner_link(
+                    data_info['destination'],
+                    people_count
+                )
+                
+                # Отправляем ссылку с призывом к действию
+                send_message(
+                    chat_id,
+                    f"🔥 Подборка туров специально для вас:\n\n"
+                    f"👉 {partner_link}\n\n"
+                    f"💡 Переходите по ссылке и выбирайте лучший тур!\n"
+                    f"📞 Есть вопросы? Пишите /start"
+                )
+                
                 del user_data[chat_id]
         
         return 'OK'
