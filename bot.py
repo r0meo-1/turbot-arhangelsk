@@ -60,7 +60,7 @@ def send_to_uon_crm(chat_id, destination, dates, people, budget, phone):
     
     except Exception as e:
         logger.error(f"Error sending to U-ON CRM: {e}")
-        return 
+        return False 
         
         
         def generate_ai_selection(destination, dates, people, budget):
