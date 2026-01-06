@@ -14,7 +14,7 @@ Telegram бот для подбора туров | Travelata Partner Bot
 
 1. Откройте бота в Telegram: @TurBot_Arhangelsk_bot
 2. Отправьте команду `/start`
-3. Напишите сыну, чтобы он установил ваш ID в настройках (ADMIN_ID)
+
 
 ### 2️⃣ Команды админа
 
