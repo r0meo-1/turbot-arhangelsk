@@ -1,79 +1,102 @@
-# turbot-arhangelsk
-Telegram бот для подбора туров | Travelata Partner Bot
+# TurBot Arhangelsk — Travelata Partner Bot
 
-## Что умеет бот
+A Telegram bot that collects travel requests from clients, guides them through a
+short tour-selection dialog, generates an AI-assisted tour blurb with a
+Travelata affiliate link, and pushes each request as a lead into U-ON CRM.
 
-✅ **Автоматический сбор заявок** от клиентов
-✅ **Интеграция с U-ON CRM** - автоматическое создание лидов
-✅ **Уведомления админу** о новых заявках
-✅ **Отправка подборок** клиентам
+Built as a real lead-generation tool for a travel agency in Arkhangelsk, Russia.
+The bot runs as a Flask webhook service (designed for free-tier hosting such as
+Render.com) and notifies an admin in Telegram about every new request.
 
-## Инструкция для админа
+> RU: Телеграм-бот для подбора туров. Ведёт клиента по диалогу (направление,
+> даты, люди, бюджет, телефон), формирует подборку с партнёрской ссылкой
+> Travelata и создаёт лид в U-ON CRM. Админ получает уведомление о каждой заявке.
 
-### 1️⃣ Первый запуск
+## Features
 
-1. Откройте бота в Telegram: @TurBot_Arhangelsk_bot
-2. Отправьте команду `/start`
+- **Guided request flow** — a finite-state dialog collects destination, dates,
+  number of travellers, budget, and phone number.
+- **AI tour suggestions** — uses the Groq API (LLaMA) to generate a short,
+  friendly tour description; gracefully falls back to a static message when no
+  Groq key is configured.
+- **Travelata affiliate links** — builds partner search URLs with the
+  configured partner ID.
+- **U-ON CRM integration** — automatically creates a lead for every completed
+  request.
+- **Admin tools** — `/help`, `/users`, `/send <chat_id> <text>`, and
+  `/broadcast <text>` for managing users and forwarding tour selections (HTML
+  formatting supported).
+- **Admin notifications** — the admin receives a Telegram message the moment a
+  new request is submitted.
 
+## Tech stack
 
-### 2️⃣ Команды админа
+- Python 3
+- [Flask](https://flask.palletsprojects.com/) — webhook HTTP server
+- [Telegram Bot API](https://core.telegram.org/bots/api) — via `requests`
+- [Groq](https://groq.com/) — AI tour-blurb generation
+- [U-ON CRM API](https://api.u-on.ru/) — lead creation
 
-#### `/help` - Справка
-Показывает все доступные команды.
+## How it works
 
-#### `/users` - Список пользователей
-Показывает ID всех пользователей бота.
+1. Telegram delivers updates to the bot's `POST /webhook` endpoint.
+2. A client sends `/start` and is walked through the request flow:
+   `destination → dates → people → budget → phone`. Per-user progress is kept
+   in an in-memory state machine.
+3. On completion the bot:
+   - confirms the request to the client,
+   - notifies the admin (`ADMIN_ID`),
+   - generates an AI tour suggestion with a Travelata affiliate link,
+   - creates a lead in U-ON CRM.
+4. The admin can reply to or broadcast messages to users via admin commands.
 
-#### `/send {ID} {сообщение}` - Отправить подборку
-Отправляет сообщение конкретному клиенту.
+`GET /` returns a simple health-check string.
 
-**Пример:**
-```
-/send 637428565
-2 🌴 <b>Ваша подборка туров!</b>
+> Note: state and the user list are stored in memory, so they reset on restart.
+> This keeps the service simple for small-scale, single-agency use.
 
-<b>Турция, Анталья</b>
-📅 10-17 января (7 ночей)
-🏨 Отель 4* All Inclusive
-💰 75 000₽ на человека
+## Setup
 
-👉 <a href="https://qui-quo.ru/link">Посмотреть тур</a>
-```
+### 1. Clone and install
 
-**Важно:** Можно использовать HTML-форматирование:
-- `<b>жирный</b>` для жирного
-- `<i>курсив</i>` для курсива
-- `<a href="URL">текст</a>` для ссылок
-
-#### `/broadcast {сообщение}` - Разослать всем
-Отправляет сообщение всем пользователям бота.
-
-**Пример:**
-```
-/broadcast 🎉 Новогодние скидки до 20%! Звоните: +7 (900) 555-12-34
-```
-
-### 3️⃣ Как получать заявки
-
-Когда клиент оставляет заявку, вы получите уведомление:
-
-```
-🔔 Новая заявка!
-
-От пользователя: 6374285652
-📍 Тайланд
-📅 25 февраля - 5 марта
-👥 4 чел
-💰 85000₽
-📱 +79005554433
-
-Ответить: /send 6374285652 ваше сообщение
+```bash
+git clone https://github.com/r0meo-1/turbot-arhangelsk.git
+cd turbot-arhangelsk
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
-Заявка также автоматически попадает в U-ON CRM!
+### 2. Configure environment variables
 
-## Статус бота
+Copy `.env.example` to `.env` and fill in the values:
 
-🟢 **Бот работает 24/7** на бесплатном тарифе Render.com
-🔗 **Бот:** @TurBot_Arhangelsk_bot
-🌐 **URL:** https://turbot-arhangelsk.onrender.com
+| Variable               | Required | Description                                                        |
+| ---------------------- | -------- | ------------------------------------------------------------------ |
+| `BOT_TOKEN`            | yes      | Telegram Bot API token from [@BotFather](https://t.me/BotFather).  |
+| `ADMIN_ID`             | yes      | Telegram `chat_id` of the admin who receives leads.                |
+| `UON_API_KEY`          | no       | U-ON CRM API key (lead creation is skipped if empty).              |
+| `TRAVELATA_PARTNER_ID` | no       | Travelata affiliate ID appended to generated search links.         |
+| `GROQ_API_KEY`         | no       | Groq API key for AI blurbs (falls back to a static message if empty). |
+| `PORT`                 | no       | Port for the Flask server (default `5000`).                        |
+
+The application reads configuration from the environment. Load `.env` with your
+process manager / host, or export the variables before running.
+
+### 3. Run
+
+```bash
+python bot.py
+```
+
+The Flask server listens on `0.0.0.0:$PORT`. Expose it over HTTPS and register
+the webhook with Telegram:
+
+```bash
+curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://YOUR_DOMAIN/webhook"
+```
+
+For production, run behind a WSGI server (e.g. `gunicorn bot:app`).
+
+## License
+
+[MIT](LICENSE) © 2026 r0meo-1

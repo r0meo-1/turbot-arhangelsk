@@ -7,11 +7,11 @@ from groq import Groq
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-UON_API_KEY = os.getenv("UON_API_KEY", "SqHP1egva6LTrL08U763")  # API-ключ U-ON
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # ID админа (мамы) для пересылки подборок
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # Groq API для AI-подборок
-TRAVELATA_PARTNER_ID = os.getenv("TRAVELATA_PARTNER_ID", "hoevf8zmd4")  # Партнерский ID Travelata
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Telegram Bot API token from @BotFather
+UON_API_KEY = os.getenv("UON_API_KEY", "")  # U-ON CRM API key
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # Telegram chat_id of the admin for forwarding leads
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")  # Groq API key for AI tour suggestions
+TRAVELATA_PARTNER_ID = os.getenv("TRAVELATA_PARTNER_ID", "")  # Travelata affiliate/partner ID
 
 app = Flask(__name__)
 user_data = {}
