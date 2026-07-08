@@ -1,0 +1,38 @@
+[Unit]
+Description=TurBot — Telegram travel-agency bot
+After=network.target
+
+[Service]
+Type=simple
+User=turbot
+Group=turbot
+WorkingDirectory=/opt/turbot
+EnvironmentFile=/opt/turbot/.env
+ExecStart=/opt/turbot/venv/bin/gunicorn bot:app \
+    --bind 127.0.0.1:8000 \
+    --workers 1 \
+    --threads 4 \
+    --timeout 60 \
+    --access-logfile - \
+    --error-logfile -
+Restart=always
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/turbot
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+RestrictRealtime=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
