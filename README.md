@@ -215,9 +215,14 @@ curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://YOUR_DOMAIN/
 | -------------------------- | ------------------------------------------------ |
 | `/send {chat_id} {text}`   | Send a message to a specific user (HTML OK).     |
 | `/broadcast {text}`        | Send a message to all users (rate-limited).      |
+| `/broadcast {dest} {text}` | Send to users interested in a specific destination. |
 | `/users`                   | List all known users with names and IDs.         |
 | `/stats`                   | Show user count and active sessions.             |
+| `/analytics`               | Show destinations, consent stats, session breakdown. |
+| `/export`                  | Export recent completed leads with phone numbers.|
+| `/followup`                | Manually trigger follow-up reminders.            |
 | `/restart`                 | Clear all active dialog sessions.                |
+| `/mdt [test\|reload]`      | MDT CRM status, connectivity test, or country reload.|
 | `/help`                    | Show admin help.                                 |
 
 ## Personal data & Russian law (152-ФЗ)

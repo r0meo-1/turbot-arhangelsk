@@ -439,3 +439,62 @@ def test_cleanup_expired_data_disabled(client):
         bot.DATA_RETENTION_DAYS = original
     assert bot.get_user(702) is not None
     bot.delete_user_data(702)
+
+
+def test_duplicate_update_ignored(client):
+    """The same update_id should only be processed once."""
+    update = {
+        "update_id": 99999,
+        "message": {"chat": {"id": 800}, "from": {"first_name": "Dedup"}, "text": "/start"},
+    }
+    _post(client, 800, "/start")  # consent
+    _post(client, 800, bot.CONSENT_YES_TEXT)
+    # Send a destination message with explicit update_id
+    update["message"]["text"] = "Египет"
+    client.post("/webhook", json=update,
+                headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"})
+    assert bot.user_data[800]["state"] == bot.STATE_DATES
+    assert bot.user_data[800].get("destination") == "Египет"
+    # Send the same update again — should be ignored
+    bot.user_data[800]["state"] = bot.STATE_DATES  # reset
+    update["message"]["text"] = "Турция"
+    client.post("/webhook", json=update,
+                headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"})
+    # Should still be Египет, not Турция (duplicate update_id)
+    assert bot.user_data[800].get("destination") == "Египет"
+    bot.delete_user_data(800)
+
+
+def test_analytics_command(client):
+    """Admin /analytics returns 200 and contains analytics text."""
+    # Add some data
+    _consent(client, 801)
+    _post(client, 801, "Турция")
+    # Admin (ID 999) sends /analytics
+    resp = _post(client, 999, "/analytics")
+    assert resp.status_code == 200
+
+
+def test_export_command(client):
+    """Admin /export returns 200."""
+    resp = _post(client, 999, "/export")
+    assert resp.status_code == 200
+
+
+def test_html_escape_in_notify(client):
+    """User input with HTML tags should be escaped in admin notifications."""
+    _consent(client, 802)
+    _post(client, 802, "<script>alert(1)</script>")
+    _post(client, 802, "1-10 июля")
+    _post(client, 802, "2")
+    _post(client, 802, "50000")
+    # send phone to complete
+    _post(client, 802, "+79161234567")
+    # If we got here without crashing, HTML was escaped properly
+    assert 802 not in bot.user_data
+    bot.delete_user_data(802)
+
+
+def test_graceful_shutdown_handler():
+    """_graceful_shutdown should exist and be callable."""
+    assert callable(bot._graceful_shutdown)

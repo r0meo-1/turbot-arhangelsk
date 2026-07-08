@@ -57,6 +57,10 @@ DATA_OPERATOR_NAME = os.getenv(
 # 152-ФЗ ст. 5). Set to 0 to disable automatic retention cleanup.
 DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
 BROADCAST_DELAY      = 0.05  # ~20 msg/s — stays under Telegram's ~30 msg/s limit
+# Alert admin on critical errors (sent via Telegram message).
+ADMIN_ERROR_ALERTS = os.getenv("ADMIN_ERROR_ALERTS", "true").lower().strip() in ("1", "true", "yes")
+# How often to send the same error alert (seconds, to avoid spam).
+ERROR_ALERT_COOLDOWN = int(os.getenv("ERROR_ALERT_COOLDOWN", "300"))
 
 # MoiDokumenti-Turism (MDT) CRM integration
 MDT_ENABLED    = os.getenv("MDT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
@@ -273,6 +277,7 @@ _lock = threading.Lock()
 # instead of rewriting the whole database on every webhook request.
 _dirty_sessions: set[int] = set()
 _dirty_users: set[int] = set()
+_seen_update_ids: set[int] = set()  # dedup for Telegram update_id
 
 
 def _mark_dirty(chat_id: int, *, session: bool = True, user: bool = True) -> None:
@@ -758,6 +763,35 @@ def send_typing(chat_id: int) -> None:
         )
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# Admin error alerting
+# ---------------------------------------------------------------------------
+
+_last_error_alert: Dict[str, float] = {}
+
+
+def _alert_admin_error(error_msg: str, exc: Optional[Exception] = None) -> None:
+    """Send a critical error alert to the admin via Telegram (rate-limited)."""
+    if not ADMIN_ERROR_ALERTS or not ADMIN_ID or not BOT_TOKEN:
+        return
+    # Rate-limit: don't send the same error more than once per cooldown.
+    key = error_msg[:100]
+    now = time.time()
+    if _last_error_alert.get(key, 0) > now - ERROR_ALERT_COOLDOWN:
+        return
+    _last_error_alert[key] = now
+    detail = f": {exc}" if exc else ""
+    try:
+        # Use a raw requests call to avoid recursion if send_message itself fails.
+        telegram_session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": ADMIN_ID, "text": f"⚠️ Ошибка бота: {error_msg}{detail}"},
+            timeout=5,
+        )
+    except Exception:
+        pass  # don't let alerting crash the bot
 
 
 # ---------------------------------------------------------------------------
@@ -1854,6 +1888,13 @@ def handle_dialog(chat_id: int, text: str, message: Dict[str, Any]) -> None:
 
 # --- request completion ---------------------------------------------------
 
+import html as _html_module
+
+def _esc(text: Any) -> str:
+    """Escape user-provided text for safe inclusion in HTML messages."""
+    return _html_module.escape(str(text), quote=False)
+
+
 def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
     """1. Send the request summary back to the client."""
     send_message(
@@ -1878,12 +1919,12 @@ def _notify_admin(chat_id: int, info: Dict[str, Any], phone: str, client_name: O
     send_message(
         ADMIN_ID,
         "🔔 Новая заявка!\n\n"
-        f"От: {client_name or 'без имени'} (ID: {chat_id})\n"
-        f"📍 {info.get('destination', '?')}\n"
-        f"📅 {info.get('dates', '?')}\n"
-        f"👥 {info.get('people', '?')} чел\n"
-        f"💰 {info.get('budget', '?')}₽\n"
-        f"📱 {phone}\n\n"
+        f"От: {_esc(client_name or 'без имени')} (ID: {chat_id})\n"
+        f"📍 {_esc(info.get('destination', '?'))}\n"
+        f"📅 {_esc(info.get('dates', '?'))}\n"
+        f"👥 {_esc(info.get('people', '?'))} чел\n"
+        f"💰 {_esc(info.get('budget', '?'))}₽\n"
+        f"📱 {_esc(phone)}\n\n"
         f"Ответить: /send {chat_id} ваше сообщение",
     )
 
@@ -1949,6 +1990,18 @@ def health() -> Any:
 
 def _process_update(data: Dict[str, Any]) -> None:
     """Parse one Telegram update and route it to the right handler."""
+    # Deduplicate: Telegram may retry the same update_id.
+    update_id = data.get("update_id")
+    if update_id is not None:
+        with _lock:
+            if update_id in _seen_update_ids:
+                logger.debug("Skipping duplicate update_id=%s", update_id)
+                return
+            _seen_update_ids.add(update_id)
+            # Keep only the last 1000 to bound memory.
+            if len(_seen_update_ids) > 1000:
+                _seen_update_ids.clear()
+                _seen_update_ids.add(update_id)
     message = data["message"]
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
@@ -2072,6 +2125,7 @@ def webhook() -> Tuple[str, int]:
             _process_update(data)
     except Exception as exc:
         logger.error("Error in webhook: %s", exc, exc_info=True)
+        _alert_admin_error("Webhook processing error", exc)
 
     finally:
         save_state()
@@ -2153,6 +2207,30 @@ logger.info(
     bool(GROQ_API_KEY),
     bool(TELEGRAM_SECRET_TOKEN),
 )
+
+import signal as _signal_module
+
+def _graceful_shutdown(signum: int, frame: Any) -> None:
+    """Save state on SIGTERM/SIGINT so no data is lost during deploy."""
+    logger.info("Received signal %s — saving state and exiting", signum)
+    try:
+        # Flush ALL in-memory state, not just dirty entries.
+        with _lock:
+            sessions = list(user_data.items())
+            users = list(all_users.items())
+        for cid, info in sessions:
+            set_session(cid, info)
+        for cid, meta in users:
+            touch_user(cid, meta.get("first_name", ""), meta.get("username", ""),
+                       last_seen=meta.get("last_seen"))
+        logger.info("State saved on shutdown (%d sessions, %d users)", len(sessions), len(users))
+    except Exception as exc:
+        logger.error("Error saving state on shutdown: %s", exc)
+    import sys; sys.exit(0)
+
+
+_signal_module.signal(_signal_module.SIGTERM, _graceful_shutdown)
+_signal_module.signal(_signal_module.SIGINT, _graceful_shutdown)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
