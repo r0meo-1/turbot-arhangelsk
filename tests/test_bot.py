@@ -108,16 +108,54 @@ def _post(client, chat_id, text=None, contact=None):
     )
 
 
-def test_start_creates_dialog(client):
+def _consent(client, chat_id):
+    """Grant personal-data consent so the dialog proceeds to data collection."""
+    _post(client, chat_id, "/start")
+    _post(client, chat_id, bot.CONSENT_YES_TEXT)
+
+
+def test_start_asks_for_consent_first(client):
     resp = _post(client, 111, "/start")
     assert resp.status_code == 200
-    assert 111 in bot.user_data
+    assert bot.user_data[111]["state"] == bot.STATE_CONSENT
+    assert not bot.has_consent(111)
+
+
+def test_consent_accept_enters_dialog(client):
+    _post(client, 111, "/start")
+    _post(client, 111, bot.CONSENT_YES_TEXT)
+    assert bot.has_consent(111)
     assert bot.user_data[111]["state"] == bot.STATE_DESTINATION
+
+
+def test_consent_decline_aborts(client):
+    _post(client, 112, "/start")
+    _post(client, 112, bot.CONSENT_NO_TEXT)
+    assert 112 not in bot.user_data
+    assert not bot.has_consent(112)
+
+
+def test_returning_user_skips_consent(client):
+    _consent(client, 113)
+    _post(client, 113, "❌ Отменить")
+    # Second /start should go straight to destination.
+    _post(client, 113, "/start")
+    assert bot.user_data[113]["state"] == bot.STATE_DESTINATION
+
+
+def test_delete_command_erases_data(client):
+    _consent(client, 114)
+    assert bot.has_consent(114)
+    _post(client, 114, "/delete")
+    assert 114 not in bot.user_data
+    assert 114 not in bot.all_users
+    assert not bot.has_consent(114)
 
 
 def test_dialog_completion_with_contact(client):
     # Walk through the whole flow.
-    for text in ["/start", "🏖 Египет", "15-22 июня", "2", "60000"]:
+    _consent(client, 222)
+    for text in ["🏖 Египет", "15-22 июня", "2", "60000"]:
         _post(client, 222, text)
 
     info = bot.user_data.get(222)
@@ -131,7 +169,7 @@ def test_dialog_completion_with_contact(client):
 
 
 def test_back_button(client):
-    _post(client, 333, "/start")
+    _consent(client, 333)
     _post(client, 333, "🏖 Египет")
     assert bot.user_data[333]["state"] == bot.STATE_DATES
 
@@ -140,7 +178,7 @@ def test_back_button(client):
 
 
 def test_cancel_button(client):
-    _post(client, 444, "/start")
+    _consent(client, 444)
     assert 444 in bot.user_data
     _post(client, 444, "❌ Отменить")
     assert 444 not in bot.user_data
@@ -373,3 +411,31 @@ def test_send_lead_to_mdt_both_mode(monkeypatch):
         bot.MDT_MODE = original_mode
         bot.MDT_MANAGER_IDS = original_manager_ids
         bot.MDT_REMINDER_ENABLED = True
+
+
+
+def test_cleanup_expired_data_erases_old_users(client):
+    old = int(time.time()) - 200 * 86400
+    bot.touch_user(700, "Old", "", last_seen=old)
+    bot.touch_user(701, "Recent", "", last_seen=int(time.time()))
+    original = bot.DATA_RETENTION_DAYS
+    bot.DATA_RETENTION_DAYS = 180
+    try:
+        erased = bot.cleanup_expired_data()
+    finally:
+        bot.DATA_RETENTION_DAYS = original
+    assert erased >= 1
+    assert bot.get_user(700) is None
+    assert bot.get_user(701) is not None
+
+
+def test_cleanup_expired_data_disabled(client):
+    bot.touch_user(702, "Old", "", last_seen=0)
+    original = bot.DATA_RETENTION_DAYS
+    bot.DATA_RETENTION_DAYS = 0
+    try:
+        assert bot.cleanup_expired_data() == 0
+    finally:
+        bot.DATA_RETENTION_DAYS = original
+    assert bot.get_user(702) is not None
+    bot.delete_user_data(702)

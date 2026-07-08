@@ -42,6 +42,20 @@ DATABASE_PATH        = os.getenv("DATABASE_PATH", "bot_state.sqlite")
 TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", "")
 DIALOG_TIMEOUT_HOURS = int(os.getenv("DIALOG_TIMEOUT_HOURS", "6"))
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
+
+# --- Personal-data compliance (152-ФЗ) ------------------------------------
+# URL of the privacy policy / consent text shown to users before their personal
+# data (name, phone) is collected. Operators of RF personal data MUST publish
+# such a document; set this to your hosted policy URL.
+PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip()
+# Name of the data operator shown in the consent text.
+DATA_OPERATOR_NAME = os.getenv(
+    "DATA_OPERATOR_NAME",
+    "ИП Замятина Мария Андреевна (ТА «АПРЕЛЬ тур», ОГРНИП 290211659807)",
+)
+# Days after which a client's personal data is auto-deleted (data minimisation,
+# 152-ФЗ ст. 5). Set to 0 to disable automatic retention cleanup.
+DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
 BROADCAST_DELAY      = 0.05  # ~20 msg/s — stays under Telegram's ~30 msg/s limit
 
 # MoiDokumenti-Turism (MDT) CRM integration
@@ -90,6 +104,8 @@ PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
 BACK_BUTTON_TEXT   = "◀️ Назад"
 CANCEL_BUTTON_TEXT = "❌ Отменить"
 SHARE_CONTACT_TEXT = "📱 Отправить номер"
+CONSENT_YES_TEXT   = "✅ Согласен"
+CONSENT_NO_TEXT    = "❌ Отказаться"
 
 USER_HELP = (
     "🤖 Я бот туристического агентства «АПРЕЛЬ тур».\n\n"
@@ -97,6 +113,8 @@ USER_HELP = (
     "Команды:\n"
     "  /start — начать подбор тура\n"
     "  /cancel — отменить текущую заявку\n"
+    "  /privacy — политика обработки персональных данных\n"
+    "  /delete — удалить мои данные и отозвать согласие\n"
     "  /help — эта справка\n\n"
     "Во время диалога доступны кнопки:\n"
     "  ◀️ Назад — вернуться к прошлому шагу\n"
@@ -105,6 +123,37 @@ USER_HELP = (
     "📋 ИП Замятина Мария Андреевна\n"
     "ТА «АПРЕЛЬ тур» · ОГРНИП 290211659807"
 )
+
+
+def _consent_text() -> str:
+    """Build the personal-data consent prompt shown before data collection."""
+    policy_line = (
+        f"\n📄 Полный текст: {PRIVACY_POLICY_URL}\n"
+        if PRIVACY_POLICY_URL else "\n"
+    )
+    return (
+        "🔒 Перед подбором тура нужно ваше согласие на обработку персональных данных.\n\n"
+        f"Оператор: {DATA_OPERATOR_NAME}.\n\n"
+        "Нажимая «Согласен», вы даёте согласие на обработку ваших имени и номера телефона с целью подбора тура и связи с вами (ст. 6, 9 ФЗ-152)."
+        + policy_line +
+        "Вы вправе отозвать согласие и удалить данные командой /delete."
+    )
+
+
+def _privacy_text() -> str:
+    """Short privacy notice for the /privacy command."""
+    lines = [
+        "🔒 Обработка персональных данных\n",
+        f"Оператор: {DATA_OPERATOR_NAME}.",
+        "Цель: подбор тура и связь с клиентом.",
+        "Обрабатываемые данные: имя, номер телефона, идентификатор Telegram.",
+    ]
+    if DATA_RETENTION_DAYS > 0:
+        lines.append(f"Срок хранения: до {DATA_RETENTION_DAYS} дней после обращения, затем автоматическое удаление.")
+    lines.append("Права: отозвать согласие и удалить данные — команда /delete.")
+    if PRIVACY_POLICY_URL:
+        lines.append(f"\n📄 Полный текст: {PRIVACY_POLICY_URL}")
+    return "\n".join(lines)
 
 ADMIN_HELP = (
     "🔧 Команды админа:\n\n"
@@ -167,6 +216,7 @@ _MONTHS_RU: Dict[str, int] = {
 
 # Dialog state machine — plain string aliases (kept as strings so the persisted
 # JSON state stays compatible without custom (de)serialisation).
+STATE_CONSENT     = "consent"
 STATE_DESTINATION = "destination"
 STATE_DATES       = "dates"
 STATE_PEOPLE      = "people"
@@ -260,10 +310,15 @@ def init_db() -> None:
                 username TEXT,
                 last_seen INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                consent_at INTEGER
             )
             """
         )
+        # Additive migration for databases created before consent tracking.
+        cur.execute("PRAGMA table_info(users)")
+        if "consent_at" not in {row[1] for row in cur.fetchall()}:
+            cur.execute("ALTER TABLE users ADD COLUMN consent_at INTEGER")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
@@ -447,6 +502,78 @@ def count_users(exclude_admin: Optional[int] = None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Personal-data consent & erasure (152-ФЗ)
+# ---------------------------------------------------------------------------
+
+def has_consent(chat_id: int) -> bool:
+    """Return True if the user has an active personal-data processing consent."""
+    with _lock:
+        meta = all_users.get(chat_id)
+        if meta is not None:
+            return bool(meta.get("consent_at"))
+    user = get_user(chat_id)
+    return bool(user and user.get("consent_at"))
+
+
+def set_consent(chat_id: int) -> None:
+    """Record that the user has granted consent (in memory and SQLite)."""
+    now = int(time.time())
+    with _lock:
+        meta = all_users.setdefault(chat_id, {})
+        meta["consent_at"] = now
+        first_name = meta.get("first_name", "")
+        username = meta.get("username", "")
+    # Upsert so consent is persisted even if the user row doesn't exist yet.
+    with _db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            INSERT INTO users (chat_id, first_name, username, last_seen, created_at, updated_at, consent_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET consent_at=excluded.consent_at
+            """,
+            (chat_id, first_name, username, now, now, now, now),
+        )
+
+
+def delete_user_data(chat_id: int) -> None:
+    """Erase all personal data for a user: session, registry row, and consent.
+
+    Used both by the /delete command (right to erasure / consent withdrawal)
+    and by the retention cleanup job.
+    """
+    with _lock:
+        user_data.pop(chat_id, None)
+        all_users.pop(chat_id, None)
+        _dirty_sessions.discard(chat_id)
+        _dirty_users.discard(chat_id)
+    with _db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+        cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
+
+
+def cleanup_expired_data() -> int:
+    """Delete personal data of users inactive longer than DATA_RETENTION_DAYS.
+
+    Returns the number of users erased. The admin (ADMIN_ID) is never purged so
+    that admin commands keep working. Returns 0 when retention is disabled.
+    """
+    if DATA_RETENTION_DAYS <= 0:
+        return 0
+    cutoff = int(time.time()) - DATA_RETENTION_DAYS * 86400
+    with _db_cursor() as cur:
+        cur.execute(
+            "SELECT chat_id FROM users WHERE last_seen < ? AND chat_id != ?",
+            (cutoff, ADMIN_ID),
+        )
+        expired = [row[0] for row in cur.fetchall()]
+    for chat_id in expired:
+        delete_user_data(chat_id)
+    if expired:
+        logger.info("Retention cleanup erased %d expired user(s)", len(expired))
+    return len(expired)
+
+
+# ---------------------------------------------------------------------------
 # Stale-dialog cleanup
 # ---------------------------------------------------------------------------
 
@@ -496,6 +623,24 @@ def _start_timeout_worker() -> None:
 
     threading.Thread(target=_worker, daemon=True, name="dialog-timeout").start()
     logger.info("Dialog timeout worker started (%s hours)", DIALOG_TIMEOUT_HOURS)
+
+
+def _start_retention_worker() -> None:
+    """Start a daemon that periodically erases personal data past retention."""
+    if DATA_RETENTION_DAYS <= 0:
+        logger.info("Data retention cleanup is disabled")
+        return
+
+    def _worker() -> None:
+        while True:
+            try:
+                cleanup_expired_data()
+            except Exception as exc:
+                logger.error("Error in retention worker: %s", exc)
+            time.sleep(6 * 3600)  # re-check four times a day
+
+    threading.Thread(target=_worker, daemon=True, name="data-retention").start()
+    logger.info("Data retention worker started (%s days)", DATA_RETENTION_DAYS)
 
 # ---------------------------------------------------------------------------
 # Telegram API helpers
@@ -1257,7 +1402,25 @@ def _strip_emoji_prefix(text: str) -> str:
 
 
 def handle_start(chat_id: int, first_name: str = "") -> None:
-    """Begin the tour-selection dialog."""
+    """Begin the tour-selection dialog, asking for consent first if needed."""
+    if not has_consent(chat_id):
+        with _lock:
+            user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+        _mark_dirty(chat_id)
+        send_message(
+            chat_id,
+            _consent_text(),
+            reply_markup=reply_keyboard(
+                [CONSENT_YES_TEXT, CONSENT_NO_TEXT],
+                one_time=False,
+            ),
+        )
+        return
+    _begin_destination(chat_id, first_name)
+
+
+def _begin_destination(chat_id: int, first_name: str = "") -> None:
+    """Enter the first data-collection step (destination)."""
     with _lock:
         user_data[chat_id] = {"state": STATE_DESTINATION, "updated_at": int(time.time())}
     _mark_dirty(chat_id)
@@ -1293,6 +1456,32 @@ def handle_cancel(chat_id: int) -> None:
 # --- dialog steps ---------------------------------------------------------
 # Each step receives the live session dict `info` (== user_data[chat_id]) so it
 # can read and advance the state in place.
+
+def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    """Handle the user's answer to the personal-data consent prompt."""
+    if text == CONSENT_YES_TEXT:
+        set_consent(chat_id)
+        from_info = message.get("from", {})
+        _begin_destination(chat_id, from_info.get("first_name", ""))
+        return
+    if text == CONSENT_NO_TEXT:
+        with _lock:
+            user_data.pop(chat_id, None)
+        _mark_dirty(chat_id, user=False)
+        delete_session(chat_id)
+        send_message(
+            chat_id,
+            "Без согласия на обработку персональных данных мы, к сожалению, не сможем подобрать тур.\n\n"
+            "Если передумаете — отправьте /start.",
+            reply_markup=hide_keyboard(),
+        )
+        return
+    send_message(
+        chat_id,
+        "Пожалуйста, нажмите «✅ Согласен» или «❌ Отказаться».",
+        reply_markup=reply_keyboard([CONSENT_YES_TEXT, CONSENT_NO_TEXT], one_time=False),
+    )
+
 
 def _step_destination(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     dest = _strip_emoji_prefix(text)
@@ -1394,6 +1583,7 @@ def _step_phone(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
 
 # state -> step handler
 STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], None]] = {
+    STATE_CONSENT:     _step_consent,
     STATE_DESTINATION: _step_destination,
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
@@ -1575,6 +1765,8 @@ def health() -> Any:
         "mdt_mode": MDT_MODE,
         "total_users": len(all_users),
         "active_sessions": len(user_data),
+        "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
+        "data_retention_days": DATA_RETENTION_DAYS,
     })
 
 
@@ -1587,13 +1779,12 @@ def _process_update(data: Dict[str, Any]) -> None:
     first_name = from_info.get("first_name", "")
     username = from_info.get("username", "")
 
-    # Track every user
+    # Track every user (preserving an existing consent timestamp).
     with _lock:
-        all_users[chat_id] = {
-            "first_name": first_name,
-            "username": username,
-            "last_seen": int(time.time()),
-        }
+        meta = all_users.setdefault(chat_id, {})
+        meta["first_name"] = first_name
+        meta["username"] = username
+        meta["last_seen"] = int(time.time())
         # Update activity timestamp for open dialogs so the timeout worker
         # doesn't cancel them while the user is actively typing.
         if chat_id in user_data:
@@ -1635,6 +1826,20 @@ def _process_update(data: Dict[str, Any]) -> None:
 
     if text == "/help":
         send_message(chat_id, USER_HELP)
+        return
+
+    if text == "/privacy":
+        send_message(chat_id, _privacy_text())
+        return
+
+    if text == "/delete":
+        delete_user_data(chat_id)
+        send_message(
+            chat_id,
+            "🗑 Ваши персональные данные удалены, согласие отозвано.\n\n"
+            "Чтобы снова воспользоваться подбором тура — отправьте /start.",
+            reply_markup=hide_keyboard(),
+        )
         return
 
     if text == "/cancel" or text == CANCEL_BUTTON_TEXT:
@@ -1758,6 +1963,7 @@ def save_state() -> None:
 
 load_state()
 _start_timeout_worker()
+_start_retention_worker()
 
 if MDT_ENABLED:
     _mdt_load_countries()

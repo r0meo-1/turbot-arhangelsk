@@ -203,9 +203,11 @@ curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://YOUR_DOMAIN/
 
 | Command   | Description                          |
 | --------- | ------------------------------------ |
-| `/start`  | Begin the tour-selection dialog.     |
-| `/cancel` | Abort the current request flow.      |
-| `/help`   | Show help text.                      |
+| `/start`   | Begin the tour-selection dialog.     |
+| `/cancel`  | Abort the current request flow.      |
+| `/privacy` | Show the personal-data privacy notice. |
+| `/delete`  | Erase the user's personal data and withdraw consent. |
+| `/help`    | Show help text.                      |
 
 ### Admin commands
 
@@ -217,6 +219,44 @@ curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://YOUR_DOMAIN/
 | `/stats`                   | Show user count and active sessions.             |
 | `/restart`                 | Clear all active dialog sessions.                |
 | `/help`                    | Show admin help.                                 |
+
+## Personal data & Russian law (152-ФЗ)
+
+This bot collects **personal data** of Russian citizens (name, phone number,
+Telegram ID). Operating it in Russia requires compliance with Federal Law
+№152-ФЗ «Oперсональных данных». The application implements the parts that
+live in code; the rest is the operator's responsibility.
+
+**Implemented in the bot:**
+
+- **Consent before collection** — `/start` shows a personal-data processing
+  consent prompt (operator name + optional policy link) and only proceeds
+  after the user taps «✅ Согласен». The consent timestamp is stored.
+- **Right to erasure / consent withdrawal** — `/delete` erases the user's
+  session, registry row, and consent immediately.
+- **Privacy notice** — `/privacy` shows what is collected, why, for how long,
+  and the operator's details.
+- **Data minimisation / retention** — a background job erases a client's
+  personal data after `DATA_RETENTION_DAYS` (default 180) of inactivity.
+
+**Operator responsibilities (NOT handled by code) — ❗ required:**
+
+1. **Data localisation (ст. 18 ч. 5).** Personal data of RF citizens must be
+   collected and stored in a database **physically located in Russia**. Do
+   **not** deploy the database on foreign hosting such as Render.com. Use a
+   Russian provider (Yandex Cloud, VK Cloud, Selectel, Timeweb, Reg.ru, …).
+   The included `render.yaml` is for reference only and is **not** compliant
+   as-is.
+2. **Roskomnadzor notification.** The operator (ИП Замятина М.А.) must file a
+   personal-data processing notification with РКН.
+3. **Published policy.** Host a Privacy Policy / consent document and set its
+   URL in `PRIVACY_POLICY_URL`. A draft is provided in `docs/privacy_policy.md`
+   — it must be reviewed by a lawyer before publication.
+4. **Security measures (ст. 19).** Keep `TELEGRAM_SECRET_TOKEN` set, restrict
+   database access, and encrypt backups.
+
+> ⚠️ This section is engineering guidance, not legal advice. Have a
+> data-protection specialist confirm compliance for your specific setup.
 
 ## License
 
