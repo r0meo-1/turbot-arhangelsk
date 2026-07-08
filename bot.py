@@ -162,6 +162,10 @@ ADMIN_HELP = (
     "/users — список пользователей\n"
     "/stats — статистика\n"
     "/restart — сбросить все активные сессии\n"
+    "/analytics — аналитика (направления, конверсия)\n"
+    "/export — экспорт заявок с телефонами\n"
+    "/broadcast {направление} {текст} — рассылка всем или по направлению\n"
+    "/followup — отправить напоминания незавершившим\n"
     "/mdt [test|reload] — статус MDT CRM (test — проверить соединение, reload — обновить страны)\n"
     "/help — эта справка\n\n"
     "Поддерживаются HTML-теги: <b>жирный</b>, <i>курсив</i>\n\n"
@@ -571,6 +575,71 @@ def cleanup_expired_data() -> int:
     if expired:
         logger.info("Retention cleanup erased %d expired user(s)", len(expired))
     return len(expired)
+
+
+# ---------------------------------------------------------------------------
+# Follow-up for incomplete dialogs
+# ---------------------------------------------------------------------------
+
+FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "3"))
+
+
+def _send_followups() -> int:
+    """Send one follow-up reminder to users with incomplete dialogs.
+
+    Targets sessions that have been inactive for > FOLLOWUP_DELAY_HOURS but
+    less than DIALOG_TIMEOUT_HOURS, and haven't been followed up yet.
+    Returns the number of messages sent.
+    """
+    if FOLLOWUP_DELAY_HOURS <= 0:
+        return 0
+    now = int(time.time())
+    delay_cutoff = now - FOLLOWUP_DELAY_HOURS * 3600
+    timeout_cutoff = now - DIALOG_TIMEOUT_HOURS * 3600 if DIALOG_TIMEOUT_HOURS > 0 else 0
+    sent = 0
+    with _lock:
+        candidates = [
+            (cid, dict(info))
+            for cid, info in user_data.items()
+            if not info.get("_followed_up")
+            and info.get("updated_at", now) < delay_cutoff
+            and (timeout_cutoff == 0 or info.get("updated_at", now) > timeout_cutoff)
+        ]
+    for cid, info in candidates:
+        dest = info.get("destination", "")
+        hint = f" в {dest}" if dest else ""
+        send_message(
+            cid,
+            f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
+            "Продолжить? Отправьте /start, чтобы начать заново, "
+            "или /cancel, чтобы отменить.",
+        )
+        with _lock:
+            if cid in user_data:
+                user_data[cid]["_followed_up"] = True
+        _mark_dirty(cid, user=False)
+        sent += 1
+    if sent:
+        logger.info("Follow-up sent to %d user(s)", sent)
+    return sent
+
+
+def _start_followup_worker() -> None:
+    """Start a daemon that periodically sends follow-up reminders."""
+    if FOLLOWUP_DELAY_HOURS <= 0:
+        logger.info("Follow-up worker is disabled")
+        return
+
+    def _worker() -> None:
+        while True:
+            time.sleep(600)  # check every 10 minutes
+            try:
+                _send_followups()
+            except Exception as exc:
+                logger.error("Error in follow-up worker: %s", exc)
+
+    threading.Thread(target=_worker, daemon=True, name="followup").start()
+    logger.info("Follow-up worker started (%s hours delay)", FOLLOWUP_DELAY_HOURS)
 
 
 # ---------------------------------------------------------------------------
@@ -1367,15 +1436,122 @@ def _admin_mdt(chat_id: int, arg: str) -> bool:
     return True
 
 
+def _admin_analytics(chat_id: int, arg: str) -> bool:
+    """Show analytics: popular destinations, conversion, completion stats."""
+    with _db_cursor() as cur:
+        # Active sessions by state
+        cur.execute("SELECT state, COUNT(*) FROM sessions GROUP BY state")
+        by_state = {row[0]: row[1] for row in cur.fetchall()}
+        # Destination popularity from active sessions
+        cur.execute(
+            "SELECT destination, COUNT(*) as cnt FROM sessions "
+            "WHERE destination IS NOT NULL AND destination != '' "
+            "GROUP BY destination ORDER BY cnt DESC LIMIT 10"
+        )
+        dest_stats = cur.fetchall()
+        # Total users with consent
+        cur.execute("SELECT COUNT(*) FROM users WHERE consent_at IS NOT NULL")
+        consented = cur.fetchone()[0]
+        # Total users
+        cur.execute("SELECT COUNT(*) FROM users")
+        total_users = cur.fetchone()[0]
+
+    lines = ["📊 Аналитика:\n"]
+    lines.append(f"Всего пользователей: {total_users}")
+    lines.append(f"Дали согласие: {consented}")
+    lines.append(f"Активных сессий: {sum(by_state.values())}")
+    if by_state:
+        lines.append("  По шагам:")
+        for state, cnt in sorted(by_state.items()):
+            lines.append(f"    {state}: {cnt}")
+    if dest_stats:
+        lines.append("\n📍 Популярные направления:")
+        for dest, cnt in dest_stats:
+            lines.append(f"  {dest}: {cnt}")
+    else:
+        lines.append("\n📍 Нет данных по направлениям")
+    send_message(chat_id, "\n".join(lines))
+    return True
+
+
+def _admin_export(chat_id: int, arg: str) -> bool:
+    """Export completed leads (sessions with phone) as a formatted message."""
+    with _db_cursor() as cur:
+        cur.execute(
+            "SELECT chat_id, destination, dates, people, budget, phone "
+            "FROM sessions WHERE phone IS NOT NULL AND phone != '' "
+            "ORDER BY updated_at DESC LIMIT 50"
+        )
+        rows = cur.fetchall()
+    if not rows:
+        send_message(chat_id, "Нет завершённых заявок с телефонами для экспорта.")
+        return True
+    lines = [f"📋 Экспорт заявок ({len(rows)}):\n"]
+    for i, row in enumerate(rows, 1):
+        cid, dest, dates, people, budget, phone = row
+        lines.append(f"{i}. {dest or '?'} | {dates or '?'} | {people or '?'} чел | {budget or '?'}₽ | {phone}")
+    # Split into chunks if too long (Telegram limit ~4096 chars)
+    text = "\n".join(lines)
+    while text:
+        chunk, text = text[:4000], text[4000:]
+        send_message(chat_id, chunk)
+    return True
+
+
+def _admin_broadcast(chat_id: int, arg: str) -> bool:
+    """`/broadcast {текст}` or `/broadcast {направление} {текст}` — send to all or segment."""
+    if not arg.strip():
+        send_message(chat_id, "Использование: /broadcast {текст} или /broadcast {направление} {текст}")
+        return True
+    # Check if first word is a destination filter
+    parts = arg.split(" ", 1)
+    filter_dest = None
+    msg = arg
+    with _db_cursor() as cur:
+        cur.execute("SELECT DISTINCT destination FROM sessions WHERE destination IS NOT NULL AND destination != ''")
+        known_dests = {row[0].lower() for row in cur.fetchall()}
+    if parts[0].lower() in known_dests and len(parts) > 1:
+        filter_dest = parts[0]
+        msg = parts[1]
+    count = 0
+    with _lock:
+        recipients = list(all_users.keys())
+    for uid in recipients:
+        if uid == ADMIN_ID:
+            continue
+        if filter_dest:
+            session = get_session(uid)
+            if not session or not session.get("destination", "").lower().startswith(filter_dest.lower()):
+                continue
+        if send_message(uid, msg, parse_mode="HTML"):
+            count += 1
+        time.sleep(BROADCAST_DELAY)
+    if filter_dest:
+        send_message(chat_id, f"✅ Рассылка отправлена {count} пользователям (фильтр: {filter_dest})")
+    else:
+        send_message(chat_id, f"✅ Рассылка отправлена {count} пользователям")
+    return True
+
+
+def _admin_followup(chat_id: int, arg: str) -> bool:
+    """Manually trigger follow-up for incomplete dialogs."""
+    sent = _send_followups()
+    send_message(chat_id, f"✅ Follow-up отправлен {sent} пользователям")
+    return True
+
+
 # command -> handler(chat_id, arg). Each handler returns True (recognised).
 ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/help":      _admin_help,
     "/users":     _admin_users,
-    "/stats":     _admin_stats,
+    "/stats":      _admin_stats,
+    "/analytics":  _admin_analytics,
+    "/export":     _admin_export,
     "/restart":   _admin_restart,
-    "/send":      _admin_send,
-    "/broadcast": _admin_broadcast,
-    "/mdt":       _admin_mdt,
+    "/send":       _admin_send,
+    "/broadcast":  _admin_broadcast,
+    "/followup":   _admin_followup,
+    "/mdt":        _admin_mdt,
 }
 
 
@@ -1745,6 +1921,7 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MB — Telegram updates are well under this
 
 
 @app.route("/")
@@ -1963,6 +2140,7 @@ def save_state() -> None:
 
 load_state()
 _start_timeout_worker()
+_start_followup_worker()
 _start_retention_worker()
 
 if MDT_ENABLED:

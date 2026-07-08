@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+.env
+.venv/
+venv/
+.pytest_cache/
+.git/
+.gitignore
+*.log
+backups/

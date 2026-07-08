@@ -1104,6 +1104,65 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
 # Update processing
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Follow-up for incomplete dialogs
+# ---------------------------------------------------------------------------
+
+FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "3"))
+
+
+def _send_followups() -> int:
+    """Send one follow-up reminder to users with incomplete dialogs."""
+    if FOLLOWUP_DELAY_HOURS <= 0:
+        return 0
+    now = int(time.time())
+    delay_cutoff = now - FOLLOWUP_DELAY_HOURS * 3600
+    timeout_cutoff = now - DIALOG_TIMEOUT_HOURS * 3600 if DIALOG_TIMEOUT_HOURS > 0 else 0
+    sent = 0
+    with _lock:
+        candidates = [
+            (cid, dict(info))
+            for cid, info in user_data.items()
+            if not info.get("_followed_up")
+            and info.get("updated_at", now) < delay_cutoff
+            and (timeout_cutoff == 0 or info.get("updated_at", now) > timeout_cutoff)
+        ]
+    for cid, info in candidates:
+        dest = info.get("destination", "")
+        hint = f" в {dest}" if dest else ""
+        send_message(
+            cid,
+            f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
+            "Продолжить? Напишите «Начать», чтобы начать заново, «Отмена», чтобы отменить.",
+        )
+        with _lock:
+            if cid in user_data:
+                user_data[cid]["_followed_up"] = True
+        _mark_dirty(cid, user=False)
+        sent += 1
+    if sent:
+        logger.info("VK follow-up sent to %d user(s)", sent)
+    return sent
+
+
+def _start_followup_worker() -> None:
+    if FOLLOWUP_DELAY_HOURS <= 0:
+        return
+    def _worker():
+        while True:
+            time.sleep(600)
+            try:
+                _send_followups()
+            except Exception as exc:
+                logger.error("Error in VK follow-up worker: %s", exc)
+    threading.Thread(target=_worker, daemon=True, name="vk-followup").start()
+    logger.info("Follow-up worker started (%s hours delay)", FOLLOWUP_DELAY_HOURS)
+
+
+# ---------------------------------------------------------------------------
+# Admin helpers (VK)
+# ---------------------------------------------------------------------------
+
 # VK command aliases (users type natural language, not /commands)
 _COMMAND_ALIASES = {
     "начать": "start", "старт": "start", "привет": "start",
@@ -1111,6 +1170,10 @@ _COMMAND_ALIASES = {
     "помощь": "help", "справка": "help",
     "политика": "privacy",
     "удалить": "delete",
+    "аналитика": "analytics", "статистика": "analytics",
+    "экспорт": "export", "заявки": "export",
+    "рассылка": "broadcast",
+    "напоминания": "followup",
 }
 
 
@@ -1121,7 +1184,6 @@ def _process_message(message: Dict[str, Any]) -> None:
     if not user_id:
         return
     text = (msg.get("text") or "").strip()
-    text_lower = text.lower()
 
     # Fetch user name (cached in all_users)
     with _lock:
@@ -1148,12 +1210,65 @@ def _process_message(message: Dict[str, Any]) -> None:
     msg["_user_name"] = name
 
     # Command recognition (case-insensitive, natural language)
+    text_lower = text.lower()
     command = _COMMAND_ALIASES.get(text_lower)
+    arg_or_text = text  # full text for broadcast, etc.
 
     # Admin commands
     if user_id == ADMIN_ID:
         if command == "help":
             send_message(user_id, USER_HELP)
+            return
+        if command == "analytics":
+            with _db_cursor() as cur:
+                cur.execute("SELECT state, COUNT(*) FROM sessions GROUP BY state")
+                by_state = {row[0]: row[1] for row in cur.fetchall()}
+                cur.execute("SELECT destination, COUNT(*) as cnt FROM sessions WHERE destination IS NOT NULL AND destination != '' GROUP BY destination ORDER BY cnt DESC LIMIT 10")
+                dest_stats = cur.fetchall()
+                cur.execute("SELECT COUNT(*) FROM users WHERE consent_at IS NOT NULL")
+                consented = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM users")
+                total_users = cur.fetchone()[0]
+            lines = ["📊 Аналитика:\n", f"Всего: {total_users}", f"С согласием: {consented}", f"Активных сессий: {sum(by_state.values())}"]
+            if dest_stats:
+                lines.append("\n📍 Направления:")
+                for dest, cnt in dest_stats:
+                    lines.append(f"  {dest}: {cnt}")
+            send_message(user_id, "\n".join(lines))
+            return
+        if command == "export":
+            with _db_cursor() as cur:
+                cur.execute("SELECT chat_id, destination, dates, people, budget, phone FROM sessions WHERE phone IS NOT NULL AND phone != '' ORDER BY updated_at DESC LIMIT 50")
+                rows = cur.fetchall()
+            if not rows:
+                send_message(user_id, "Нет завершённых заявок для экспорта.")
+                return
+            lines = [f"📋 Экспорт ({len(rows)}):\n"]
+            for i, (cid, dest, dates, people, budget, phone) in enumerate(rows, 1):
+                lines.append(f"{i}. {dest or '?'} | {dates or '?'} | {people or '?'} чел | {budget or '?'}₽ | {phone}")
+            text = "\n".join(lines)
+            while text:
+                send_message(user_id, text[:4000])
+                text = text[4000:]
+            return
+        if command == "broadcast":
+            if not arg_or_text.strip():
+                send_message(user_id, "Напишите: рассылка {текст}")
+                return
+            count = 0
+            with _lock:
+                recipients = list(all_users.keys())
+            for uid in recipients:
+                if uid == ADMIN_ID:
+                    continue
+                if send_message(uid, arg_or_text):
+                    count += 1
+                time.sleep(0.05)
+            send_message(user_id, f"✅ Рассылка отправлена {count} пользователям")
+            return
+        if command == "followup":
+            sent = _send_followups()
+            send_message(user_id, f"✅ Напоминания отправлены {sent} пользователям")
             return
 
     if command == "start":
@@ -1245,6 +1360,7 @@ def load_state() -> None:
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MB — VK events are well under this
 
 
 @app.route("/")
@@ -1313,6 +1429,7 @@ def vk_webhook() -> Any:
 
 load_state()
 _start_timeout_worker()
+_start_followup_worker()
 _start_retention_worker()
 
 if MDT_ENABLED:

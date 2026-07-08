@@ -44,3 +44,7 @@ Thumbs.db
 *.sqlite
 *.db
 bot_state.json
+
+# SQLite WAL/SHM sidecar files
+*.sqlite-wal
+*.sqlite-shm
