@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: turbot-arhangelsk
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn bot:app --bind 0.0.0.0:$PORT --workers 1 --threads 2
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_ID
+        sync: false
+      - key: AI_MODE
+        value: template
+      - key: MDT_ENABLED
+        value: "false"
+      - key: DIALOG_TIMEOUT_HOURS
+        value: "6"
