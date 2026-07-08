@@ -1122,13 +1122,15 @@ def _admin_help(chat_id: int, arg: str) -> bool:
 
 
 def _admin_users(chat_id: int, arg: str) -> bool:
-    users = [(uid, m) for uid, m in all_users.items() if uid != ADMIN_ID]
+    with _lock:
+        users = [(uid, dict(m)) for uid, m in all_users.items() if uid != ADMIN_ID]
     if not users:
         send_message(chat_id, "Пользователей пока нет.")
         return True
     lines = ["📋 Пользователи бота:\n"]
     for uid, meta in users:
-        name = meta.get("first_name") or f"@{meta.get('username', '')}" or "Без имени"
+        username = meta.get("username", "")
+        name = meta.get("first_name") or (f"@{username}" if username else "") or "Без имени"
         lines.append(f"• {name} — ID: {uid}")
     lines.append(f"\nВсего: {len(users)}")
     send_message(chat_id, "\n".join(lines))
@@ -1136,8 +1138,9 @@ def _admin_users(chat_id: int, arg: str) -> bool:
 
 
 def _admin_stats(chat_id: int, arg: str) -> bool:
-    total = sum(1 for u in all_users if u != ADMIN_ID)
-    active = len(user_data)
+    with _lock:
+        total = sum(1 for u in all_users if u != ADMIN_ID)
+        active = len(user_data)
     send_message(
         chat_id,
         f"📊 Статистика:\n\nПользователей: {total}\nАктивных заявок: {active}",
@@ -1148,6 +1151,7 @@ def _admin_stats(chat_id: int, arg: str) -> bool:
 def _admin_restart(chat_id: int, arg: str) -> bool:
     with _lock:
         user_data.clear()
+        _dirty_sessions.clear()
     clear_sessions()
     send_message(chat_id, "✅ Все активные сессии сброшены.")
     return True
@@ -1177,7 +1181,9 @@ def _admin_broadcast(chat_id: int, arg: str) -> bool:
         send_message(chat_id, "Использование: /broadcast {текст}")
         return True
     count = 0
-    for uid in list(all_users.keys()):
+    with _lock:
+        recipients = list(all_users.keys())
+    for uid in recipients:
         if uid == ADMIN_ID:
             continue
         if send_message(uid, arg, parse_mode="HTML"):
@@ -1564,11 +1570,11 @@ def health() -> Any:
         "bot_token_configured": bool(BOT_TOKEN),
         "admin_id_configured": bool(ADMIN_ID),
         "groq_configured": bool(GROQ_API_KEY),
+        "ai_mode": AI_MODE,
         "mdt_enabled": MDT_ENABLED,
         "mdt_mode": MDT_MODE,
         "total_users": len(all_users),
         "active_sessions": len(user_data),
-        "state_file": STATE_FILE,
     })
 
 
