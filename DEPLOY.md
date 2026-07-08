@@ -180,3 +180,77 @@ Send `/start` to the bot in Telegram — you should see a consent prompt.
 - [ ] Notify Roskomnadzor about personal-data processing
 - [ ] Publish privacy policy and set `PRIVACY_POLICY_URL`
 - [ ] Regular database backups (cron + encrypted copy)
+
+---
+
+## 10. VK.com group bot (optional)
+
+The repo includes a separate `vk_bot.py` that runs the same tour-selection
+dialog, AI suggestions, 152-ФЗ consent, and MDT CRM integration — but for a
+VKontakte group instead of Telegram.
+
+### Setup a VK group
+
+1. Create a group on [vk.com](https://vk.com) (or use an existing one).
+2. Go to **Manage → Settings → API usage → Callback API**.
+3. Enable Callback API.
+4. Set the callback URL to `https://bot.example.ru/vk/webhook` (your domain).
+5. Copy the **confirmation string** — VK sends it to verify server ownership.
+6. Go to **API usage → Access tokens** and create a token with
+   `messages` permission. Copy the token.
+7. Copy the **group ID** from the group settings page.
+
+### Configure
+
+Add these to `/opt/turbot/.env`:
+
+```ini
+VK_ACCESS_TOKEN=vk1.a.BcDeFg...      # from step 6
+VK_GROUP_ID=123456                   # from step 7
+VK_CONFIRMATION=abc123def456         # from step 5
+VK_PORT=5100
+VK_DATABASE_PATH=/opt/turbot/vk_bot_state.sqlite
+```
+
+### Install the systemd service
+
+```bash
+sudo cp /opt/turbot/deploy/vk-turbot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable vk-turbot
+sudo systemctl start vk-turbot
+sudo systemctl status vk-turbot
+```
+
+### Add nginx route for VK webhook
+
+Add this `location` block inside the existing HTTPS `server` block in
+`/etc/nginx/sites-available/turbot.conf`:
+
+```nginx
+location /vk/webhook {
+    proxy_pass http://127.0.0.1:5100;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Reload nginx:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### Verify
+
+```bash
+curl https://bot.example.ru/vk/webhook -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"type":"confirmation","group_id":123456}'
+# Should return your confirmation string
+```
+
+Then go back to VK group settings and click "Confirm" — VK will send the
+verification request and your server should respond with the confirmation string.
