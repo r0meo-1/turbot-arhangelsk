@@ -34,7 +34,7 @@ logger = logging.getLogger("turbot")
 BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
 ADMIN_ID          = int(os.getenv("ADMIN_ID", "0"))
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 AI_MODE           = os.getenv("AI_MODE", "groq").lower().strip()
 PORT                 = int(os.getenv("PORT", "5000"))
 STATE_FILE           = os.getenv("STATE_FILE", "bot_state.json")
@@ -213,6 +213,21 @@ _db_lock = threading.Lock()
 user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}
 _lock = threading.Lock()
+
+# chat_ids whose in-memory session/user record changed since the last
+# save_state(). Guarded by _lock. Lets save_state() flush only what changed
+# instead of rewriting the whole database on every webhook request.
+_dirty_sessions: set[int] = set()
+_dirty_users: set[int] = set()
+
+
+def _mark_dirty(chat_id: int, *, session: bool = True, user: bool = True) -> None:
+    """Flag a chat's in-memory records to be persisted by the next save_state()."""
+    with _lock:
+        if session:
+            _dirty_sessions.add(chat_id)
+        if user:
+            _dirty_users.add(chat_id)
 
 
 @contextmanager
@@ -1237,7 +1252,9 @@ def _strip_emoji_prefix(text: str) -> str:
 
 def handle_start(chat_id: int, first_name: str = "") -> None:
     """Begin the tour-selection dialog."""
-    user_data[chat_id] = {"state": STATE_DESTINATION, "updated_at": int(time.time())}
+    with _lock:
+        user_data[chat_id] = {"state": STATE_DESTINATION, "updated_at": int(time.time())}
+    _mark_dirty(chat_id)
     name = f", {first_name}" if first_name else ""
     send_message(
         chat_id,
@@ -1253,8 +1270,10 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
 
 def handle_cancel(chat_id: int) -> None:
     """Abort the current dialog flow."""
-    existed = user_data.pop(chat_id, None) is not None
+    with _lock:
+        existed = user_data.pop(chat_id, None) is not None
     if existed:
+        _mark_dirty(chat_id)
         delete_session(chat_id)
         send_message(
             chat_id,
@@ -1442,6 +1461,7 @@ def _go_back(chat_id: int) -> None:
         send_message(chat_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отменить».")
         return
     info["state"] = previous
+    _mark_dirty(chat_id, user=False)
     _prompt_for_state(chat_id, previous)
 
 
@@ -1457,6 +1477,7 @@ def handle_dialog(chat_id: int, text: str, message: Dict[str, Any]) -> None:
         # Unknown state — shouldn't happen; behave as the original (no-op).
         return
     handler(chat_id, text, message, info)
+    _mark_dirty(chat_id, user=False)
 
 
 # --- request completion ---------------------------------------------------
@@ -1519,7 +1540,8 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None
     _notify_admin(chat_id, info, phone, client_name)  # 2. Notify admin
     send_lead_to_mdt(chat_id, info, phone, client_name)  # 3. Send to MDT CRM (lead/preorder/both)
     _send_ai_blurb(chat_id, info)                     # 4. AI selection (with typing)
-    user_data.pop(chat_id, None)                      # 5. Clean up
+    with _lock:                                       # 5. Clean up
+        user_data.pop(chat_id, None)
     delete_session(chat_id)
 
 # ---------------------------------------------------------------------------
@@ -1560,16 +1582,20 @@ def _process_update(data: Dict[str, Any]) -> None:
     username = from_info.get("username", "")
 
     # Track every user
-    all_users[chat_id] = {
-        "first_name": first_name,
-        "username": username,
-        "last_seen": int(time.time()),
-    }
-
-    # Update activity timestamp for open dialogs so the timeout worker doesn't
-    # cancel them while the user is actively typing.
-    if chat_id in user_data:
-        user_data[chat_id]["updated_at"] = int(time.time())
+    with _lock:
+        all_users[chat_id] = {
+            "first_name": first_name,
+            "username": username,
+            "last_seen": int(time.time()),
+        }
+        # Update activity timestamp for open dialogs so the timeout worker
+        # doesn't cancel them while the user is actively typing.
+        if chat_id in user_data:
+            user_data[chat_id]["updated_at"] = int(time.time())
+            session_open = True
+        else:
+            session_open = False
+    _mark_dirty(chat_id, session=session_open)
 
     # Shared contact (e.g. phone button)
     contact = message.get("contact")
@@ -1688,13 +1714,30 @@ def load_state() -> None:
 
 
 def save_state() -> None:
-    """Persist all in-memory sessions and users to SQLite."""
+    """Persist in-memory sessions and users that changed since the last call.
+
+    Only records flagged via _mark_dirty() are written, so a webhook request
+    touches a single chat_id instead of rewriting the whole database. A session
+    whose chat_id is dirty but no longer in memory (cancelled/completed) is
+    deleted, keeping SQLite in sync with memory.
+    """
     with _lock:
-        sessions = list(user_data.items())
-        users = list(all_users.items())
-    for chat_id, info in sessions:
-        set_session(chat_id, info)
-    for chat_id, meta in users:
+        session_ids = _dirty_sessions.copy()
+        user_ids = _dirty_users.copy()
+        _dirty_sessions.clear()
+        _dirty_users.clear()
+
+    for chat_id in session_ids:
+        info = user_data.get(chat_id)
+        if info is not None:
+            set_session(chat_id, info)
+        else:
+            delete_session(chat_id)
+
+    for chat_id in user_ids:
+        meta = all_users.get(chat_id)
+        if meta is None:
+            continue
         touch_user(
             chat_id,
             meta.get("first_name", ""),
