@@ -9,6 +9,7 @@ os.environ.setdefault("BOT_TOKEN", "dummy-token")
 os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret123")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")  # disable background worker
+os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 os.environ.setdefault("STATE_FILE", ":memory:")  # not used when save_state is mocked
 os.environ.setdefault(
     "DATABASE_PATH",
@@ -30,6 +31,8 @@ def clean_state(monkeypatch):
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions")
         cur.execute("DELETE FROM users")
+        cur.execute("DELETE FROM leads")
+    bot._seen_update_ids.clear()
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: None)
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
     monkeypatch.setattr(bot, "save_state", lambda: None)
@@ -83,6 +86,35 @@ def test_webhook_rejects_bad_secret(client):
         json={"message": {"chat": {"id": 1}}},
     )
     assert resp.status_code == 403
+
+
+def test_update_id_dedup(client):
+    """Same update_id must be processed only once."""
+    payload = _update(777, "/start")
+    payload["update_id"] = 424242
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "secret123"}
+    r1 = client.post("/webhook", headers=headers, json=payload)
+    r2 = client.post("/webhook", headers=headers, json=payload)
+    assert r1.status_code == 200
+    assert r2.status_code == 200
+    assert 777 in bot.user_data
+    assert bot.user_data[777]["state"] == bot.STATE_CONSENT
+
+
+def test_seen_update_ids_evicts_oldest():
+    bot._seen_update_ids.clear()
+    bot._SEEN_UPDATE_MAX = 3
+    try:
+        for i in range(5):
+            bot._seen_update_ids[i] = None
+            while len(bot._seen_update_ids) > bot._SEEN_UPDATE_MAX:
+                bot._seen_update_ids.popitem(last=False)
+        assert list(bot._seen_update_ids.keys()) == [2, 3, 4]
+        assert 0 not in bot._seen_update_ids
+        assert 1 not in bot._seen_update_ids
+    finally:
+        bot._SEEN_UPDATE_MAX = 1000
+        bot._seen_update_ids.clear()
 
 
 def _update(chat_id, text=None, contact=None):
@@ -152,6 +184,17 @@ def test_delete_command_erases_data(client):
     assert not bot.has_consent(114)
 
 
+def test_delete_command_erases_leads(client):
+    """152-ФЗ: /delete must remove completed leads for that user too."""
+    _consent(client, 115)
+    for text in ["🏖 Египет", "15-22 июня", "2", "60000"]:
+        _post(client, 115, text)
+    _post(client, 115, contact={"phone_number": "79161234567", "user_id": 115})
+    assert bot.count_leads() == 1
+    _post(client, 115, "/delete")
+    assert bot.count_leads() == 0
+
+
 def test_dialog_completion_with_contact(client):
     # Walk through the whole flow.
     _consent(client, 222)
@@ -166,6 +209,14 @@ def test_dialog_completion_with_contact(client):
     resp = _post(client, 222, contact={"phone_number": "79161234567", "user_id": 222})
     assert resp.status_code == 200
     assert 222 not in bot.user_data
+    # Completed lead is stored for /export and /analytics.
+    assert bot.count_leads() == 1
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone, destination FROM leads WHERE chat_id = ?", (222,))
+        row = cur.fetchone()
+    assert row is not None
+    assert row[0] == "+79161234567"
+    assert "Египет" in (row[1] or "")
 
 
 def test_back_button(client):

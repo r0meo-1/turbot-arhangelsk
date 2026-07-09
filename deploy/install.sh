@@ -59,7 +59,7 @@ systemctl enable turbot
 
 echo "==> [6/7] Installing nginx site"
 cp "$APP_DIR/deploy/nginx-turbot.conf" /etc/nginx/sites-available/turbot.conf
-sed -i "s/BOT_DOMAIN/$DOMAIN/g" /etc/nginx/sites-available/turbot.conf"
+sed -i "s/BOT_DOMAIN/$DOMAIN/g" /etc/nginx/sites-available/turbot.conf
 mkdir -p /var/www/certbot
 if [ ! -L /etc/nginx/sites-enabled/turbot.conf ]; then
     ln -s /etc/nginx/sites-available/turbot.conf /etc/nginx/sites-enabled/

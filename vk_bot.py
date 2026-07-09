@@ -9,7 +9,6 @@ AI-подборки, согласие 152-ФЗ и интеграцию с MDT CR
 from __future__ import annotations
 
 import os
-import re
 import json
 import time
 import random
@@ -17,7 +16,6 @@ import sqlite3
 import logging
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -30,6 +28,26 @@ try:
     from groq import Groq
 except ImportError:  # groq may not be installed in all environments
     Groq = None  # type: ignore
+
+from shared.constants import (
+    STATE_BUDGET,
+    STATE_CONSENT,
+    STATE_DATES,
+    STATE_DESTINATION,
+    STATE_PEOPLE,
+    STATE_PHONE,
+    PEOPLE_OPTIONS,
+    BACK_BUTTON_TEXT,
+    CANCEL_BUTTON_TEXT,
+    CONSENT_YES_TEXT,
+    CONSENT_NO_TEXT,
+    POPULAR_DESTINATIONS_PLAIN,
+)
+from shared.validation import validate_phone, validate_people, validate_budget
+from shared.templates import template_selection as _template_selection
+from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
+from shared.ai import generate_ai_selection as _shared_generate_ai
+from shared import mdt as mdt_shared
 
 load_dotenv()
 
@@ -91,13 +109,7 @@ DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
 # Constants
 # ---------------------------------------------------------------------------
 
-POPULAR_DESTINATIONS = ["Египет", "Турция", "Таиланд", "Мальдивы", "ОАЭ", "Другое"]
-PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
-
-BACK_BUTTON_TEXT   = "◀️ Назад"
-CANCEL_BUTTON_TEXT = "❌ Отменить"
-CONSENT_YES_TEXT   = "✅ Согласен"
-CONSENT_NO_TEXT    = "❌ Отказаться"
+POPULAR_DESTINATIONS = POPULAR_DESTINATIONS_PLAIN
 
 USER_HELP = (
     "🤖 Я бот туристического агентства «АПРЕЛЬ тур».\n\n"
@@ -111,38 +123,6 @@ USER_HELP = (
     "📋 ИП Замятина Мария Андреевна\n"
     "ТА «АПРЕЛЬ тур» · ОГРНИП 290211659807"
 )
-
-# Dialog states
-STATE_CONSENT     = "consent"
-STATE_DESTINATION = "destination"
-STATE_DATES       = "dates"
-STATE_PEOPLE      = "people"
-STATE_BUDGET      = "budget"
-STATE_PHONE       = "phone"
-
-TEMPLATE_INTROS: Dict[str, str] = {
-    "египет": "Вас ждут древние пирамиды, кристально чистое Красное море и «всё включённое» на любой вкус.",
-    "турция": "Отличное сочетание пляжного отдыха, богатой истории и гостеприимной кухни с all inclusive на побережье.",
-    "таиланд": "Экзотическая природа, белоснежные пляжи, буддийские храмы и доступный комфортный отдых для всей семьи.",
-    "мальдивы": "Райские острова с бирюзовой лагуной, bungalow над водой и идеальной атмосферой для романтического getaway.",
-    "оаэ": "Современный комфорт, роскошные отели, шопинг и пляжи с тёплым морем — и всё это без визового оформления.",
-}
-
-TEMPLATE_PACKING = (
-    "Возьмите с собой удобную обувь, купальные принадлежности, солнцезащитный крем "
-    "и хорошее настроение."
-)
-
-AI_FALLBACK_MESSAGE = (
-    "🌴 Спасибо за заявку! Наш менеджер подберёт для вас\n"
-    "лучшие варианты туров и свяжется с вами в ближайшее время."
-)
-
-_MONTHS_RU: Dict[str, int] = {
-    "январ": 1, "феврал": 2, "март": 3, "апрел": 4,
-    "ма": 5, "июн": 6, "июл": 7, "август": 8,
-    "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
-}
 
 # ---------------------------------------------------------------------------
 # Groq client
@@ -228,6 +208,22 @@ def init_db() -> None:
                 updated_at INTEGER NOT NULL
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                first_name TEXT,
+                username TEXT,
+                destination TEXT,
+                dates TEXT,
+                people TEXT,
+                budget INTEGER,
+                phone TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("PRAGMA journal_mode=WAL")
 
 
@@ -265,6 +261,37 @@ def list_stale_sessions(cutoff: int) -> List[int]:
     with _db_cursor() as cur:
         cur.execute("SELECT chat_id FROM sessions WHERE updated_at < ?", (cutoff,))
         return [row[0] for row in cur.fetchall()]
+
+
+def save_lead(
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    first_name: str = "",
+    username: str = "",
+) -> None:
+    """Persist a completed tour request for retention-aware export/history."""
+    now = int(time.time())
+    with _db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            INSERT INTO leads (
+                chat_id, first_name, username, destination, dates,
+                people, budget, phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chat_id,
+                first_name or None,
+                username or None,
+                info.get("destination"),
+                info.get("dates"),
+                info.get("people"),
+                info.get("budget"),
+                phone,
+                now,
+            ),
+        )
 
 
 # --- user helpers ---
@@ -323,6 +350,7 @@ def delete_user_data(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
+        cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))
 
 
 def cleanup_expired_data() -> int:
@@ -512,373 +540,111 @@ def _hide_keyboard() -> str:
     return _keyboard([], one_time=True)
 
 
-# ---------------------------------------------------------------------------
-# Input validation
-# ---------------------------------------------------------------------------
-
-def validate_phone(text: str) -> Tuple[bool, Optional[str]]:
-    digits = re.sub(r"[^\d+]", "", text).lstrip("+")
-    if digits.startswith("8"):
-        digits = "7" + digits[1:]
-    if len(digits) == 11 and digits.startswith("7"):
-        return True, "+" + digits
-    if len(digits) == 10:
-        return True, "+7" + digits
-    return False, None
-
-
-def validate_people(text: str) -> Tuple[bool, Optional[str]]:
-    cleaned = text.strip()
-    if cleaned == "5+":
-        return True, "5+"
-    try:
-        value = int(re.sub(r"[^\d]", "", cleaned))
-        if 1 <= value <= 50:
-            return True, str(value)
-    except (ValueError, TypeError):
-        pass
-    return False, None
-
-
-def validate_budget(text: str) -> Tuple[bool, Optional[int]]:
-    try:
-        value = int(re.sub(r"[^\d]", "", text))
-        if value > 0:
-            return True, value
-    except (ValueError, TypeError):
-        pass
-    return False, None
-
-
-# ---------------------------------------------------------------------------
-# AI selection
-# ---------------------------------------------------------------------------
-
-def _template_selection(destination: str, dates: str, people: str, budget: str) -> str:
-    dest_lower = destination.lower()
-    intro: Optional[str] = None
-    for keyword, text in TEMPLATE_INTROS.items():
-        if keyword in dest_lower:
-            intro = text
-            break
-    if intro is None:
-        intro = f"{destination} — отличное направление для вашего отдыха."
-    return (
-        "🌴 Ваша подборка туров\n\n"
-        f"📍 {destination}: {intro}\n\n"
-        f"Поездка на {dates} для {people} человек — хороший выбор, "
-        f"чтобы успеть всё и при этом отдохнуть. Бюджет {budget}₽ на человека "
-        f"позволяет подобрать комфортный вариант.\n\n"
-        f"💡 {TEMPLATE_PACKING}\n\n"
-        "ℹ️ Наш менеджер скоро свяжется с вами для уточнения деталей!"
+def generate_ai_selection(destination: str, dates: str, people: str, budget: str) -> str:
+    return _shared_generate_ai(
+        destination,
+        dates,
+        people,
+        budget,
+        ai_mode=AI_MODE,
+        groq_client=groq_client,
+        groq_model=GROQ_MODEL,
+        log=logger,
     )
 
 
-def generate_ai_selection(destination: str, dates: str, people: str, budget: str) -> str:
-    if AI_MODE == "template" or not groq_client:
-        return _template_selection(destination, dates, people, budget)
-    try:
-        prompt = (
-            "Ты — эксперт по туризму туристического агентства «АПРЕЛЬ тур».\n\n"
-            "Клиент хочет:\n"
-            f"- Направление: {destination}\n- Даты: {dates}\n"
-            f"- Количество человек: {people}\n- Бюджет: {budget} рублей\n\n"
-            "Напиши короткое (3-4 предложения), дружелюбное сообщение с:\n"
-            "- Что ожидает в этом направлении\n- Почему это отличный выбор\n"
-            "- Что взять с собой\n\nИспользуй эмодзи. Не упоминай цены и конкретные отели."
-        )
-        response = groq_client.chat.completions.create(
-            model=GROQ_MODEL, messages=[{"role": "user", "content": prompt}],
-            max_tokens=300, temperature=0.7,
-        )
-        ai_text = response.choices[0].message.content
-        return f"🌴 Ваша подборка туров\n\n{ai_text}\n\nℹ️ Наш менеджер скоро свяжется с вами!"
-    except Exception as exc:
-        logger.error("Error generating AI selection: %s", exc)
-        return _template_selection(destination, dates, people, budget)
+# ---------------------------------------------------------------------------
+# MDT CRM integration (thin wrappers over shared.mdt)
+# ---------------------------------------------------------------------------
+
+_mdt_country_cache: Dict[str, int] = {}
 
 
-# ---------------------------------------------------------------------------
-# MDT CRM integration
-# ---------------------------------------------------------------------------
+def _mdt_settings() -> mdt_shared.MDTSettings:
+    return mdt_shared.MDTSettings(
+        enabled=MDT_ENABLED,
+        account=MDT_ACCOUNT,
+        api_key=MDT_API_KEY,
+        source=MDT_SOURCE,
+        base_url=MDT_BASE_URL,
+        mode=MDT_MODE,
+        notify_managers=MDT_NOTIFY_MANAGERS,
+        manager_ids=list(MDT_MANAGER_IDS),
+        reminder_enabled=MDT_REMINDER_ENABLED,
+        reminder_days=MDT_REMINDER_DAYS,
+        reminder_text=MDT_REMINDER_TEXT,
+        timeout=HTTP_TIMEOUT,
+        name_prefix="VK",
+        tourist_tags="VK Bot",
+        push_title="Новая заявка с VK-бота",
+    )
+
 
 def _mdt_base_url() -> str:
-    if MDT_BASE_URL:
-        return MDT_BASE_URL.rstrip("/")
-    if MDT_ACCOUNT:
-        return f"https://{MDT_ACCOUNT}.moidokumenti.ru"
-    return ""
+    return mdt_shared.base_url(_mdt_settings())
 
 
 def _mdt_request(method: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    base = _mdt_base_url()
-    if not base or not MDT_API_KEY:
-        return None
-    try:
-        resp = http_session.post(
-            f"{base}/api/{method}",
-            data={"params": json.dumps(params, ensure_ascii=False), "key": MDT_API_KEY},
-            timeout=HTTP_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as exc:
-        logger.error("MDT request %s failed: %s", method, exc)
-        return None
-
-
-_mdt_country_cache: Dict[str, int] = {}
+    return mdt_shared.http_request(
+        _mdt_settings(), http_session, method, params, log=logger
+    )
 
 
 def _mdt_load_countries() -> None:
     result = _mdt_request("get-country-list", {})
     if result is None:
         return
-    data = result.get("data", result) if isinstance(result, dict) else result
-    if isinstance(data, dict):
-        for key, value in data.items():
-            try:
-                cid = int(key)
-            except (ValueError, TypeError):
-                continue
-            name = value if isinstance(value, str) else (value.get("name", "") if isinstance(value, dict) else "")
-            if name:
-                _mdt_country_cache[name.strip().lower()] = cid
-    elif isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict):
-                cid = item.get("id")
-                name = item.get("name", "")
-                if cid is not None and name:
-                    _mdt_country_cache[name.strip().lower()] = int(cid)
+    _mdt_country_cache.clear()
+    _mdt_country_cache.update(mdt_shared.parse_country_list(result))
+    logger.info("Loaded %d countries from MDT", len(_mdt_country_cache))
 
 
 def _match_country_id(destination: str) -> int:
-    if not _mdt_country_cache:
-        return 0
-    dest_lower = destination.strip().lower()
-    if not dest_lower:
-        return 0
-    if dest_lower in _mdt_country_cache:
-        return _mdt_country_cache[dest_lower]
-    for name, cid in _mdt_country_cache.items():
-        if name in dest_lower or dest_lower in name:
-            return cid
-    return 0
-
-
-def _parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
-    if not text:
-        return None, None
-    now = time.localtime()
-    current_year, current_month, current_day = now.tm_year, now.tm_mon, now.tm_mday
-
-    def _month_from_text(s: str) -> Optional[int]:
-        for prefix, month_num in _MONTHS_RU.items():
-            if prefix in s.lower():
-                return month_num
-        return None
-
-    def _to_ymd(day: int, month: int, year: int) -> str:
-        return f"{year:04d}-{month:02d}-{day:02d}"
-
-    year_match = re.search(r"\b(20\d{2})\b", text)
-    year = int(year_match.group(1)) if year_match else current_year
-    parts = re.split(r"\s*(?:-|–|—|\bпо\b)\s*", text)
-    parts = [p.strip() for p in parts if p.strip()]
-    if len(parts) < 2:
-        return None, None
-
-    def _parse_part(s: str) -> Optional[Tuple[int, int]]:
-        day_match = re.search(r"\b(\d{1,2})\b", s)
-        if not day_match:
-            return None
-        day = int(day_match.group(1))
-        month = _month_from_text(s)
-        if month is None:
-            return None
-        return (day, month)
-
-    from_parsed = _parse_part(parts[0])
-    to_parsed = _parse_part(parts[1])
-    if from_parsed is None and to_parsed is not None:
-        day_match = re.search(r"\b(\d{1,2})\b", parts[0])
-        if day_match:
-            from_parsed = (int(day_match.group(1)), to_parsed[1])
-    if from_parsed is None or to_parsed is None:
-        return None, None
-
-    from_day, from_month = from_parsed
-    to_day, to_month = to_parsed
-    if not year_match:
-        if from_month < current_month or (from_month == current_month and from_day < current_day):
-            year = current_year + 1
-    from_date = _to_ymd(from_day, from_month, year)
-    to_date = _to_ymd(to_day, to_month, year)
-    if to_month < from_month:
-        to_date = _to_ymd(to_day, to_month, year + 1)
-    return from_date, to_date
-
-
-def _mdt_add_tourist_temp(name: str, phone: str) -> Optional[int]:
-    result = _mdt_request("add-tourist-temp", {"name": name, "tel": phone, "tags": "VK Bot"})
-    if result is None:
-        return None
-    data = result.get("data", result) if isinstance(result, dict) else result
-    if isinstance(data, dict):
-        tid = data.get("id") or data.get("tourist_id")
-        if tid is not None:
-            return int(tid)
-    if isinstance(data, (int, str)):
-        try:
-            return int(data)
-        except (ValueError, TypeError):
-            pass
-    return None
+    return mdt_shared.match_country_id(_mdt_country_cache, destination)
 
 
 def send_preorder_to_mdt(chat_id, info, phone, client_name) -> Tuple[Optional[int], Optional[int]]:
-    name = client_name or f"VK {chat_id}"
-    tourist_id = _mdt_add_tourist_temp(name, phone)
-    if tourist_id is None:
-        return None, None
-    country_id = _match_country_id(info.get("destination", ""))
-    date_from, date_to = _parse_russian_dates(info.get("dates", ""))
-    people_str = str(info.get("people", ""))
-    persons = int(re.sub(r"[^\d]", "", people_str)) if re.sub(r"[^\d]", "", people_str) else 0
-    budget = info.get("budget", 0)
-    if not isinstance(budget, (int, float)):
-        try:
-            budget = int(re.sub(r"[^\d]", "", str(budget)))
-        except (ValueError, TypeError):
-            budget = 0
-    comment_parts = []
-    if info.get("destination"):
-        comment_parts.append(f"Направление: {info['destination']}")
-    if info.get("dates"):
-        comment_parts.append(f"Даты: {info['dates']}")
-    if info.get("people"):
-        comment_parts.append(f"Человек: {info['people']}")
-    if budget:
-        comment_parts.append(f"Бюджет: {budget}₽")
-    params: Dict[str, Any] = {
-        "tourist_type": "tourist_temp", "tourist_id": tourist_id,
-        "country_id1": country_id, "country_id2": 0, "country_id3": 0,
-        "persons": persons, "children": 0, "children_ages": [],
-        "price_from": 0, "price_to": budget,
-        "comment": " | ".join(comment_parts), "wait_for_hot": 0,
-    }
-    if date_from:
-        params["flightdate_from"] = date_from
-    if date_to:
-        params["flightdate_to"] = date_to
-    result = _mdt_request("create-preorder", params)
-    if result is not None:
-        data = result.get("data", result) if isinstance(result, dict) else result
-        preorder_id = None
-        if isinstance(data, dict):
-            preorder_id = data.get("id") or data.get("preorder_id")
-        elif isinstance(data, (int, str)):
-            try:
-                preorder_id = int(data)
-            except (ValueError, TypeError):
-                pass
-        return preorder_id, tourist_id
-    return None, None
-
-
-def _mdt_notify_managers(chat_id, info, phone, client_name) -> None:
-    if not MDT_MANAGER_IDS:
-        return
-    text_parts = []
-    if client_name:
-        text_parts.append(f"Клиент: {client_name}")
-    for k, label in [("destination", "Направление"), ("dates", "Даты"), ("people", "Человек"), ("budget", "Бюджет")]:
-        if info.get(k):
-            text_parts.append(f"{label}: {info[k]}{'₽' if k == 'budget' else ''}")
-    text_parts.append(f"Телефон: {phone}")
-    _mdt_request("send-push", {
-        "manager_ids": MDT_MANAGER_IDS,
-        "title": "Новая заявка с VK-бота",
-        "text": "\n".join(text_parts),
-    })
-
-
-def _mdt_add_reminder(preorder_id, tourist_id, manager_id, reminder_date, reminder_time="10:00:00") -> bool:
-    result = _mdt_request("add-reminder", {
-        "date": reminder_date, "time": reminder_time,
-        "text": MDT_REMINDER_TEXT, "tourist_type": "tourist_temp",
-        "tourist_id": tourist_id, "manager_id": manager_id,
-        "preorder_id": preorder_id, "only_one_manager": False,
-    })
-    return result is not None
-
-
-def _mdt_create_reminders_for_preorder(chat_id, preorder_id, tourist_id) -> None:
-    if not MDT_REMINDER_ENABLED or not (preorder_id and tourist_id) or not MDT_MANAGER_IDS:
-        return
-    reminder_date = (datetime.now() + timedelta(days=MDT_REMINDER_DAYS)).strftime("%Y-%m-%d")
-    for manager_id in MDT_MANAGER_IDS:
-        _mdt_add_reminder(preorder_id, tourist_id, manager_id, reminder_date)
-
-
-def _mdt_create_lead(chat_id, info, phone, client_name) -> bool:
-    fields = []
-    for k, label in [("destination", "Направление"), ("dates", "Даты"),
-                     ("people", "Количество человек"), ("budget", "Бюджет")]:
-        if info.get(k):
-            fields.append({"name": label, "values": [str(info[k])]})
-    result = _mdt_request("add-lead", {
-        "name": client_name or f"VK {chat_id}",
-        "phone": phone, "email": "", "source": MDT_SOURCE, "fields": fields,
-    })
-    return result is not None
+    return mdt_shared.create_preorder(
+        _mdt_settings(),
+        chat_id,
+        info,
+        phone,
+        client_name,
+        _mdt_country_cache,
+        _mdt_request,
+        log=logger,
+    )
 
 
 def send_lead_to_mdt(chat_id, info, phone, client_name) -> None:
-    if not MDT_ENABLED:
-        return
-    success = False
-    if MDT_MODE in ("lead", "both"):
-        success = _mdt_create_lead(chat_id, info, phone, client_name) or success
-    preorder_id = tourist_id = None
-    if MDT_MODE in ("preorder", "both"):
-        preorder_id, tourist_id = send_preorder_to_mdt(chat_id, info, phone, client_name)
-        success = (preorder_id is not None) or success
-        _mdt_create_reminders_for_preorder(chat_id, preorder_id, tourist_id)
-    if success and MDT_NOTIFY_MANAGERS:
-        _mdt_notify_managers(chat_id, info, phone, client_name)
+    mdt_shared.dispatch_lead(
+        _mdt_settings(),
+        chat_id,
+        info,
+        phone,
+        client_name,
+        _mdt_country_cache,
+        _mdt_request,
+        log=logger,
+    )
 
-
-# ---------------------------------------------------------------------------
-# Consent & privacy text
-# ---------------------------------------------------------------------------
 
 def _consent_text() -> str:
-    policy_line = f"\n📄 Полный текст: {PRIVACY_POLICY_URL}\n" if PRIVACY_POLICY_URL else "\n"
-    return (
-        "🔒 Перед подбором тура нужно ваше согласие на обработку персональных данных.\n\n"
-        f"Оператор: {DATA_OPERATOR_NAME}.\n\n"
-        "Нажимая «✅ Согласен», вы даёте согласие на обработку ваших имени и номера телефона "
-        "с целью подбора тура и связи с вами (ст. 6, 9 ФЗ-152)."
-        + policy_line +
-        "Вы вправе отозвать согласие и удалить данные — напишите «Удалить»."
+    return _shared_consent_text(
+        DATA_OPERATOR_NAME,
+        privacy_policy_url=PRIVACY_POLICY_URL,
+        erase_hint="— напишите «Удалить»",
     )
 
 
 def _privacy_text() -> str:
-    lines = [
-        "🔒 Обработка персональных данных\n",
-        f"Оператор: {DATA_OPERATOR_NAME}.",
-        "Цель: подбор тура и связь с клиентом.",
-        "Обрабатываемые данные: имя, номер телефона, идентификатор VK.",
-    ]
-    if DATA_RETENTION_DAYS > 0:
-        lines.append(f"Срок хранения: до {DATA_RETENTION_DAYS} дней после обращения, затем автоматическое удаление.")
-    lines.append("Права: отозвать согласие и удалить данные — напишите «Удалить».")
-    if PRIVACY_POLICY_URL:
-        lines.append(f"\n📄 Полный текст: {PRIVACY_POLICY_URL}")
-    return "\n".join(lines)
+    return _shared_privacy_text(
+        DATA_OPERATOR_NAME,
+        platform_id_label="VK",
+        privacy_policy_url=PRIVACY_POLICY_URL,
+        retention_days=DATA_RETENTION_DAYS,
+        erase_hint="напишите «Удалить»",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1080,24 +846,55 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
     )
 
 
+# When true, MDT + AI run inline (tests). Production defers them off the webhook.
+SYNC_COMPLETION = os.getenv("SYNC_COMPLETION", "").lower().strip() in ("1", "true", "yes")
+
+
+def _post_completion_side_effects(
+    user_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+) -> None:
+    """MDT push + AI blurb — off the VK Callback hot path."""
+    try:
+        send_lead_to_mdt(user_id, info, phone, client_name)
+        send_typing(user_id)
+        ai = generate_ai_selection(
+            info.get("destination", ""),
+            info.get("dates", ""),
+            info.get("people", ""),
+            info.get("budget", ""),
+        )
+        send_message(user_id, ai)
+    except Exception as exc:
+        logger.error("VK post-completion side effects failed for %s: %s", user_id, exc)
+
+
 def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None:
     info = dict(user_data.get(user_id, {}))
     client_name = message.get("_user_name") or f"VK {user_id}"
 
+    try:
+        save_lead(user_id, info, phone, first_name=client_name)
+    except Exception as exc:
+        logger.error("Failed to save VK lead for %s: %s", user_id, exc)
+
     _confirm_to_user(user_id, info, phone)
     _notify_admin(user_id, info, phone, client_name)
-    send_lead_to_mdt(user_id, info, phone, client_name)
-
-    send_typing(user_id)
-    ai = generate_ai_selection(
-        info.get("destination", ""), info.get("dates", ""),
-        info.get("people", ""), info.get("budget", ""),
-    )
-    send_message(user_id, ai)
-
     with _lock:
         user_data.pop(user_id, None)
     delete_session(user_id)
+
+    if SYNC_COMPLETION:
+        _post_completion_side_effects(user_id, info, phone, client_name)
+    else:
+        threading.Thread(
+            target=_post_completion_side_effects,
+            args=(user_id, info, phone, client_name),
+            daemon=True,
+            name=f"vk-complete-{user_id}",
+        ).start()
 
 
 # ---------------------------------------------------------------------------

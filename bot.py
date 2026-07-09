@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import os
-import re
 import json
 import hmac
 import sqlite3
 import time
 import logging
 import threading
+from collections import OrderedDict
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -18,6 +18,26 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from groq import Groq
+
+from shared.constants import (
+    STATE_BUDGET,
+    STATE_CONSENT,
+    STATE_DATES,
+    STATE_DESTINATION,
+    STATE_PEOPLE,
+    STATE_PHONE,
+    PEOPLE_OPTIONS,
+    BACK_BUTTON_TEXT,
+    CANCEL_BUTTON_TEXT,
+    CONSENT_YES_TEXT,
+    CONSENT_NO_TEXT,
+    POPULAR_DESTINATIONS_TG,
+)
+from shared.validation import validate_phone, validate_people, validate_budget
+from shared.templates import template_selection as _template_selection
+from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
+from shared.ai import generate_ai_selection as _shared_generate_ai
+from shared import mdt as mdt_shared
 
 load_dotenv()
 
@@ -94,22 +114,9 @@ if not ADMIN_ID:
 # Constants
 # ---------------------------------------------------------------------------
 
-POPULAR_DESTINATIONS = [
-    "🏖 Египет",
-    "🏝 Турция",
-    "🌴 Таиланд",
-    "🌊 Мальдивы",
-    "🏛 ОАЭ",
-    "✏️ Другое",
-]
+POPULAR_DESTINATIONS = POPULAR_DESTINATIONS_TG
 
-PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
-
-BACK_BUTTON_TEXT   = "◀️ Назад"
-CANCEL_BUTTON_TEXT = "❌ Отменить"
 SHARE_CONTACT_TEXT = "📱 Отправить номер"
-CONSENT_YES_TEXT   = "✅ Согласен"
-CONSENT_NO_TEXT    = "❌ Отказаться"
 
 USER_HELP = (
     "🤖 Я бот туристического агентства «АПРЕЛЬ тур».\n\n"
@@ -131,44 +138,33 @@ USER_HELP = (
 
 def _consent_text() -> str:
     """Build the personal-data consent prompt shown before data collection."""
-    policy_line = (
-        f"\n📄 Полный текст: {PRIVACY_POLICY_URL}\n"
-        if PRIVACY_POLICY_URL else "\n"
-    )
-    return (
-        "🔒 Перед подбором тура нужно ваше согласие на обработку персональных данных.\n\n"
-        f"Оператор: {DATA_OPERATOR_NAME}.\n\n"
-        "Нажимая «Согласен», вы даёте согласие на обработку ваших имени и номера телефона с целью подбора тура и связи с вами (ст. 6, 9 ФЗ-152)."
-        + policy_line +
-        "Вы вправе отозвать согласие и удалить данные командой /delete."
+    return _shared_consent_text(
+        DATA_OPERATOR_NAME,
+        privacy_policy_url=PRIVACY_POLICY_URL,
+        erase_hint="командой /delete",
     )
 
 
 def _privacy_text() -> str:
     """Short privacy notice for the /privacy command."""
-    lines = [
-        "🔒 Обработка персональных данных\n",
-        f"Оператор: {DATA_OPERATOR_NAME}.",
-        "Цель: подбор тура и связь с клиентом.",
-        "Обрабатываемые данные: имя, номер телефона, идентификатор Telegram.",
-    ]
-    if DATA_RETENTION_DAYS > 0:
-        lines.append(f"Срок хранения: до {DATA_RETENTION_DAYS} дней после обращения, затем автоматическое удаление.")
-    lines.append("Права: отозвать согласие и удалить данные — команда /delete.")
-    if PRIVACY_POLICY_URL:
-        lines.append(f"\n📄 Полный текст: {PRIVACY_POLICY_URL}")
-    return "\n".join(lines)
+    return _shared_privacy_text(
+        DATA_OPERATOR_NAME,
+        platform_id_label="Telegram",
+        privacy_policy_url=PRIVACY_POLICY_URL,
+        retention_days=DATA_RETENTION_DAYS,
+        erase_hint="команда /delete",
+    )
 
 ADMIN_HELP = (
     "🔧 Команды админа:\n\n"
     "/send {chat_id} {текст} — отправить сообщение пользователю\n"
-    "/broadcast {текст} — разослать всем пользователям\n"
+    "/broadcast {текст} — рассылка всем\n"
+    "/broadcast {направление} {текст} — рассылка по направлению\n"
     "/users — список пользователей\n"
     "/stats — статистика\n"
     "/restart — сбросить все активные сессии\n"
-    "/analytics — аналитика (направления, конверсия)\n"
-    "/export — экспорт заявок с телефонами\n"
-    "/broadcast {направление} {текст} — рассылка всем или по направлению\n"
+    "/analytics — аналитика (заявки, направления)\n"
+    "/export — экспорт завершённых заявок с телефонами\n"
     "/followup — отправить напоминания незавершившим\n"
     "/mdt [test|reload] — статус MDT CRM (test — проверить соединение, reload — обновить страны)\n"
     "/help — эта справка\n\n"
@@ -176,60 +172,6 @@ ADMIN_HELP = (
     "Пример:\n"
     "/send 123456789 🌴 <b>Подборка туров</b>"
 )
-
-# Static text shown when the AI blurb cannot be generated (no key or API error).
-AI_FALLBACK_MESSAGE = (
-    "🌴 Спасибо за заявку! Наш менеджер подберёт для вас\n"
-    "лучшие варианты туров и свяжется с вами в ближайшее время."
-)
-
-# Template-based tour blurbs. No external AI is required for this mode,
-# so it works regardless of network blocks or API availability.
-TEMPLATE_INTROS: Dict[str, str] = {
-    "египет": (
-        "Вас ждут древние пирамиды, кристально чистое Красное море и «всё включённое» "
-        "на любом вкус."
-    ),
-    "турция": (
-        "Отличное сочетание пляжного отдыха, богатой истории и гостеприимной кухни "
-        "с all inclusive на побережье."
-    ),
-    "таиланд": (
-        "Экзотическая природа, белоснежные пляжи, буддийские храмы и доступный "
-        "комфортный отдых для всей семьи."
-    ),
-    "мальдивы": (
-        "Райские острова с бирюзовой лагуной, bungalow над водой и идеальной "
-        "атмосферой для романтического getaway."
-    ),
-    "оаэ": (
-        "Современный комфорт, роскошные отели, шопинг и пляжи с тёплым морем — "
-        "и всё это без визового оформления."
-    ),
-}
-
-TEMPLATE_PACKING = (
-    "Возьмите с собой удобную обувь, купальные принадлежности, солнцезащитный крем "
-    "и хорошее настроение."
-)
-
-# Russian month prefixes for parsing free-text dates into MDT flight dates.
-# Longer prefixes are listed before shorter ones to avoid false matches
-# (e.g. "март" before "ма").
-_MONTHS_RU: Dict[str, int] = {
-    "январ":   1, "феврал":  2, "март":   3, "апрел":  4,
-    "ма":      5, "июн":    6, "июл":    7, "август": 8,
-    "сентябр": 9, "октябр": 10, "ноябр": 11, "декабр": 12,
-}
-
-# Dialog state machine — plain string aliases (kept as strings so the persisted
-# JSON state stays compatible without custom (de)serialisation).
-STATE_CONSENT     = "consent"
-STATE_DESTINATION = "destination"
-STATE_DATES       = "dates"
-STATE_PEOPLE      = "people"
-STATE_BUDGET      = "budget"
-STATE_PHONE       = "phone"
 
 # ---------------------------------------------------------------------------
 # Groq client (created once at startup)
@@ -277,7 +219,10 @@ _lock = threading.Lock()
 # instead of rewriting the whole database on every webhook request.
 _dirty_sessions: set[int] = set()
 _dirty_users: set[int] = set()
-_seen_update_ids: set[int] = set()  # dedup for Telegram update_id
+# OrderedDict preserves insertion order so we can drop oldest IDs when full
+# instead of wiping the whole set (which would re-accept recent duplicates).
+_seen_update_ids: OrderedDict[int, None] = OrderedDict()
+_SEEN_UPDATE_MAX = 1000
 
 
 def _mark_dirty(chat_id: int, *, session: bool = True, user: bool = True) -> None:
@@ -341,6 +286,29 @@ def init_db() -> None:
                 updated_at INTEGER NOT NULL
             )
             """
+        )
+        # Completed leads survive session cleanup so /export and /analytics work.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS leads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                first_name TEXT,
+                username TEXT,
+                destination TEXT,
+                dates TEXT,
+                people TEXT,
+                budget INTEGER,
+                phone TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)"
         )
         cur.execute("PRAGMA journal_mode=WAL")
 
@@ -454,6 +422,44 @@ def list_stale_sessions(cutoff: int) -> List[int]:
         return [row[0] for row in cur.fetchall()]
 
 
+def save_lead(
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    first_name: str = "",
+    username: str = "",
+) -> None:
+    """Persist a completed tour request for export/analytics."""
+    now = int(time.time())
+    with _db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            INSERT INTO leads (
+                chat_id, first_name, username, destination, dates,
+                people, budget, phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chat_id,
+                first_name or None,
+                username or None,
+                info.get("destination"),
+                info.get("dates"),
+                info.get("people"),
+                info.get("budget"),
+                phone,
+                now,
+            ),
+        )
+
+
+def count_leads() -> int:
+    """Return the total number of completed leads."""
+    with _db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM leads")
+        return cur.fetchone()[0]
+
+
 # ---------------------------------------------------------------------------
 # User registry helpers
 # ---------------------------------------------------------------------------
@@ -558,6 +564,7 @@ def delete_user_data(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
+        cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))
 
 
 def cleanup_expired_data() -> int:
@@ -795,187 +802,62 @@ def _alert_admin_error(error_msg: str, exc: Optional[Exception] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# MoiDokumenti-Turism (MDT) CRM integration
+# MoiDokumenti-Turism (MDT) CRM integration (thin wrappers over shared.mdt)
 # ---------------------------------------------------------------------------
 
-def _mdt_base_url() -> str:
-    """Build the MDT API base URL."""
-    if MDT_BASE_URL:
-        return MDT_BASE_URL.rstrip("/")
-    if MDT_ACCOUNT:
-        return f"https://{MDT_ACCOUNT}.moidokumenti.ru"
-    return ""
-
-
-def _mdt_request(method: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Make a POST request to the MDT API."""
-    base = _mdt_base_url()
-    if not base or not MDT_API_KEY:
-        logger.warning("MDT is not configured: missing base URL or API key")
-        return None
-    url = f"{base}/api/{method}"
-    payload = {
-        "params": json.dumps(params, ensure_ascii=False),
-        "key": MDT_API_KEY,
-    }
-    try:
-        resp = telegram_session.post(url, data=payload, timeout=HTTP_TIMEOUT)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as exc:
-        logger.error("MDT request %s failed: %s", method, exc)
-        return None
-
-
-# Country cache: lowercase country name → MDT country ID.
-# Populated at startup via _mdt_load_countries() when MDT is enabled.
 _mdt_country_cache: Dict[str, int] = {}
 
 
+def _mdt_settings() -> mdt_shared.MDTSettings:
+    """Build live MDT settings from module globals (tests may mutate them)."""
+    return mdt_shared.MDTSettings(
+        enabled=MDT_ENABLED,
+        account=MDT_ACCOUNT,
+        api_key=MDT_API_KEY,
+        source=MDT_SOURCE,
+        base_url=MDT_BASE_URL,
+        mode=MDT_MODE,
+        notify_managers=MDT_NOTIFY_MANAGERS,
+        manager_ids=list(MDT_MANAGER_IDS),
+        reminder_enabled=MDT_REMINDER_ENABLED,
+        reminder_days=MDT_REMINDER_DAYS,
+        reminder_text=MDT_REMINDER_TEXT,
+        timeout=HTTP_TIMEOUT,
+        name_prefix="Telegram",
+        tourist_tags="Telegram Bot",
+        push_title="Новая заявка с Telegram-бота",
+    )
+
+
+def _mdt_base_url() -> str:
+    return mdt_shared.base_url(_mdt_settings())
+
+
+def _mdt_request(method: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """POST to MDT API. Monkeypatched by tests."""
+    return mdt_shared.http_request(
+        _mdt_settings(), telegram_session, method, params, log=logger
+    )
+
+
 def _mdt_load_countries() -> None:
-    """Fetch and cache the MDT country list at startup."""
     result = _mdt_request("get-country-list", {})
     if result is None:
         logger.warning("Could not load MDT country list — country matching will be unavailable")
         return
-    # The API may return data in different formats; handle them defensively.
-    data = result.get("data", result) if isinstance(result, dict) else result
-    if isinstance(data, dict):
-        # Format: {"id": name, ...} or {"id": {"id": int, "name": str}, ...}
-        for key, value in data.items():
-            try:
-                cid = int(key)
-            except (ValueError, TypeError):
-                continue
-            name = value if isinstance(value, str) else (value.get("name", "") if isinstance(value, dict) else "")
-            if name:
-                _mdt_country_cache[name.strip().lower()] = cid
-    elif isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict):
-                cid = item.get("id")
-                name = item.get("name", "")
-                if cid is not None and name:
-                    _mdt_country_cache[name.strip().lower()] = int(cid)
+    _mdt_country_cache.clear()
+    _mdt_country_cache.update(mdt_shared.parse_country_list(result))
     logger.info("Loaded %d countries from MDT", len(_mdt_country_cache))
 
 
 def _match_country_id(destination: str) -> int:
-    """Try to match a destination name to an MDT country ID from the cache.
-
-    Returns 0 if no match is found.
-    """
-    if not _mdt_country_cache:
-        return 0
-    dest_lower = destination.strip().lower()
-    if not dest_lower:
-        return 0
-    # Exact match first.
-    if dest_lower in _mdt_country_cache:
-        return _mdt_country_cache[dest_lower]
-    # Partial match: destination contains a country name or vice versa.
-    for cached_name, cid in _mdt_country_cache.items():
-        if cached_name in dest_lower or dest_lower in cached_name:
-            return cid
-    return 0
-
-
-def _parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
-    """Parse free-text Russian date ranges into (from, to) in YYYY-MM-DD format.
-
-    Handles patterns like "15-22 июня", "15-22 июня 2026", "15 июня - 22 июля",
-    "с 1 по 15 августа".
-    Returns (None, None) if parsing fails.
-    """
-    if not text:
-        return None, None
-
-    now = time.localtime()
-    current_year = now.tm_year
-    current_month = now.tm_mon
-    current_day = now.tm_mday
-
-    def _month_from_text(s: str) -> Optional[int]:
-        for prefix, month_num in _MONTHS_RU.items():
-            if prefix in s.lower():
-                return month_num
-        return None
-
-    def _to_ymd(day: int, month: int, year: int) -> str:
-        return f"{year:04d}-{month:02d}-{day:02d}"
-
-    # Try to extract an explicit year from the full text.
-    year_match = re.search(r"\b(20\d{2})\b", text)
-    year = int(year_match.group(1)) if year_match else current_year
-
-    # Split on range separators: hyphen, en/em-dash, or the word "по".
-    parts = re.split(r"\s*(?:-|–|—|\bпо\b)\s*", text)
-    parts = [p.strip() for p in parts if p.strip()]
-    if len(parts) < 2:
-        return None, None
-
-    def _parse_part(s: str) -> Optional[Tuple[int, int]]:
-        day_match = re.search(r"\b(\d{1,2})\b", s)
-        if not day_match:
-            return None
-        day = int(day_match.group(1))
-        month = _month_from_text(s)
-        if month is None:
-            return None
-        return (day, month)
-
-    from_parsed = _parse_part(parts[0])
-    to_parsed = _parse_part(parts[1])
-
-    # Handle "15-22 июня" where the month is only in the second part.
-    if from_parsed is None and to_parsed is not None:
-        day_match = re.search(r"\b(\d{1,2})\b", parts[0])
-        if day_match:
-            from_parsed = (int(day_match.group(1)), to_parsed[1])
-
-    if from_parsed is None or to_parsed is None:
-        return None, None
-
-    from_day, from_month = from_parsed
-    to_day, to_month = to_parsed
-
-    # If year wasn't explicitly given, adjust: if both month/day are in the past, use next year.
-    if not year_match:
-        if from_month < current_month or (from_month == current_month and from_day < current_day):
-            year = current_year + 1
-
-    from_date = _to_ymd(from_day, from_month, year)
-    to_date = _to_ymd(to_day, to_month, year)
-    # Handle wrap-around: "15 декабря - 5 января" → to_date is next year.
-    if to_month < from_month:
-        to_date = _to_ymd(to_day, to_month, year + 1)
-
-    return from_date, to_date
+    return mdt_shared.match_country_id(_mdt_country_cache, destination)
 
 
 def _mdt_add_tourist_temp(name: str, phone: str) -> Optional[int]:
-    """Create a temporary tourist in MDT and return its ID."""
-    params = {
-        "name": name,
-        "tel": phone,
-        "tags": "Telegram Bot",
-    }
-    result = _mdt_request("add-tourist-temp", params)
-    if result is None:
-        return None
-    # Try to extract the ID from the response.
-    data = result.get("data", result) if isinstance(result, dict) else result
-    if isinstance(data, dict):
-        tid = data.get("id") or data.get("tourist_id")
-        if tid is not None:
-            return int(tid)
-    if isinstance(data, (int, str)):
-        try:
-            return int(data)
-        except (ValueError, TypeError):
-            pass
-    logger.warning("Could not extract tourist ID from add-tourist-temp response: %s", result)
-    return None
+    return mdt_shared.add_tourist_temp(
+        _mdt_settings(), name, phone, _mdt_request, log=logger
+    )
 
 
 def send_preorder_to_mdt(
@@ -984,85 +866,16 @@ def send_preorder_to_mdt(
     phone: str,
     client_name: Optional[str],
 ) -> Tuple[Optional[int], Optional[int]]:
-    """Create a preorder (обращение) in MDT CRM from a completed bot request.
-
-    Flow: add-tourist-temp → create-preorder.
-    Returns (preorder_id, tourist_id) on success, (None, None) on failure.
-    """
-    name = client_name or f"Telegram {chat_id}"
-
-    # Step 1: create a temp tourist.
-    tourist_id = _mdt_add_tourist_temp(name, phone)
-    if tourist_id is None:
-        logger.warning("Failed to create temp tourist in MDT for chat %s", chat_id)
-        return None, None
-
-    # Step 2: create the preorder.
-    country_id = _match_country_id(info.get("destination", ""))
-    date_from, date_to = _parse_russian_dates(info.get("dates", ""))
-
-    # Parse people count.
-    people_str = str(info.get("people", ""))
-    persons = 0
-    cleaned = re.sub(r"[^\d]", "", people_str)
-    if cleaned:
-        persons = int(cleaned)
-
-    # Parse budget.
-    budget = info.get("budget", 0)
-    if not isinstance(budget, (int, float)):
-        try:
-            budget = int(re.sub(r"[^\d]", "", str(budget)))
-        except (ValueError, TypeError):
-            budget = 0
-
-    # Build comment with all the raw info.
-    comment_parts = []
-    if info.get("destination"):
-        comment_parts.append(f"Направление: {info['destination']}")
-    if info.get("dates"):
-        comment_parts.append(f"Даты: {info['dates']}")
-    if info.get("people"):
-        comment_parts.append(f"Человек: {info['people']}")
-    if budget:
-        comment_parts.append(f"Бюджет: {budget}₽")
-    comment = " | ".join(comment_parts)
-
-    params: Dict[str, Any] = {
-        "tourist_type": "tourist_temp",
-        "tourist_id": tourist_id,
-        "country_id1": country_id,
-        "country_id2": 0,
-        "country_id3": 0,
-        "persons": persons,
-        "children": 0,
-        "children_ages": [],
-        "price_from": 0,
-        "price_to": budget,
-        "comment": comment,
-        "wait_for_hot": 0,
-    }
-    if date_from:
-        params["flightdate_from"] = date_from
-    if date_to:
-        params["flightdate_to"] = date_to
-
-    result = _mdt_request("create-preorder", params)
-    if result is not None:
-        data = result.get("data", result) if isinstance(result, dict) else result
-        preorder_id = None
-        if isinstance(data, dict):
-            preorder_id = data.get("id") or data.get("preorder_id")
-        elif isinstance(data, (int, str)):
-            try:
-                preorder_id = int(data)
-            except (ValueError, TypeError):
-                pass
-        logger.info("Preorder created in MDT for chat %s (ID: %s, tourist: %s)", chat_id, preorder_id, tourist_id)
-        return preorder_id, tourist_id
-    else:
-        logger.warning("Failed to create preorder in MDT for chat %s", chat_id)
-        return None, None
+    return mdt_shared.create_preorder(
+        _mdt_settings(),
+        chat_id,
+        info,
+        phone,
+        client_name,
+        _mdt_country_cache,
+        _mdt_request,
+        log=logger,
+    )
 
 
 def _mdt_notify_managers(
@@ -1071,36 +884,9 @@ def _mdt_notify_managers(
     phone: str,
     client_name: Optional[str],
 ) -> None:
-    """Send a push notification to MDT managers about a new lead."""
-    if not MDT_MANAGER_IDS:
-        logger.warning("MDT_NOTIFY_MANAGERS is on but MDT_MANAGER_IDS is empty")
-        return
-
-    title = "Новая заявка с Telegram-бота"
-    text_parts = []
-    if client_name:
-        text_parts.append(f"Клиент: {client_name}")
-    if info.get("destination"):
-        text_parts.append(f"Направление: {info['destination']}")
-    if info.get("dates"):
-        text_parts.append(f"Даты: {info['dates']}")
-    if info.get("people"):
-        text_parts.append(f"Человек: {info['people']}")
-    if info.get("budget"):
-        text_parts.append(f"Бюджет: {info['budget']}₽")
-    text_parts.append(f"Телефон: {phone}")
-    text = "\n".join(text_parts)
-
-    params = {
-        "manager_ids": MDT_MANAGER_IDS,
-        "title": title,
-        "text": text,
-    }
-    result = _mdt_request("send-push", params)
-    if result is not None:
-        logger.info("Push notification sent to MDT managers for chat %s", chat_id)
-    else:
-        logger.warning("Failed to send push notification to MDT managers for chat %s", chat_id)
+    mdt_shared.notify_managers(
+        _mdt_settings(), chat_id, info, phone, client_name, _mdt_request, log=logger
+    )
 
 
 def _mdt_add_reminder(
@@ -1110,23 +896,16 @@ def _mdt_add_reminder(
     reminder_date: str,
     reminder_time: str = "10:00:00",
 ) -> bool:
-    """Create a manager reminder/task in MDT CRM via /api/add-reminder."""
-    params: Dict[str, Any] = {
-        "date": reminder_date,
-        "time": reminder_time,
-        "text": MDT_REMINDER_TEXT,
-        "tourist_type": "tourist_temp",
-        "tourist_id": tourist_id,
-        "manager_id": manager_id,
-        "preorder_id": preorder_id,
-        "only_one_manager": False,
-    }
-    result = _mdt_request("add-reminder", params)
-    if result is not None:
-        logger.info("MDT reminder created for manager %s (preorder %s)", manager_id, preorder_id)
-        return True
-    logger.warning("Failed to create MDT reminder for manager %s (preorder %s)", manager_id, preorder_id)
-    return False
+    return mdt_shared.add_reminder(
+        _mdt_settings(),
+        preorder_id,
+        tourist_id,
+        manager_id,
+        reminder_date,
+        _mdt_request,
+        reminder_time=reminder_time,
+        log=logger,
+    )
 
 
 def _mdt_create_reminders_for_preorder(
@@ -1134,19 +913,9 @@ def _mdt_create_reminders_for_preorder(
     preorder_id: Optional[int],
     tourist_id: Optional[int],
 ) -> None:
-    """Create follow-up reminders in MDT for each configured manager."""
-    if not MDT_REMINDER_ENABLED:
-        return
-    if not (preorder_id and tourist_id):
-        logger.debug("Skipping MDT reminder: missing preorder_id or tourist_id")
-        return
-    if not MDT_MANAGER_IDS:
-        logger.warning("MDT_REMINDER_ENABLED is on but MDT_MANAGER_IDS is empty")
-        return
-
-    reminder_date = (datetime.now() + timedelta(days=MDT_REMINDER_DAYS)).strftime("%Y-%m-%d")
-    for manager_id in MDT_MANAGER_IDS:
-        _mdt_add_reminder(preorder_id, tourist_id, manager_id, reminder_date)
+    mdt_shared.create_reminders_for_preorder(
+        _mdt_settings(), chat_id, preorder_id, tourist_id, _mdt_request, log=logger
+    )
 
 
 def _mdt_create_lead(
@@ -1155,31 +924,9 @@ def _mdt_create_lead(
     phone: str,
     client_name: Optional[str],
 ) -> bool:
-    """Create a lead in MDT CRM via /api/add-lead. Returns True on success."""
-    fields = []
-    if info.get("destination"):
-        fields.append({"name": "Направление", "values": [info["destination"]]})
-    if info.get("dates"):
-        fields.append({"name": "Даты", "values": [info["dates"]]})
-    if info.get("people"):
-        fields.append({"name": "Количество человек", "values": [str(info["people"])]})
-    if info.get("budget"):
-        fields.append({"name": "Бюджет", "values": [str(info["budget"])]})
-
-    params = {
-        "name": client_name or f"Telegram {chat_id}",
-        "phone": phone,
-        "email": "",
-        "source": MDT_SOURCE,
-        "fields": fields,
-    }
-    result = _mdt_request("add-lead", params)
-    if result is not None:
-        logger.info("Lead sent to MDT for chat %s", chat_id)
-        return True
-    else:
-        logger.warning("Failed to send lead to MDT for chat %s", chat_id)
-        return False
+    return mdt_shared.create_lead(
+        _mdt_settings(), chat_id, info, phone, client_name, _mdt_request, log=logger
+    )
 
 
 def send_lead_to_mdt(
@@ -1188,34 +935,17 @@ def send_lead_to_mdt(
     phone: str,
     client_name: Optional[str],
 ) -> None:
-    """Dispatch a completed request to MDT CRM based on MDT_MODE.
-
-    Modes:
-      - "lead":     create a lead only (via /api/add-lead)
-      - "preorder": create a temp tourist + preorder only (via /api/create-preorder)
-      - "both":     create both a lead and a preorder
-
-    After successful creation, if MDT_NOTIFY_MANAGERS is enabled, sends a push
-    notification to the configured manager IDs (via /api/send-push).
-    """
-    if not MDT_ENABLED:
-        return
-
-    success = False
-
-    if MDT_MODE in ("lead", "both"):
-        success = _mdt_create_lead(chat_id, info, phone, client_name) or success
-
-    preorder_id: Optional[int] = None
-    tourist_id: Optional[int] = None
-
-    if MDT_MODE in ("preorder", "both"):
-        preorder_id, tourist_id = send_preorder_to_mdt(chat_id, info, phone, client_name)
-        success = (preorder_id is not None) or success
-        _mdt_create_reminders_for_preorder(chat_id, preorder_id, tourist_id)
-
-    if success and MDT_NOTIFY_MANAGERS:
-        _mdt_notify_managers(chat_id, info, phone, client_name)
+    """Dispatch a completed request to MDT CRM based on MDT_MODE."""
+    mdt_shared.dispatch_lead(
+        _mdt_settings(),
+        chat_id,
+        info,
+        phone,
+        client_name,
+        _mdt_country_cache,
+        _mdt_request,
+        log=logger,
+    )
 
 
 def reply_keyboard(
@@ -1255,110 +985,18 @@ def hide_keyboard() -> str:
     """Build a ReplyKeyboardRemove JSON string."""
     return json.dumps({"remove_keyboard": True})
 
-# ---------------------------------------------------------------------------
-# Input validation
-# ---------------------------------------------------------------------------
-
-def validate_phone(text: str) -> Tuple[bool, Optional[str]]:
-    """Validate a Russian phone number. Returns (ok, normalised)."""
-    digits = re.sub(r"[^\d+]", "", text).lstrip("+")
-    if digits.startswith("8"):
-        digits = "7" + digits[1:]
-    if len(digits) == 11 and digits.startswith("7"):
-        return True, "+" + digits
-    if len(digits) == 10:
-        return True, "+7" + digits
-    return False, None
-
-
-def validate_people(text: str) -> Tuple[bool, Optional[str]]:
-    """Validate number of travellers. Returns (ok, value_str)."""
-    cleaned = text.strip()
-    if cleaned == "5+":
-        return True, "5+"
-    try:
-        value = int(re.sub(r"[^\d]", "", cleaned))
-        if 1 <= value <= 50:
-            return True, str(value)
-    except (ValueError, TypeError):
-        pass
-    return False, None
-
-
-def validate_budget(text: str) -> Tuple[bool, Optional[int]]:
-    """Parse budget as a positive integer. Returns (ok, value)."""
-    try:
-        value = int(re.sub(r"[^\d]", "", text))
-        if value > 0:
-            return True, value
-    except (ValueError, TypeError):
-        pass
-    return False, None
-
-
-
-def _template_selection(destination: str, dates: str, people: str, budget: str) -> str:
-    """Generate a tour blurb from templates (no external AI required)."""
-    dest_lower = destination.lower()
-    intro: Optional[str] = None
-    for keyword, text in TEMPLATE_INTROS.items():
-        if keyword in dest_lower:
-            intro = text
-            break
-    if intro is None:
-        intro = f"{destination} — отличное направление для вашего отдыха."
-
-    return (
-        "🌴 Ваша подборка туров\n\n"
-        f"📍 {destination}: {intro}\n\n"
-        f"Поездка на {dates} для {people} человек — хороший выбор, "
-        f"чтобы успеть всё и при этом отдохнуть. Бюджет {budget}₽ на человека "
-        f"позволяет подобрать комфортный вариант.\n\n"
-        f"💡 {TEMPLATE_PACKING}\n\n"
-        "ℹ️ Наш менеджер скоро свяжется с вами для уточнения деталей!"
-    )
-
-
 def generate_ai_selection(destination: str, dates: str, people: str, budget: str) -> str:
-    """Generate an AI tour blurb for the client."""
-    if AI_MODE == "template":
-        logger.info("Template selection generated for '%s'", destination)
-        return _template_selection(destination, dates, people, budget)
-
-    if not groq_client:
-        logger.warning("Groq client unavailable — using template fallback")
-        return _template_selection(destination, dates, people, budget)
-
-    try:
-        prompt = (
-            "Ты — эксперт по туризму туристического агентства «АПРЕЛЬ тур».\n\n"
-            "Клиент хочет:\n"
-            f"- Направление: {destination}\n"
-            f"- Даты: {dates}\n"
-            f"- Количество человек: {people}\n"
-            f"- Бюджет: {budget} рублей\n\n"
-            "Напиши короткое (3-4 предложения), дружелюбное сообщение с:\n"
-            "- Что ожидает в этом направлении\n"
-            "- Почему это отличный выбор\n"
-            "- Что взять с собой\n\n"
-            "Используй эмодзи. Не упоминай цены и конкретные отели."
-        )
-        response = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300,
-            temperature=0.7,
-        )
-        ai_text = response.choices[0].message.content
-        logger.info("AI selection generated for '%s'", destination)
-        return (
-            "🌴 Ваша подборка туров\n\n"
-            f"{ai_text}\n\n"
-            "ℹ️ Наш менеджер скоро свяжется с вами для уточнения деталей!"
-        )
-    except Exception as exc:
-        logger.error("Error generating AI selection: %s", exc)
-        return _template_selection(destination, dates, people, budget)
+    """Generate an AI tour blurb for the client (template or Groq)."""
+    return _shared_generate_ai(
+        destination,
+        dates,
+        people,
+        budget,
+        ai_mode=AI_MODE,
+        groq_client=groq_client,
+        groq_model=GROQ_MODEL,
+        log=logger,
+    )
 
 # ---------------------------------------------------------------------------
 # Admin commands
@@ -1389,9 +1027,13 @@ def _admin_stats(chat_id: int, arg: str) -> bool:
     with _lock:
         total = sum(1 for u in all_users if u != ADMIN_ID)
         active = len(user_data)
+    leads = count_leads()
     send_message(
         chat_id,
-        f"📊 Статистика:\n\nПользователей: {total}\nАктивных заявок: {active}",
+        f"📊 Статистика:\n\n"
+        f"Пользователей: {total}\n"
+        f"Активных диалогов: {active}\n"
+        f"Завершённых заявок: {leads}",
     )
     return True
 
@@ -1420,24 +1062,6 @@ def _admin_send(chat_id: int, arg: str) -> bool:
         send_message(chat_id, f"✅ Отправлено пользователю {target}")
     except Exception as exc:
         send_message(chat_id, f"❌ Ошибка: {exc}")
-    return True
-
-
-def _admin_broadcast(chat_id: int, arg: str) -> bool:
-    """`/broadcast {текст}` — send a message to every known user."""
-    if not arg.strip():
-        send_message(chat_id, "Использование: /broadcast {текст}")
-        return True
-    count = 0
-    with _lock:
-        recipients = list(all_users.keys())
-    for uid in recipients:
-        if uid == ADMIN_ID:
-            continue
-        if send_message(uid, arg, parse_mode="HTML"):
-            count += 1
-        time.sleep(BROADCAST_DELAY)
-    send_message(chat_id, f"✅ Рассылка отправлена {count} пользователям")
     return True
 
 
@@ -1471,59 +1095,85 @@ def _admin_mdt(chat_id: int, arg: str) -> bool:
 
 
 def _admin_analytics(chat_id: int, arg: str) -> bool:
-    """Show analytics: popular destinations, conversion, completion stats."""
+    """Show analytics: completed leads, funnel, popular destinations."""
     with _db_cursor() as cur:
-        # Active sessions by state
         cur.execute("SELECT state, COUNT(*) FROM sessions GROUP BY state")
         by_state = {row[0]: row[1] for row in cur.fetchall()}
-        # Destination popularity from active sessions
+        cur.execute("SELECT COUNT(*) FROM users WHERE consent_at IS NOT NULL")
+        consented = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM users")
+        total_users = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM leads")
+        total_leads = cur.fetchone()[0]
+        # Popular destinations from completed leads (not incomplete sessions)
         cur.execute(
-            "SELECT destination, COUNT(*) as cnt FROM sessions "
+            "SELECT destination, COUNT(*) as cnt FROM leads "
             "WHERE destination IS NOT NULL AND destination != '' "
             "GROUP BY destination ORDER BY cnt DESC LIMIT 10"
         )
         dest_stats = cur.fetchall()
-        # Total users with consent
-        cur.execute("SELECT COUNT(*) FROM users WHERE consent_at IS NOT NULL")
-        consented = cur.fetchone()[0]
-        # Total users
-        cur.execute("SELECT COUNT(*) FROM users")
-        total_users = cur.fetchone()[0]
+        # Leads in the last 7 / 30 days
+        now = int(time.time())
+        cur.execute(
+            "SELECT COUNT(*) FROM leads WHERE created_at >= ?",
+            (now - 7 * 86400,),
+        )
+        leads_7d = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM leads WHERE created_at >= ?",
+            (now - 30 * 86400,),
+        )
+        leads_30d = cur.fetchone()[0]
 
-    lines = ["📊 Аналитика:\n"]
-    lines.append(f"Всего пользователей: {total_users}")
-    lines.append(f"Дали согласие: {consented}")
-    lines.append(f"Активных сессий: {sum(by_state.values())}")
+    conversion = (
+        f"{100.0 * total_leads / consented:.1f}%"
+        if consented
+        else "—"
+    )
+    lines = [
+        "📊 Аналитика:\n",
+        f"Всего пользователей: {total_users}",
+        f"Дали согласие: {consented}",
+        f"Завершённых заявок: {total_leads}",
+        f"  за 7 дней: {leads_7d}",
+        f"  за 30 дней: {leads_30d}",
+        f"Конверсия (согласие → заявка): {conversion}",
+        f"Активных сессий: {sum(by_state.values())}",
+    ]
     if by_state:
-        lines.append("  По шагам:")
+        lines.append("  Воронка (активные):")
         for state, cnt in sorted(by_state.items()):
             lines.append(f"    {state}: {cnt}")
     if dest_stats:
-        lines.append("\n📍 Популярные направления:")
+        lines.append("\n📍 Популярные направления (заявки):")
         for dest, cnt in dest_stats:
             lines.append(f"  {dest}: {cnt}")
     else:
-        lines.append("\n📍 Нет данных по направлениям")
+        lines.append("\n📍 Нет завершённых заявок по направлениям")
     send_message(chat_id, "\n".join(lines))
     return True
 
 
 def _admin_export(chat_id: int, arg: str) -> bool:
-    """Export completed leads (sessions with phone) as a formatted message."""
+    """Export completed leads as a formatted message (last 50)."""
     with _db_cursor() as cur:
         cur.execute(
-            "SELECT chat_id, destination, dates, people, budget, phone "
-            "FROM sessions WHERE phone IS NOT NULL AND phone != '' "
-            "ORDER BY updated_at DESC LIMIT 50"
+            "SELECT chat_id, first_name, destination, dates, people, budget, phone, created_at "
+            "FROM leads ORDER BY created_at DESC LIMIT 50"
         )
         rows = cur.fetchall()
     if not rows:
-        send_message(chat_id, "Нет завершённых заявок с телефонами для экспорта.")
+        send_message(chat_id, "Нет завершённых заявок для экспорта.")
         return True
     lines = [f"📋 Экспорт заявок ({len(rows)}):\n"]
     for i, row in enumerate(rows, 1):
-        cid, dest, dates, people, budget, phone = row
-        lines.append(f"{i}. {dest or '?'} | {dates or '?'} | {people or '?'} чел | {budget or '?'}₽ | {phone}")
+        cid, name, dest, dates, people, budget, phone, created = row
+        when = datetime.fromtimestamp(created).strftime("%d.%m.%Y") if created else "?"
+        who = name or str(cid)
+        lines.append(
+            f"{i}. [{when}] {who} | {dest or '?'} | {dates or '?'} | "
+            f"{people or '?'} чел | {budget or '?'}₽ | {phone}"
+        )
     # Split into chunks if too long (Telegram limit ~4096 chars)
     text = "\n".join(lines)
     while text:
@@ -1533,37 +1183,75 @@ def _admin_export(chat_id: int, arg: str) -> bool:
 
 
 def _admin_broadcast(chat_id: int, arg: str) -> bool:
-    """`/broadcast {текст}` or `/broadcast {направление} {текст}` — send to all or segment."""
+    """`/broadcast {текст}` or `/broadcast {направление} {текст}` — send to all or segment.
+
+    Runs in a background thread so the webhook can answer Telegram immediately.
+    Destination filter matches users who completed a lead or have an open session
+    with that destination.
+    """
     if not arg.strip():
-        send_message(chat_id, "Использование: /broadcast {текст} или /broadcast {направление} {текст}")
+        send_message(
+            chat_id,
+            "Использование: /broadcast {текст} или /broadcast {направление} {текст}",
+        )
         return True
-    # Check if first word is a destination filter
+
     parts = arg.split(" ", 1)
     filter_dest = None
     msg = arg
     with _db_cursor() as cur:
-        cur.execute("SELECT DISTINCT destination FROM sessions WHERE destination IS NOT NULL AND destination != ''")
+        cur.execute(
+            "SELECT DISTINCT destination FROM leads "
+            "WHERE destination IS NOT NULL AND destination != ''"
+        )
         known_dests = {row[0].lower() for row in cur.fetchall()}
+        cur.execute(
+            "SELECT DISTINCT destination FROM sessions "
+            "WHERE destination IS NOT NULL AND destination != ''"
+        )
+        known_dests.update(row[0].lower() for row in cur.fetchall())
     if parts[0].lower() in known_dests and len(parts) > 1:
         filter_dest = parts[0]
         msg = parts[1]
-    count = 0
-    with _lock:
-        recipients = list(all_users.keys())
-    for uid in recipients:
-        if uid == ADMIN_ID:
-            continue
-        if filter_dest:
-            session = get_session(uid)
-            if not session or not session.get("destination", "").lower().startswith(filter_dest.lower()):
+
+    def _run() -> None:
+        count = 0
+        filter_lower = filter_dest.lower() if filter_dest else None
+        matching_ids: Optional[set[int]] = None
+        if filter_lower:
+            with _db_cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT chat_id FROM leads "
+                    "WHERE lower(destination) LIKE ?",
+                    (filter_lower + "%",),
+                )
+                matching_ids = {row[0] for row in cur.fetchall()}
+                cur.execute(
+                    "SELECT chat_id FROM sessions "
+                    "WHERE destination IS NOT NULL AND lower(destination) LIKE ?",
+                    (filter_lower + "%",),
+                )
+                matching_ids.update(row[0] for row in cur.fetchall())
+        with _lock:
+            recipients = list(all_users.keys())
+        for uid in recipients:
+            if uid == ADMIN_ID:
                 continue
-        if send_message(uid, msg, parse_mode="HTML"):
-            count += 1
-        time.sleep(BROADCAST_DELAY)
-    if filter_dest:
-        send_message(chat_id, f"✅ Рассылка отправлена {count} пользователям (фильтр: {filter_dest})")
-    else:
-        send_message(chat_id, f"✅ Рассылка отправлена {count} пользователям")
+            if matching_ids is not None and uid not in matching_ids:
+                continue
+            if send_message(uid, msg, parse_mode="HTML"):
+                count += 1
+            time.sleep(BROADCAST_DELAY)
+        if filter_dest:
+            send_message(
+                chat_id,
+                f"✅ Рассылка отправлена {count} пользователям (фильтр: {filter_dest})",
+            )
+        else:
+            send_message(chat_id, f"✅ Рассылка отправлена {count} пользователям")
+
+    threading.Thread(target=_run, daemon=True, name="broadcast").start()
+    send_message(chat_id, "📤 Рассылка запущена…")
     return True
 
 
@@ -1926,6 +1614,7 @@ def _notify_admin(chat_id: int, info: Dict[str, Any], phone: str, client_name: O
         f"💰 {_esc(info.get('budget', '?'))}₽\n"
         f"📱 {_esc(phone)}\n\n"
         f"Ответить: /send {chat_id} ваше сообщение",
+        parse_mode="HTML",
     )
 
 
@@ -1941,21 +1630,57 @@ def _send_ai_blurb(chat_id: int, info: Dict[str, Any]) -> None:
     send_message(chat_id, ai)
 
 
+# When true, MDT + AI run inline (tests). In production they run in a
+# background thread so the webhook answers Telegram before slow I/O.
+SYNC_COMPLETION = os.getenv("SYNC_COMPLETION", "").lower().strip() in ("1", "true", "yes")
+
+
+def _post_completion_side_effects(
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+) -> None:
+    """MDT push + AI blurb — intentionally off the webhook critical path."""
+    try:
+        send_lead_to_mdt(chat_id, info, phone, client_name)
+        _send_ai_blurb(chat_id, info)
+    except Exception as exc:
+        logger.error("Post-completion side effects failed for %s: %s", chat_id, exc)
+        _alert_admin_error("Post-completion side effects failed", exc)
+
+
 def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None:
-    """Finalise the request: confirm, notify admin, AI blurb."""
+    """Finalise the request: confirm, notify admin, persist lead; defer MDT/AI."""
     info = dict(user_data.get(chat_id, {}))
     from_info = message.get("from", {})
     first_name = from_info.get("first_name", "")
     username = from_info.get("username", "")
     client_name = first_name or (f"@{username}" if username else None)
 
+    # Persist lead before side-effects so export/analytics work even if notify fails.
+    try:
+        save_lead(chat_id, info, phone, first_name=first_name, username=username)
+    except Exception as exc:
+        logger.error("Failed to save lead for %s: %s", chat_id, exc)
+        _alert_admin_error("Failed to save lead", exc)
+
     _confirm_to_user(chat_id, info, phone)            # 1. Confirm to user
-    _notify_admin(chat_id, info, phone, client_name)  # 2. Notify admin
-    send_lead_to_mdt(chat_id, info, phone, client_name)  # 3. Send to MDT CRM (lead/preorder/both)
-    _send_ai_blurb(chat_id, info)                     # 4. AI selection (with typing)
-    with _lock:                                       # 5. Clean up
+    _notify_admin(chat_id, info, phone, client_name)  # 2. Notify admin (sync — ops must see it)
+    with _lock:                                       # 3. Clean up session promptly
         user_data.pop(chat_id, None)
     delete_session(chat_id)
+
+    # 4–5. CRM + AI can be slow (network); don't block Telegram's webhook ACK.
+    if SYNC_COMPLETION:
+        _post_completion_side_effects(chat_id, info, phone, client_name)
+    else:
+        threading.Thread(
+            target=_post_completion_side_effects,
+            args=(chat_id, info, phone, client_name),
+            daemon=True,
+            name=f"complete-{chat_id}",
+        ).start()
 
 # ---------------------------------------------------------------------------
 # Flask app & routes
@@ -1973,6 +1698,10 @@ def index() -> str:
 @app.route("/health")
 def health() -> Any:
     """Simple health/readiness endpoint for monitoring."""
+    try:
+        leads_total = count_leads()
+    except Exception:
+        leads_total = -1
     return jsonify({
         "status": "ok",
         "bot_token_configured": bool(BOT_TOKEN),
@@ -1983,6 +1712,7 @@ def health() -> Any:
         "mdt_mode": MDT_MODE,
         "total_users": len(all_users),
         "active_sessions": len(user_data),
+        "total_leads": leads_total,
         "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
         "data_retention_days": DATA_RETENTION_DAYS,
     })
@@ -1997,11 +1727,10 @@ def _process_update(data: Dict[str, Any]) -> None:
             if update_id in _seen_update_ids:
                 logger.debug("Skipping duplicate update_id=%s", update_id)
                 return
-            _seen_update_ids.add(update_id)
-            # Keep only the last 1000 to bound memory.
-            if len(_seen_update_ids) > 1000:
-                _seen_update_ids.clear()
-                _seen_update_ids.add(update_id)
+            _seen_update_ids[update_id] = None
+            # Drop oldest IDs when full — never wipe the whole set.
+            while len(_seen_update_ids) > _SEEN_UPDATE_MAX:
+                _seen_update_ids.popitem(last=False)
     message = data["message"]
     chat_id = message["chat"]["id"]
     text = message.get("text", "")

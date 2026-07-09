@@ -6,8 +6,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code (shared/ is required — both bots import it)
 COPY bot.py vk_bot.py ./
+COPY shared/ ./shared/
 COPY deploy/ ./deploy/
 COPY docs/ ./docs/
 

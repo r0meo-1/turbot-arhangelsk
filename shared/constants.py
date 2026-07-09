@@ -1,0 +1,34 @@
+"""Dialog states and shared UI labels used by both bots."""
+
+STATE_CONSENT = "consent"
+STATE_DESTINATION = "destination"
+STATE_DATES = "dates"
+STATE_PEOPLE = "people"
+STATE_BUDGET = "budget"
+STATE_PHONE = "phone"
+
+PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
+
+BACK_BUTTON_TEXT = "◀️ Назад"
+CANCEL_BUTTON_TEXT = "❌ Отменить"
+CONSENT_YES_TEXT = "✅ Согласен"
+CONSENT_NO_TEXT = "❌ Отказаться"
+
+# Destination names without emoji (VK keyboard labels; TG uses emoji variants).
+POPULAR_DESTINATIONS_PLAIN = [
+    "Египет",
+    "Турция",
+    "Таиланд",
+    "Мальдивы",
+    "ОАЭ",
+    "Другое",
+]
+
+POPULAR_DESTINATIONS_TG = [
+    "🏖 Египет",
+    "🏝 Турция",
+    "🌴 Таиланд",
+    "🌊 Мальдивы",
+    "🏛 ОАЭ",
+    "✏️ Другое",
+]

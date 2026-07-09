@@ -11,6 +11,7 @@ os.environ.setdefault("VK_GROUP_ID", "999")
 os.environ.setdefault("VK_CONFIRMATION", "confirm123")
 os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")
+os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 os.environ.setdefault("AI_MODE", "template")
 os.environ.setdefault(
     "DATABASE_PATH",
@@ -29,6 +30,7 @@ def clean_state(monkeypatch):
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions")
         cur.execute("DELETE FROM users")
+        cur.execute("DELETE FROM leads")
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: None)
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
     monkeypatch.setattr(bot, "save_state", lambda: None)
@@ -126,6 +128,12 @@ def test_dialog_completion(client):
     for text in ["Египет", "15-22 июня", "2", "60000", "+79161234567"]:
         _post(client, 222, text)
     assert 222 not in bot.user_data
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone, destination FROM leads WHERE chat_id = ?", (222,))
+        row = cur.fetchone()
+    assert row is not None
+    assert row[0] == "+79161234567"
+    assert "Египет" in (row[1] or "")
 
 
 def test_back_button(client):
