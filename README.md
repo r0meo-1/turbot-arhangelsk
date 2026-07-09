@@ -1,268 +1,296 @@
-# TurBot — Travel Agency Bot
+# TurBot — бот для турагентства «АПРЕЛЬ тур»
 
-A Telegram bot that collects travel requests from clients, guides them through a
-short tour-selection dialog, generates an AI-assisted tour blurb, and pushes each
-request.
+Telegram- и VK-бот для сбора заявок на подбор тура: диалог с клиентом, согласие на обработку ПДн (152-ФЗ), AI/шаблонная подборка, уведомление менеджеру и опциональная отправка в CRM «МоиДокументы-Туризм».
 
-Built as a lead-generation tool for travel agency «АПРЕЛЬ тур».
-The bot runs as a Flask webhook service (designed for free-tier hosting such as
-Render.com) and notifies an admin in Telegram about every new request.
+Работает как **Flask webhook** (gunicorn + SQLite). Подходит для продакшена на VPS в РФ и для демо (Render и аналоги — только без реальных ПДн).
 
-> RU: Телеграм-бот для подбора туров. Ведёт клиента по диалогу (направление,
-> даты, люди, бюджет, телефон), формирует AI-подборку.
-> Админ получает уведомление о каждой заявке.
+**Репозиторий:** [github.com/r0meo-1/turbot-arhangelsk](https://github.com/r0meo-1/turbot-arhangelsk)
 
-## Features
+---
 
-- **Guided request flow** — a finite-state dialog collects destination, dates,
-  number of travellers, budget, and phone number. Reply-keyboard buttons for
-  popular destinations and people counts make input faster.
-- **Input validation** — phone numbers, people counts, and budgets are
-  validated before acceptance; the user is prompted to re-enter on error.
-- **AI tour suggestions** — uses the Groq API (LLaMA) by default, or a
-  template-based generator that requires no external API and works from Russia
-  without proxies. Template mode is selected with `AI_MODE=template`. A typing
-  indicator is shown while generating.
-- **State persistence** — user data and the user registry are saved to a
-  SQLite database so they survive restarts. A one-time migration from the
-  legacy JSON state file is performed automatically on first start.
-- **Admin tools** — `/help`, `/users`, `/stats`, `/restart`, `/send <chat_id>
-  <text>`, and `/broadcast <text>` for managing users and forwarding tour
-  selections (HTML formatting supported, rate-limited broadcast).
-- **Admin notifications** — the admin receives a Telegram message (with the
-  client's name and ID) the moment a new request is submitted.
-- **User commands** — `/start`, `/help`, `/cancel` for a smooth client
-  experience.
-- **Robust HTTP** — all outbound requests have timeouts to prevent hangs, and
-  Telegram API calls are retried on network errors / rate-limits (`429`).
-- **Webhook security** — optional `TELEGRAM_SECRET_TOKEN` verification so only
-  Telegram can call the webhook.
-- **`.env` auto-loading** — environment variables are read from `.env`
-  automatically during local development (via `python-dotenv`).
-- **Health endpoint** — `GET /health` returns basic status and configuration
-  checks for uptime monitoring.
-- **Stale-dialog cleanup** — unfinished requests are automatically cancelled
-  after a configurable period of inactivity (`DIALOG_TIMEOUT_HOURS`).
-- **MDT CRM integration** — completed leads can be automatically sent to
-  «МоиДокументы-Туризм» via `/api/add-lead` (`MDT_ENABLED=true`).
+## Возможности
 
-## Tech stack
+- **Диалог заявки** — конечный автомат: согласие → направление → даты → люди → бюджет → телефон  
+- **Кнопки** — популярные направления, число туристов, «Назад», «Отмена», share contact (Telegram)
+- **Валидация** — телефон (РФ), число человек, бюджет
+- **Подборка туров** — Groq (LLaMA) или локальные шаблоны (`AI_MODE=template`, без VPN)
+- **SQLite** — сессии, пользователи, **история заявок (leads)**; инкрементальное сохранение
+- **Админка** — `/send`, `/broadcast`, `/users`, `/stats`, `/analytics`, `/export`, `/followup`, `/mdt`, …
+- **Уведомление админу** в момент заявки (имя, ID, параметры, телефон)
+- **MDT CRM** — lead / preorder / both, push менеджерам, напоминания
+- **VK-версия** — отдельный процесс (`vk_bot.py`), Callback API
+- **152-ФЗ** — согласие, `/privacy`, `/delete`, авто-retention, удаление leads
+- **Надёжность** — retries HTTP, secret token webhook, dedup update_id, graceful shutdown, алерты админу
+- **Общий код** — пакет `shared/` (валидация, даты, AI, MDT, privacy) для TG и VK
+- **Тесты** — `pytest` (60+ тестов)
+- **Деплой** — Docker Compose, systemd, nginx, install-скрипт для РФ VPS
 
-- Python 3.8+
-- [Flask](https://flask.palletsprojects.com/) — webhook HTTP server
-- [Telegram Bot API](https://core.telegram.org/bots/api) — via `requests`
-- [Groq](https://groq.com/) — AI tour-blurb generation
-- [gunicorn](https://gunicorn.org/) — production WSGI server
+---
 
-## How it works
+## Стек
 
-1. Telegram delivers updates to the bot's `POST /webhook` endpoint.
-2. A client sends `/start` and is walked through the request flow:
-   `destination → dates → people → budget → phone`. Reply-keyboard buttons
-   let the user go back, cancel, or share their contact. Per-user progress is
-   kept in an in-memory state machine and persisted to SQLite.
-3. On completion the bot:
-   - confirms the request to the client,
-   - notifies the admin (`ADMIN_ID`) with the client's name and chat ID,
-   - shows a typing indicator and generates an AI tour suggestion.
-4. The admin can reply to or broadcast messages to users via admin commands.
+| Компонент | Технология |
+|-----------|------------|
+| Язык | Python 3.8+ |
+| HTTP | Flask + gunicorn |
+| Мессенджеры | Telegram Bot API, VK Callback API |
+| AI | Groq (опционально) или шаблоны |
+| БД | SQLite (WAL) |
+| CRM | MDT (МоиДокументы-Туризм) |
 
-`GET /` returns a simple health-check string.
+---
 
-## Setup
+## Как это работает
 
-### 1. Clone and install
+```
+Клиент → /start → согласие (152-ФЗ)
+       → направление → даты → люди → бюджет → телефон
+       → подтверждение + уведомление админу
+       → (фон) MDT CRM + AI-подборка
+       → заявка в таблице leads
+```
+
+1. Telegram/VK шлёт update на webhook.
+2. FSM ведёт диалог; состояние в памяти + SQLite.
+3. После телефона: lead в БД, confirm клиенту, сообщение админу; **MDT и AI — в фоне**, чтобы webhook отвечал быстро.
+4. Админ отвечает `/send` или делает `/broadcast`.
+
+Эндпоинты:
+
+| Метод | Путь | Назначение |
+|-------|------|------------|
+| `GET` | `/` | «жив» |
+| `GET` | `/health` | JSON-статус (токены, leads, MDT, …) |
+| `POST` | `/webhook` | Telegram |
+| `POST` | `/vk/webhook` | VK Callback |
+
+---
+
+## Структура проекта
+
+```
+bot.py              # Telegram-бот
+vk_bot.py           # VK-бот
+shared/             # общая логика (validation, ai, mdt, privacy, dates, …)
+tests/              # pytest
+deploy/             # systemd, nginx, install.sh
+docs/               # политика ПДн (черновик), MDT API
+Dockerfile
+docker-compose.yml
+DEPLOY.md           # деплой на VPS в России
+```
+
+---
+
+## Быстрый старт (локально)
 
 ```bash
 git clone https://github.com/r0meo-1/turbot-arhangelsk.git
 cd turbot-arhangelsk
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+# Linux/macOS
+# source .venv/bin/activate
+
 pip install -r requirements.txt
+copy .env.example .env   # Windows
+# cp .env.example .env   # Linux/macOS
 ```
 
-### 2. Configure environment variables
+Минимум в `.env`:
 
-Copy `.env.example` to `.env` and fill in the values:
+```env
+BOT_TOKEN=токен_от_BotFather
+ADMIN_ID=ваш_telegram_id
+AI_MODE=template
+TELEGRAM_SECRET_TOKEN=длинная_случайная_строка
+```
 
-| Variable               | Required | Description                                                          |
-| ---------------------- | -------- | -------------------------------------------------------------------- |
-| `BOT_TOKEN`            | yes      | Telegram Bot API token from [@BotFather](https://t.me/BotFather).    |
-| `ADMIN_ID`             | yes      | Telegram `chat_id` of the admin who receives leads.                  |
-| `AI_MODE`              | no       | `groq` (default) or `template` (no external AI, works in Russia).    |
-| `GROQ_API_KEY`         | no       | Groq API key for AI blurbs (falls back to template if empty).        |
-| `GROQ_MODEL`           | no       | Groq model name (default `llama-3.1-70b-versatile`).                 |
-| `DATABASE_PATH`        | no       | Path for SQLite state persistence (default `bot_state.sqlite`).      |
-| `STATE_FILE`           | no       | Legacy JSON state file — auto-migrated to SQLite on first start.    |
-| `PORT`                 | no       | Port for the Flask server (default `5000`).                          |
-| `TELEGRAM_SECRET_TOKEN`| no       | Long random string for webhook request verification.                 |
-| `DIALOG_TIMEOUT_HOURS` | no       | Auto-cancel inactive dialogs after N hours (default `6`).            |
-| `MDT_ENABLED`          | no       | Send completed leads to MDT CRM (`true`/`false`, default `false`).   |
-| `MDT_ACCOUNT`          | no       | MDT account subdomain (e.g. `apreltur`).                             |
-| `MDT_API_KEY`          | no       | API key from your MDT account.                                       |
-| `MDT_SOURCE`           | no       | Lead source label in MDT (default `Telegram Bot`).                   |
-| `MDT_BASE_URL`         | no       | Optional override of the MDT API base URL.                           |
-| `MDT_MODE`             | no       | `lead` (default), `preorder`, or `both`.                              |
-| `MDT_NOTIFY_MANAGERS`  | no       | Send push notifications to managers (`true`/`false`, default `false`).|
-| `MDT_MANAGER_IDS`      | no       | Comma-separated MDT manager IDs for push/reminder.                   |
-| `MDT_REMINDER_ENABLED` | no       | Create a follow-up reminder in MDT after preorder (`true`/`false`).  |
-| `MDT_REMINDER_DAYS`    | no       | Days from now for the MDT reminder (default `1`).                    |
-| `MDT_REMINDER_TEXT`    | no       | Text of the MDT reminder (default `Позвонить по заявке...`).         |
+`ADMIN_ID` узнать у [@userinfobot](https://t.me/userinfobot).
 
-The application reads configuration from the environment. For local development
-variables are loaded automatically from `.env`. In production, export the
-variables or configure them through your process manager / host.
-
-> 💡 **Groq недоступен из вашего региона?** Установите `AI_MODE=template` —
-> подборка туров будет генерироваться локально из шаблонов без обращений к
-> внешним AI-сервисам.
-
-### 3. Run
+Запуск:
 
 ```bash
 python bot.py
 ```
 
-The Flask server listens on `0.0.0.0:$PORT`. Expose it over HTTPS and register
-the webhook with Telegram:
+Для локального HTTPS-webhook удобны Cloudflare Tunnel / ngrok, затем:
 
 ```bash
-curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://YOUR_DOMAIN/webhook"
+curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://ВАШ_ДОМЕН/webhook&secret_token=$TELEGRAM_SECRET_TOKEN"
 ```
 
-### 4. Production (gunicorn)
+### Продакшен (gunicorn)
 
 ```bash
 gunicorn bot:app --bind 0.0.0.0:$PORT --workers 1 --threads 2
 ```
 
-Use `--workers 1` to avoid SQLite write contention between workers. If you
-need more workers, set `DATABASE_PATH` to a shared network path or migrate to
-PostgreSQL.
+**Всегда `--workers 1`**: состояние в памяти + SQLite. Несколько worker'ов без общей БД-стратегии — рассинхрон.
 
-### 5. Tests
-
-Install dev dependencies and run the test suite:
+### Тесты
 
 ```bash
 pip install -r requirements-dev.txt
 pytest
 ```
 
-### 6. MDT CRM integration
+---
 
-> Full structured API reference is available in [`docs/mdt_api.md`](docs/mdt_api.md).
+## Переменные окружения
 
-To send completed leads to «МоиДокументы-Туризм»:
+Полный список — в [`.env.example`](.env.example).
 
-1. Enable the integration in `.env`:
+### Обязательные (Telegram)
 
-```env
-MDT_ENABLED=true
-MDT_ACCOUNT=your-subdomain
-MDT_API_KEY=your-mdt-api-key
-MDT_MODE=lead
-```
+| Переменная | Описание |
+|------------|----------|
+| `BOT_TOKEN` | Токен от [@BotFather](https://t.me/BotFather) |
+| `ADMIN_ID` | `chat_id` админа |
 
-2. Choose the operation mode with `MDT_MODE`:
+### Часто используемые
 
-   - `lead` (default) — calls `/api/add-lead` with the client's name, phone
-     and tour parameters.
-   - `preorder` — creates a temp tourist via `/api/add-tourist-temp` and then
-     an preorder via `/api/create-preorder` with parsed dates, country and budget.
-   - `both` — creates both a lead and a preorder.
+| Переменная | По умолчанию | Описание |
+|------------|--------------|----------|
+| `AI_MODE` | `groq` | `groq` или `template` (без внешнего API) |
+| `GROQ_API_KEY` | — | Ключ Groq; иначе fallback на шаблон |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Модель Groq |
+| `DATABASE_PATH` | `bot_state.sqlite` | Путь к SQLite |
+| `PORT` | `5000` | Порт Flask |
+| `TELEGRAM_SECRET_TOKEN` | — | Проверка заголовка webhook |
+| `DIALOG_TIMEOUT_HOURS` | `6` | Таймаут незавершённого диалога (`0` = выкл.) |
+| `FOLLOWUP_DELAY_HOURS` | `3` | Напоминание «не закончили заявку» |
+| `ADMIN_ERROR_ALERTS` | `true` | Алерты админу при критических ошибках |
+| `PRIVACY_POLICY_URL` | — | Ссылка на политику ПДн |
+| `DATA_OPERATOR_NAME` | ИП … АПРЕЛЬ тур | Оператор в тексте согласия |
+| `DATA_RETENTION_DAYS` | `180` | Автоудаление неактивных (`0` = выкл.) |
 
-3. Optional manager notifications:
+### MDT CRM
 
-   ```env
-   MDT_NOTIFY_MANAGERS=true
-   MDT_MANAGER_IDS=1,2,3
-   ```
+| Переменная | Описание |
+|------------|----------|
+| `MDT_ENABLED` | `true` / `false` |
+| `MDT_ACCOUNT` | Поддомен (например `apreltur`) |
+| `MDT_API_KEY` | API-ключ |
+| `MDT_MODE` | `lead` \| `preorder` \| `both` |
+| `MDT_SOURCE` | Метка источника |
+| `MDT_NOTIFY_MANAGERS` | Push менеджерам |
+| `MDT_MANAGER_IDS` | ID через запятую |
+| `MDT_REMINDER_*` | Напоминания после preorder |
 
-   When `MDT_MODE` is `preorder` or `both`, the bot can also create a follow-up
-   reminder/task in MDT for each configured manager (`/api/add-reminder`).
-   Set `MDT_REMINDER_ENABLED=false` to disable this.
+Подробнее: [`docs/mdt_api.md`](docs/mdt_api.md).
 
-## Deploy to Render
+### VK (опционально)
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
-
-1. Fork this repository
-2. Go to [render.com](https://render.com) → New → Web Service
-3. Connect your forked repo
-4. Set environment variables: BOT_TOKEN, ADMIN_ID
-5. Set AI_MODE=template (works without VPN from Russia)
-6. Deploy — then register webhook:
+| Переменная | Описание |
+|------------|----------|
+| `VK_ACCESS_TOKEN` | Токен группы |
+| `VK_GROUP_ID` | ID группы |
+| `VK_CONFIRMATION` | Строка подтверждения Callback API |
+| `VK_SECRET_KEY` | Секрет Callback (опционально) |
+| `VK_PORT` / `VK_DATABASE_PATH` | Порт и БД отдельного процесса |
 
 ```bash
-curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://YOUR_DOMAIN/webhook"
+gunicorn vk_bot:app --bind 0.0.0.0:5100 --workers 1 --threads 4
 ```
 
-## Commands
+---
 
-### User commands
+## Команды
 
-| Command   | Description                          |
-| --------- | ------------------------------------ |
-| `/start`   | Begin the tour-selection dialog.     |
-| `/cancel`  | Abort the current request flow.      |
-| `/privacy` | Show the personal-data privacy notice. |
-| `/delete`  | Erase the user's personal data and withdraw consent. |
-| `/help`    | Show help text.                      |
+### Пользователь (Telegram)
 
-### Admin commands
+| Команда | Действие |
+|---------|----------|
+| `/start` | Начать подбор (сначала согласие, если ещё не дано) |
+| `/cancel` | Отменить текущую заявку |
+| `/privacy` | Краткая политика ПДн |
+| `/delete` | Удалить данные и отозвать согласие |
+| `/help` | Справка |
 
-| Command                    | Description                                      |
-| -------------------------- | ------------------------------------------------ |
-| `/send {chat_id} {text}`   | Send a message to a specific user (HTML OK).     |
-| `/broadcast {text}`        | Send a message to all users (rate-limited).      |
-| `/broadcast {dest} {text}` | Send to users interested in a specific destination. |
-| `/users`                   | List all known users with names and IDs.         |
-| `/stats`                   | Show user count and active sessions.             |
-| `/analytics`               | Show destinations, consent stats, session breakdown. |
-| `/export`                  | Export recent completed leads with phone numbers.|
-| `/followup`                | Manually trigger follow-up reminders.            |
-| `/restart`                 | Clear all active dialog sessions.                |
-| `/mdt [test\|reload]`      | MDT CRM status, connectivity test, or country reload.|
-| `/help`                    | Show admin help.                                 |
+В VK — текстовые команды: «Начать», «Отмена», «Политика», «Удалить», «Помощь».
 
-## Personal data & Russian law (152-ФЗ)
+### Админ (только `ADMIN_ID`)
 
-This bot collects **personal data** of Russian citizens (name, phone number,
-Telegram ID). Operating it in Russia requires compliance with Federal Law
-№152-ФЗ «Oперсональных данных». The application implements the parts that
-live in code; the rest is the operator's responsibility.
+| Команда | Действие |
+|---------|----------|
+| `/send {chat_id} {текст}` | Сообщение пользователю (HTML) |
+| `/broadcast {текст}` | Рассылка всем (в фоне) |
+| `/broadcast {направление} {текст}` | Рассылка по направлению |
+| `/users` | Список пользователей |
+| `/stats` | Пользователи, активные диалоги, заявки |
+| `/analytics` | Конверсия, 7/30 дней, популярные направления |
+| `/export` | Последние заявки с телефонами |
+| `/followup` | Ручной follow-up незавершившим |
+| `/restart` | Сбросить активные сессии |
+| `/mdt [test\|reload]` | Статус / тест / обновить страны MDT |
+| `/help` | Справка админа |
 
-**Implemented in the bot:**
+---
 
-- **Consent before collection** — `/start` shows a personal-data processing
-  consent prompt (operator name + optional policy link) and only proceeds
-  after the user taps «✅ Согласен». The consent timestamp is stored.
-- **Right to erasure / consent withdrawal** — `/delete` erases the user's
-  session, registry row, and consent immediately.
-- **Privacy notice** — `/privacy` shows what is collected, why, for how long,
-  and the operator's details.
-- **Data minimisation / retention** — a background job erases a client's
-  personal data after `DATA_RETENTION_DAYS` (default 180) of inactivity.
+## Деплой
 
-**Operator responsibilities (NOT handled by code) — ❗ required:**
+### VPS в России (рекомендуется для реальных ПДн)
 
-1. **Data localisation (ст. 18 ч. 5).** Personal data of RF citizens must be
-   collected and stored in a database **physically located in Russia**. Do
-   **not** deploy the database on foreign hosting such as Render.com. Use a
-   Russian provider (Yandex Cloud, VK Cloud, Selectel, Timeweb, Reg.ru, …).
-   The included `render.yaml` is for reference only and is **not** compliant
-   as-is.
-2. **Roskomnadzor notification.** The operator (ИП Замятина М.А.) must file a
-   personal-data processing notification with РКН.
-3. **Published policy.** Host a Privacy Policy / consent document and set its
-   URL in `PRIVACY_POLICY_URL`. A draft is provided in `docs/privacy_policy.md`
-   — it must be reviewed by a lawyer before publication.
-4. **Security measures (ст. 19).** Keep `TELEGRAM_SECRET_TOKEN` set, restrict
-   database access, and encrypt backups.
+См. подробный гайд: **[DEPLOY.md](DEPLOY.md)**  
+Скрипт: `deploy/install.sh` (systemd + nginx + Let's Encrypt).
 
-> ⚠️ This section is engineering guidance, not legal advice. Have a
-> data-protection specialist confirm compliance for your specific setup.
+### Docker
 
-## License
+```bash
+docker compose up -d
+```
 
-[MIT](LICENSE) © 2026 r0meo-1
+Образы копируют `bot.py`, `vk_bot.py` и пакет **`shared/`**.
+
+### Render / зарубежный free-tier (только демо)
+
+В репозитории есть `render.yaml`.  
+**Не используйте для реальных телефонов клиентов** — см. раздел 152-ФЗ ниже.
+
+```text
+AI_MODE=template
+MDT_ENABLED=false
+BOT_TOKEN=...
+ADMIN_ID=...
+TELEGRAM_SECRET_TOKEN=...
+```
+
+После деплоя:
+
+```bash
+curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://ВАШ.onrender.com/webhook&secret_token=$TELEGRAM_SECRET_TOKEN"
+```
+
+Проверка: `GET https://ВАШ.onrender.com/health`
+
+---
+
+## Персональные данные и 152-ФЗ
+
+Бот обрабатывает **имя, телефон, ID мессенджера** граждан РФ.
+
+### Реализовано в коде
+
+- согласие до сбора данных («✅ Согласен»);
+- `/privacy` и `/delete` (стирание session, user, leads, consent);
+- срок хранения `DATA_RETENTION_DAYS` (по умолчанию 180);
+- имя оператора в текстах согласия.
+
+### Обязанности оператора (не код)
+
+1. **Локализация (ст. 18 ч. 5)** — хранить ПДн на серверах в РФ (не Render для боя).
+2. **Уведомление РКН** — подать как оператор ПДн.
+3. **Опубликованная политика** — выложить документ, указать `PRIVACY_POLICY_URL`  
+   (черновик: [`docs/privacy_policy.md`](docs/privacy_policy.md) — нужна юридическая вычитка).
+4. **Защита** — secret token webhook, доступ к БД, бэкапы (`scripts/backup.sh`).
+
+> Это инженерные рекомендации, не юридическая консультация.
+
+---
+
+## Лицензия
+
+[MIT](LICENSE) © 2026 [r0meo-1](https://github.com/r0meo-1)
