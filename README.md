@@ -2,15 +2,16 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-webhook-000)](https://flask.palletsprojects.com/)
+[![tests](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml/badge.svg)](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 > Клиент хочет в Египет. Менеджер в чате. Заявка «где-то в переписке».  
 > **TurBot** — конечный автомат, который вежливо выпытывает направление, даты, людей, бюджет и телефон,  
-> кладёт lead в SQLite, орёт админу в Telegram и (по желанию) пихает всё в CRM.  
+> кладёт lead в SQLite, орёт админу в Telegram и (по желанию) пихает всё в **MDT** (МойДокументы.Туризм).  
 > AI-подборка — бонус. Шаблон без VPN — режим выжившего из 2024.
 
 Lead-бот для турагентства **«АПРЕЛЬ тур»**.  
-Flask webhook · gunicorn · SQLite · пакет `shared/` с VK-версией · тесты · Docker · деплой на РФ VPS.
+Flask webhook · gunicorn · SQLite · MDT CRM · пакет `shared/` с VK-версией · тесты · Docker · деплой на РФ VPS.
 
 **Репозиторий:** [github.com/r0meo-1/turbot-arhangelsk](https://github.com/r0meo-1/turbot-arhangelsk)
 
