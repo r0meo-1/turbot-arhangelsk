@@ -11,6 +11,7 @@ os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret123")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")  # disable background worker
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
+os.environ.setdefault("CONSENT_MODE", "strict")  # keep classic consent in unit tests
 os.environ.setdefault("STATE_FILE", ":memory:")  # not used when save_state is mocked
 os.environ.setdefault(
     "DATABASE_PATH",
@@ -242,9 +243,9 @@ def test_dialog_completion_with_contact(client):
 
     info = bot.user_data.get(222)
     assert info is not None
-    assert info["state"] == bot.STATE_PHONE
+    assert info["state"] == bot.STATE_CONTACT
 
-    # Finish by sharing a contact.
+    # Finish by sharing a contact (accepted on contact-choice step too).
     resp = _post(client, 222, contact={"phone_number": "79161234567", "user_id": 222})
     assert resp.status_code == 200
     assert 222 not in bot.user_data
@@ -274,11 +275,53 @@ def test_dialog_completion_via_inline_buttons(client):
     assert bot.user_data[223]["people"] == "2"
 
     _post(client, 223, "80000")
+    assert bot.user_data[223]["state"] == bot.STATE_CONTACT
+
+    _callback(client, 223, bot.CB_CONTACT_PHONE)
     assert bot.user_data[223]["state"] == bot.STATE_PHONE
 
     _post(client, 223, "+79161234567")
     assert 223 not in bot.user_data
     assert bot.count_leads() == 1
+
+
+def test_soft_mode_start_and_telegram_contact(client, monkeypatch):
+    """Soft mode: one start tap, finish with Telegram as contact (no phone)."""
+    monkeypatch.setattr(bot, "CONSENT_MODE", "soft")
+    _post(client, 901, "/start")
+    assert bot.user_data[901]["state"] == bot.STATE_CONSENT
+    _callback(client, 901, bot.CB_START)
+    assert bot.has_consent(901)
+    assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
+
+    for text in ["Турция", "1-7 августа", "2", "70000"]:
+        _post(client, 901, text)
+    assert bot.user_data[901]["state"] == bot.STATE_CONTACT
+
+    # Fake username via completing with synthetic callback path
+    bot.user_data[901]["contact_method"] = "telegram"
+    # Inject username by posting contact channel with patched message — use API path
+    payload = {
+        "callback_query": {
+            "id": "cq-901-tg",
+            "from": {"first_name": "Test", "id": 901, "username": "demo_user"},
+            "message": {"message_id": 1, "chat": {"id": 901}},
+            "data": bot.CB_CONTACT_TG,
+        }
+    }
+    client.post(
+        "/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"},
+        json=payload,
+    )
+    assert 901 not in bot.user_data
+    assert bot.count_leads() == 1
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (901,))
+        row = cur.fetchone()
+    assert row is not None
+    assert "Telegram" in row[0]
+    assert "demo_user" in row[0]
 
 
 def test_inline_cancel_aborts_dialog(client):

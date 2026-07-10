@@ -23,15 +23,21 @@ from groq import Groq
 from shared.constants import (
     STATE_BUDGET,
     STATE_CONSENT,
+    STATE_CONTACT,
     STATE_DATES,
     STATE_DESTINATION,
     STATE_PEOPLE,
     STATE_PHONE,
+    STATE_VK,
     PEOPLE_OPTIONS,
     BACK_BUTTON_TEXT,
     CANCEL_BUTTON_TEXT,
     CONSENT_YES_TEXT,
     CONSENT_NO_TEXT,
+    START_BUTTON_TEXT,
+    CONTACT_TG_TEXT,
+    CONTACT_PHONE_TEXT,
+    CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_TG,
 )
 from shared.validation import validate_phone, validate_people, validate_budget
@@ -102,6 +108,11 @@ DATA_OPERATOR_NAME = os.getenv(
 # Days after which a client's personal data is auto-deleted (data minimisation,
 # 152-ФЗ ст. 5). Set to 0 to disable automatic retention cleanup.
 DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
+# soft (default): no hard «Согласен» gate — short notice + flexible contact.
+# strict: classic consent buttons before any questions (old behaviour).
+CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
+if CONSENT_MODE not in ("soft", "strict"):
+    CONSENT_MODE = "soft"
 BROADCAST_DELAY      = 0.05  # ~20 msg/s — stays under Telegram's ~30 msg/s limit
 # Alert admin on critical errors (sent via Telegram message).
 ADMIN_ERROR_ALERTS = os.getenv("ADMIN_ERROR_ALERTS", "true").lower().strip() in ("1", "true", "yes")
@@ -174,20 +185,20 @@ USER_HELP = (
     "/privacy — обработка персональных данных\n"
     "/delete — удалить мои данные\n"
     "/help — эта справка\n\n"
-    "<b>В диалоге</b> — кнопки под сообщениями: направления, число гостей, "
-    "назад и отмена. Телефон можно отправить контактом или ввести вручную.\n\n"
+    "<b>В диалоге</b> — кнопки: направления, гости, способ связи "
+    "(Telegram / телефон / VK), назад и отмена.\n\n"
     "📋 ИП Замятина Мария Андреевна\n"
     "ТА «АПРЕЛЬ тур» · ОГРНИП 290211659807"
 )
 
 WELCOME_BODY = (
-    "Подберём тур под ваши даты и бюджет — заявка уйдёт менеджеру, "
-    "мы перезвоним с вариантами.\n\n"
+    "Подберём тур под ваши даты и бюджет — заявка уйдёт менеджеру.\n\n"
     "<b>Как это работает</b>\n"
-    "1) короткое согласие на обработку данных\n"
-    "2) несколько вопросов (куда, когда, кто, бюджет)\n"
-    "3) телефон для связи — и готово\n\n"
-    "Это займёт около минуты. Ниже — согласие 👇"
+    "1) несколько вопросов (куда, когда, кто, бюджет)\n"
+    "2) удобный способ связи: Telegram, телефон или VK\n"
+    "3) менеджер напишет или позвонит\n\n"
+    "Около минуты. Данные — только чтобы связаться по заявке "
+    "(подробнее: /privacy)."
 )
 
 
@@ -208,8 +219,12 @@ HINT_START = (
 # Inline callback_data (≤64 bytes). Stable codes so button labels can change freely.
 CB_CONSENT_YES = "c:yes"
 CB_CONSENT_NO = "c:no"
+CB_START = "c:start"
 CB_DEST_PREFIX = "d:"
 CB_PEOPLE_PREFIX = "p:"
+CB_CONTACT_TG = "ct:tg"
+CB_CONTACT_PHONE = "ct:phone"
+CB_CONTACT_VK = "ct:vk"
 CB_BACK = "nav:back"
 CB_CANCEL = "nav:cancel"
 
@@ -1141,11 +1156,29 @@ def reply_keyboard(
 
 
 def kb_consent() -> str:
-    """Inline: agree / decline personal-data consent."""
+    """Inline: agree / decline personal-data consent (strict mode)."""
     return inline_keyboard([[
         _inline_btn(CONSENT_YES_TEXT, CB_CONSENT_YES),
         _inline_btn(CONSENT_NO_TEXT, CB_CONSENT_NO),
     ]])
+
+
+def kb_soft_start() -> str:
+    """Inline: one-tap start after short privacy notice (soft mode)."""
+    return inline_keyboard([[_inline_btn(START_BUTTON_TEXT, CB_START)]])
+
+
+def kb_contact_methods() -> str:
+    """Inline: how the manager should reach the client."""
+    return inline_keyboard([
+        [_inline_btn(CONTACT_TG_TEXT, CB_CONTACT_TG)],
+        [_inline_btn(CONTACT_PHONE_TEXT, CB_CONTACT_PHONE)],
+        [_inline_btn(CONTACT_VK_TEXT, CB_CONTACT_VK)],
+        [
+            _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+            _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+        ],
+    ])
 
 
 def kb_destinations() -> str:
@@ -1519,12 +1552,11 @@ def _strip_emoji_prefix(text: str) -> str:
 
 
 def handle_start(chat_id: int, first_name: str = "") -> None:
-    """Begin the tour-selection dialog, asking for consent first if needed."""
-    if not has_consent(chat_id):
+    """Begin the tour-selection dialog (soft notice or strict consent)."""
+    if CONSENT_MODE == "strict" and not has_consent(chat_id):
         with _lock:
             user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
         _mark_dirty(chat_id)
-        # Warm first screen, then legal consent with buttons (search / first open UX).
         send_message(chat_id, _welcome_text(first_name), parse_mode="HTML")
         send_message(
             chat_id,
@@ -1532,6 +1564,20 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
             reply_markup=kb_consent(),
         )
         return
+
+    # Soft mode: welcome + one «Начать» tap (or skip if already started before).
+    if CONSENT_MODE == "soft" and not has_consent(chat_id):
+        with _lock:
+            user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+        _mark_dirty(chat_id)
+        send_message(
+            chat_id,
+            _welcome_text(first_name),
+            parse_mode="HTML",
+            reply_markup=kb_soft_start(),
+        )
+        return
+
     _begin_destination(chat_id, first_name)
 
 
@@ -1572,13 +1618,17 @@ def handle_cancel(chat_id: int) -> None:
 # can read and advance the state in place.
 
 def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    """Handle the user's answer to the personal-data consent prompt."""
-    if text == CONSENT_YES_TEXT or text == CB_CONSENT_YES:
+    """Soft start button or strict consent buttons."""
+    from_info = message.get("from", {})
+    first_name = from_info.get("first_name", "")
+
+    # Soft mode: single «Начать подбор» (records light acknowledgment via consent_at).
+    if text in (START_BUTTON_TEXT, CB_START, CB_CONSENT_YES, CONSENT_YES_TEXT):
         set_consent(chat_id)
-        from_info = message.get("from", {})
-        _begin_destination(chat_id, from_info.get("first_name", ""))
+        _begin_destination(chat_id, first_name)
         return
-    if text == CONSENT_NO_TEXT or text == CB_CONSENT_NO:
+
+    if CONSENT_MODE == "strict" and text in (CONSENT_NO_TEXT, CB_CONSENT_NO):
         with _lock:
             user_data.pop(chat_id, None)
         _mark_dirty(chat_id, user=False)
@@ -1590,11 +1640,19 @@ def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
             reply_markup=hide_keyboard(),
         )
         return
-    send_message(
-        chat_id,
-        "Нужна одна из кнопок ниже: «✅ Согласен» или «❌ Отказаться».",
-        reply_markup=kb_consent(),
-    )
+
+    if CONSENT_MODE == "soft":
+        send_message(
+            chat_id,
+            "Нажмите «🚀 Начать подбор», чтобы продолжить.",
+            reply_markup=kb_soft_start(),
+        )
+    else:
+        send_message(
+            chat_id,
+            "Нужна одна из кнопок ниже: «✅ Согласен» или «❌ Отказаться».",
+            reply_markup=kb_consent(),
+        )
 
 
 def _step_destination(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -1653,12 +1711,65 @@ def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["budget"] = value
-    info["state"] = STATE_PHONE
+    info["state"] = STATE_CONTACT
     send_message(
         chat_id,
-        "📱 Укажите ваш номер телефона для связи "
-        "(кнопка ниже или введите номер вручную):",
-        reply_markup=contact_keyboard(),
+        "📞 <b>Как удобнее связаться?</b>\n\n"
+        "Можно просто Telegram (этот чат) — телефон не обязателен.\n"
+        "Или укажите номер / VK.",
+        reply_markup=kb_contact_methods(),
+        parse_mode="HTML",
+    )
+
+
+def _step_contact(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    """Choose Telegram / phone / VK as the contact channel."""
+    t = (text or "").strip()
+    from_info = message.get("from", {})
+    username = (from_info.get("username") or "").strip()
+
+    if t in (CONTACT_TG_TEXT, CB_CONTACT_TG, "telegram", "tg", "телеграм"):
+        if username:
+            contact = f"Telegram @{username}"
+        else:
+            contact = f"Telegram (чат id {chat_id})"
+        info["contact_method"] = "telegram"
+        handle_completion(chat_id, contact, message)
+        return
+
+    if t in (CONTACT_PHONE_TEXT, CB_CONTACT_PHONE, "телефон", "phone"):
+        info["contact_method"] = "phone"
+        info["state"] = STATE_PHONE
+        send_message(
+            chat_id,
+            "📱 Укажите номер телефона\n"
+            "(кнопка ниже или введите вручную, +7…):",
+            reply_markup=contact_keyboard(),
+        )
+        return
+
+    if t in (CONTACT_VK_TEXT, CB_CONTACT_VK, "vk", "вк"):
+        info["contact_method"] = "vk"
+        info["state"] = STATE_VK
+        send_message(
+            chat_id,
+            "💙 Напишите ссылку или ник VK\n"
+            "(например: vk.com/id123 или @nickname):",
+            reply_markup=kb_nav(include_back=True),
+        )
+        return
+
+    # Free-text phone typed on this step — accept as phone.
+    ok, phone = validate_phone(t)
+    if ok and phone:
+        info["contact_method"] = "phone"
+        handle_completion(chat_id, phone, message)
+        return
+
+    send_message(
+        chat_id,
+        "Выберите способ связи кнопкой ниже — или введите номер телефона.",
+        reply_markup=kb_contact_methods(),
     )
 
 
@@ -1667,12 +1778,35 @@ def _step_phone(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
     if not ok:
         send_message(
             chat_id,
-            "Похоже, номер некорректен. Попробуйте в формате +7XXXXXXXXXX "
-            "или нажмите «📱 Отправить номер».",
+            "Похоже, номер некорректен. Формат +7XXXXXXXXXX "
+            "или кнопка «📱 Отправить номер».\n"
+            "Назад — чтобы выбрать другой способ связи.",
             reply_markup=contact_keyboard(),
         )
         return
+    info["contact_method"] = "phone"
     handle_completion(chat_id, phone, message)
+
+
+def _step_vk(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    raw = (text or "").strip()
+    if not raw or len(raw) < 2:
+        send_message(
+            chat_id,
+            "Нужна ссылка или ник VK (например vk.com/username).",
+            reply_markup=kb_nav(include_back=True),
+        )
+        return
+    # Light normalize
+    if raw.startswith("@"):
+        contact = f"VK {raw}"
+    elif "vk.com" in raw.lower() or "vk.ru" in raw.lower():
+        contact = raw if raw.lower().startswith("http") else f"https://{raw.lstrip('/')}"
+        contact = f"VK {contact}"
+    else:
+        contact = f"VK {raw}"
+    info["contact_method"] = "vk"
+    handle_completion(chat_id, contact, message)
 
 
 # state -> step handler
@@ -1682,14 +1816,18 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
     STATE_BUDGET:      _step_budget,
+    STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
+    STATE_VK:          _step_vk,
 }
 
 PREVIOUS_STATE: Dict[str, str] = {
     STATE_DATES:       STATE_DESTINATION,
     STATE_PEOPLE:      STATE_DATES,
     STATE_BUDGET:      STATE_PEOPLE,
-    STATE_PHONE:       STATE_BUDGET,
+    STATE_CONTACT:     STATE_BUDGET,
+    STATE_PHONE:       STATE_CONTACT,
+    STATE_VK:          STATE_CONTACT,
 }
 
 
@@ -1721,12 +1859,25 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
             "💰 Какой бюджет рассматриваете на человека? (в рублях)",
             reply_markup=kb_nav(include_back=True),
         )
+    elif state == STATE_CONTACT:
+        send_message(
+            chat_id,
+            "📞 <b>Как удобнее связаться?</b>\n\n"
+            "Telegram, телефон или VK — на выбор.",
+            reply_markup=kb_contact_methods(),
+            parse_mode="HTML",
+        )
     elif state == STATE_PHONE:
         send_message(
             chat_id,
-            "📱 Укажите ваш номер телефона для связи "
-            "(кнопка ниже или введите номер вручную):",
+            "📱 Укажите номер телефона (+7… или кнопка ниже):",
             reply_markup=contact_keyboard(),
+        )
+    elif state == STATE_VK:
+        send_message(
+            chat_id,
+            "💙 Ссылка или ник VK:",
+            reply_markup=kb_nav(include_back=True),
         )
 
 
@@ -1783,7 +1934,7 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
         f"👥 Человек: {_esc(info.get('people', '?'))}\n"
         f"💰 Бюджет: {_esc(info.get('budget', '?'))}₽\n"
-        f"📱 Телефон: {_esc(phone)}\n\n"
+        f"📞 Связь: {_esc(phone)}\n\n"
         "Спасибо, что выбрали нас 🌺\n\n"
         "📋 ИП Замятина Мария Андреевна\n"
         "ОГРНИП 290211659807",
@@ -1815,8 +1966,8 @@ def _format_lead_notify_text(
         f"📅 {_esc(info.get('dates', '?'))}\n"
         f"👥 {_esc(info.get('people', '?'))} чел\n"
         f"💰 {_esc(info.get('budget', '?'))}₽\n"
-        f"📱 <code>{_esc(phone)}</code>\n\n"
-        f"Ответить клиенту: /send {chat_id} текст"
+        f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
+        f"Ответить в Telegram: /send {chat_id} текст"
     )
 
 
@@ -1970,6 +2121,7 @@ def health() -> Any:
         "total_leads": leads_total,
         "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
         "data_retention_days": DATA_RETENTION_DAYS,
+        "consent_mode": CONSENT_MODE,
     })
 
 
@@ -2049,8 +2201,16 @@ def _process_callback(data: Dict[str, Any]) -> None:
     # Synthetic message so step handlers can read from/user fields.
     synthetic = {"from": from_info, "chat": chat}
 
-    if cb_data in (CB_CONSENT_YES, CB_CONSENT_NO):
+    if cb_data in (CB_CONSENT_YES, CB_CONSENT_NO, CB_START):
         _step_consent(chat_id, cb_data, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data in (CB_CONTACT_TG, CB_CONTACT_PHONE, CB_CONTACT_VK):
+        if info.get("state") != STATE_CONTACT:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_contact(chat_id, cb_data, synthetic, info)
         _mark_dirty(chat_id, user=False)
         return
 
@@ -2099,7 +2259,11 @@ def _process_update(data: Dict[str, Any]) -> None:
     if contact and contact.get("phone_number"):
         phone_number = contact["phone_number"]
         info = user_data.get(chat_id, {})
-        if info.get("state") == STATE_PHONE:
+        state = info.get("state")
+        if state in (STATE_PHONE, STATE_CONTACT):
+            info["contact_method"] = "phone"
+            if state == STATE_CONTACT:
+                info["state"] = STATE_PHONE
             _step_phone(chat_id, phone_number, message, info)
         else:
             send_message(chat_id, "Спасибо, но сейчас номер телефона не требуется. 📝")
