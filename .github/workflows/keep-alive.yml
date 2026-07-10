@@ -1,0 +1,47 @@
+# Keep a free-tier Render demo awake (spins down after ~15 min idle).
+#
+# Setup (once):
+#   GitHub → Settings → Secrets and variables → Actions
+#   New repository secret: RENDER_HEALTH_URL
+#   Value: https://YOUR-SERVICE.onrender.com/health
+#
+# Cron on free GitHub runners can lag 5–15 min — fine for portfolio demos.
+# For a more reliable ping, use UptimeRobot (same URL, every 5 min).
+#
+# ⚠️ Demo only. Do not collect real RF personal data on Render (152-ФЗ).
+
+name: Keep-alive (Render demo)
+
+on:
+  schedule:
+    # Every 10 minutes — under Render free idle timeout (~15 min).
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping /health
+        env:
+          URL: ${{ secrets.RENDER_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${URL:-}" ]; then
+            echo "::notice::Secret RENDER_HEALTH_URL is not set — skip. Add it to enable keep-alive."
+            exit 0
+          fi
+          echo "GET $URL"
+          # Retries help if Render is cold-starting.
+          for i in 1 2 3; do
+            if curl -fsS --max-time 45 -o /tmp/health.json -w "HTTP %{http_code} in %{time_total}s\n" "$URL"; then
+              head -c 400 /tmp/health.json || true
+              echo
+              exit 0
+            fi
+            echo "attempt $i failed, retry in 10s..."
+            sleep 10
+          done
+          echo "::warning::Health check failed after retries (service may still wake on next request)"
+          exit 0

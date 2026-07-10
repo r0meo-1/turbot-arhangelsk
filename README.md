@@ -165,7 +165,7 @@ pytest
 
 - **РФ VPS** (если в боте реальные телефоны клиентов) — [DEPLOY.md](DEPLOY.md), `deploy/install.sh`  
 - **Docker** — `docker compose up -d` (не забудьте `shared/` — Dockerfile уже в курсе)  
-- **Render / free-tier** — ок для **демо**. Прод с реальными заявками лучше на своём VPS.
+- **Render / free-tier** — ок для **демо**. Keep-alive: secret `RENDER_HEALTH_URL` + workflow `.github/workflows/keep-alive.yml` (см. [DEPLOY.md](DEPLOY.md) §0). Прод с реальными заявками — на VPS в РФ.
 
 ---
 
