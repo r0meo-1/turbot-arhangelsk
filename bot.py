@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import hmac
+import html
 import sqlite3
 import time
 import logging
@@ -149,20 +150,59 @@ POPULAR_DESTINATIONS = POPULAR_DESTINATIONS_TG
 
 SHARE_CONTACT_TEXT = "📱 Отправить номер"
 
+# Public profile (Telegram search / «О боте»). Limits: name 64, short 120, about 512.
+BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "АПРЕЛЬ тур · Подбор туров").strip()[:64]
+BOT_SHORT_DESCRIPTION = os.getenv(
+    "BOT_SHORT_DESCRIPTION",
+    "Туры из Архангельска · заявка за 1–2 минуты · перезвоним",
+).strip()[:120]
+BOT_DESCRIPTION = os.getenv(
+    "BOT_DESCRIPTION",
+    "Официальный бот турагентства «АПРЕЛЬ тур» (Архангельск).\n\n"
+    "Помогу подобрать тур: направление, даты, число гостей и бюджет. "
+    "Заявка уходит менеджеру — перезвоним с вариантами.\n\n"
+    "Команды: /start — начать, /help — справка, /privacy — ПДн.\n"
+    "ИП Замятина М.А. · ОГРНИП 290211659807",
+).strip()[:512]
+
 USER_HELP = (
-    "🤖 Я бот туристического агентства «АПРЕЛЬ тур».\n\n"
-    "Помогу подобрать тур по вашим пожеланиям и передам заявку менеджеру.\n\n"
-    "Команды:\n"
-    "  /start — начать подбор тура\n"
-    "  /cancel — отменить текущую заявку\n"
-    "  /privacy — политика обработки персональных данных\n"
-    "  /delete — удалить мои данные и отозвать согласие\n"
-    "  /help — эта справка\n\n"
-    "Во время диалога жмите кнопки под сообщениями (inline):\n"
-    "  направления, число человек, ◀️ Назад, ❌ Отменить\n"
-    "  📱 Отправить номер — поделиться контактом\n\n"
+    "🌴 <b>«АПРЕЛЬ тур»</b> — подбор отдыха без лишней суеты\n\n"
+    "Я соберу короткую заявку и передам менеджеру. Обычно это 1–2 минуты.\n\n"
+    "<b>Команды</b>\n"
+    "/start — начать подбор\n"
+    "/cancel — отменить заявку\n"
+    "/privacy — обработка персональных данных\n"
+    "/delete — удалить мои данные\n"
+    "/help — эта справка\n\n"
+    "<b>В диалоге</b> — кнопки под сообщениями: направления, число гостей, "
+    "назад и отмена. Телефон можно отправить контактом или ввести вручную.\n\n"
     "📋 ИП Замятина Мария Андреевна\n"
     "ТА «АПРЕЛЬ тур» · ОГРНИП 290211659807"
+)
+
+WELCOME_BODY = (
+    "Подберём тур под ваши даты и бюджет — заявка уйдёт менеджеру, "
+    "мы перезвоним с вариантами.\n\n"
+    "<b>Как это работает</b>\n"
+    "1) короткое согласие на обработку данных\n"
+    "2) несколько вопросов (куда, когда, кто, бюджет)\n"
+    "3) телефон для связи — и готово\n\n"
+    "Это займёт около минуты. Ниже — согласие 👇"
+)
+
+
+def _welcome_text(first_name: str = "") -> str:
+    """First-touch greeting (HTML). Name is escaped for safety."""
+    if first_name:
+        safe = html.escape(first_name, quote=False)
+        head = f"🌴 <b>Добро пожаловать, {safe}!</b>"
+    else:
+        head = "🌴 <b>Добро пожаловать в «АПРЕЛЬ тур»!</b>"
+    return f"{head}\n\n{WELCOME_BODY}"
+
+HINT_START = (
+    "Чтобы подобрать тур, нажмите /start\n"
+    "Справка — /help · данные — /privacy"
 )
 
 # Inline callback_data (≤64 bytes). Stable codes so button labels can change freely.
@@ -174,11 +214,11 @@ CB_BACK = "nav:back"
 CB_CANCEL = "nav:cancel"
 
 BOT_COMMANDS = [
-    {"command": "start", "description": "Начать подбор тура"},
-    {"command": "help", "description": "Справка"},
-    {"command": "cancel", "description": "Отменить заявку"},
-    {"command": "privacy", "description": "Политика ПДн"},
-    {"command": "delete", "description": "Удалить мои данные"},
+    {"command": "start", "description": "🌴 Начать подбор тура"},
+    {"command": "help", "description": "ℹ️ Справка и контакты"},
+    {"command": "cancel", "description": "❌ Отменить заявку"},
+    {"command": "privacy", "description": "🔒 Персональные данные"},
+    {"command": "delete", "description": "🗑 Удалить мои данные"},
 ]
 
 
@@ -853,22 +893,50 @@ def clear_inline_keyboard(chat_id: int, message_id: int) -> None:
         pass
 
 
-def ensure_bot_commands() -> None:
-    """Register the slash-command menu via API (no BotFather button setup needed)."""
+def _tg_api_ok(method: str, payload: Dict[str, Any]) -> bool:
+    """POST to Bot API; return True if ok. Logs failures at warning level."""
     if not BOT_TOKEN:
-        return
+        return False
     try:
         resp = telegram_session.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
-            json={"commands": BOT_COMMANDS},
+            f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
+            json=payload,
             timeout=HTTP_TIMEOUT,
         )
         if resp.status_code == 200 and resp.json().get("ok"):
-            logger.info("Bot commands registered (%s)", len(BOT_COMMANDS))
-        else:
-            logger.warning("setMyCommands failed: %s", resp.text[:200])
+            return True
+        logger.warning("%s failed: %s", method, resp.text[:200])
     except Exception as exc:
-        logger.warning("setMyCommands error: %s", exc)
+        logger.warning("%s error: %s", method, exc)
+    return False
+
+
+def ensure_bot_commands() -> None:
+    """Register the slash-command menu via API (no BotFather button setup needed)."""
+    if _tg_api_ok("setMyCommands", {"commands": BOT_COMMANDS}):
+        logger.info("Bot commands registered (%s)", len(BOT_COMMANDS))
+
+
+def ensure_bot_profile() -> None:
+    """Name, short/long description and menu for search + first open in Telegram."""
+    if not BOT_TOKEN:
+        return
+    if BOT_DISPLAY_NAME and _tg_api_ok("setMyName", {"name": BOT_DISPLAY_NAME}):
+        logger.info("Bot name set: %s", BOT_DISPLAY_NAME)
+    if BOT_SHORT_DESCRIPTION and _tg_api_ok(
+        "setMyShortDescription", {"short_description": BOT_SHORT_DESCRIPTION},
+    ):
+        logger.info("Bot short description set (%s chars)", len(BOT_SHORT_DESCRIPTION))
+    if BOT_DESCRIPTION and _tg_api_ok(
+        "setMyDescription", {"description": BOT_DESCRIPTION},
+    ):
+        logger.info("Bot description set (%s chars)", len(BOT_DESCRIPTION))
+    # Menu button opens the command list (familiar «☰» UX).
+    _tg_api_ok(
+        "setChatMenuButton",
+        {"menu_button": {"type": "commands"}},
+    )
+    ensure_bot_commands()
 
 
 # ---------------------------------------------------------------------------
@@ -1456,6 +1524,8 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
         with _lock:
             user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
         _mark_dirty(chat_id)
+        # Warm first screen, then legal consent with buttons (search / first open UX).
+        send_message(chat_id, _welcome_text(first_name), parse_mode="HTML")
         send_message(
             chat_id,
             _consent_text(),
@@ -1473,10 +1543,11 @@ def _begin_destination(chat_id: int, first_name: str = "") -> None:
     name = f", {first_name}" if first_name else ""
     send_message(
         chat_id,
-        f"🌴 Здравствуйте{name}! Я помогу подобрать тур под ваши пожелания.\n\n"
-        "📍 Куда бы вы хотели отправиться?\n\n"
-        "Выберите направление кнопкой или напишите своё:",
+        f"🌴 Отлично{name}! Давайте подберём тур.\n\n"
+        "📍 <b>Куда хотите поехать?</b>\n\n"
+        "Выберите направление кнопкой или напишите своё — например: «Сочи», «Греция».",
         reply_markup=kb_destinations(),
+        parse_mode="HTML",
     )
 
 
@@ -1489,11 +1560,11 @@ def handle_cancel(chat_id: int) -> None:
         delete_session(chat_id)
         send_message(
             chat_id,
-            "❌ Заявка отменена. Чтобы начать заново — /start",
+            "❌ Заявка отменена.\n\nКогда будете готовы — /start, подберём тур заново.",
             reply_markup=hide_keyboard(),
         )
     else:
-        send_message(chat_id, "Нет активной заявки. Отправьте /start, чтобы начать.")
+        send_message(chat_id, f"Сейчас нет активной заявки.\n\n{HINT_START}")
 
 
 # --- dialog steps ---------------------------------------------------------
@@ -1514,14 +1585,14 @@ def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
         delete_session(chat_id)
         send_message(
             chat_id,
-            "Без согласия на обработку персональных данных мы, к сожалению, не сможем подобрать тур.\n\n"
-            "Если передумаете — отправьте /start.",
+            "Поняли. Без согласия на обработку данных заявку оформить нельзя.\n\n"
+            "Если передумаете — /start, мы на месте 🌴",
             reply_markup=hide_keyboard(),
         )
         return
     send_message(
         chat_id,
-        "Пожалуйста, нажмите «✅ Согласен» или «❌ Отказаться».",
+        "Нужна одна из кнопок ниже: «✅ Согласен» или «❌ Отказаться».",
         reply_markup=kb_consent(),
     )
 
@@ -1627,9 +1698,10 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
     if state == STATE_DESTINATION:
         send_message(
             chat_id,
-            "📍 Куда бы вы хотели отправиться?\n\n"
-            "Выберите направление кнопкой или напишите своё:",
+            "📍 <b>Куда хотите поехать?</b>\n\n"
+            "Выберите направление кнопкой или напишите своё.",
             reply_markup=kb_destinations(),
+            parse_mode="HTML",
         )
     elif state == STATE_DATES:
         send_message(
@@ -1706,16 +1778,17 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
     """1. Send the request summary back to the client."""
     send_message(
         chat_id,
-        "✅ Ваша заявка принята! Наш менеджер свяжется с вами в ближайшее время.\n\n"
-        f"📍 Направление: {info.get('destination', '?')}\n"
-        f"📅 Даты: {info.get('dates', '?')}\n"
-        f"👥 Человек: {info.get('people', '?')}\n"
-        f"💰 Бюджет: {info.get('budget', '?')}₽\n"
-        f"📱 Телефон: {phone}\n\n"
-        "Спасибо за обращение в «АПРЕЛЬ тур»! 🌺\n\n"
+        "✅ <b>Заявка принята!</b> Менеджер «АПРЕЛЬ тур» свяжется с вами в ближайшее время.\n\n"
+        f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
+        f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
+        f"👥 Человек: {_esc(info.get('people', '?'))}\n"
+        f"💰 Бюджет: {_esc(info.get('budget', '?'))}₽\n"
+        f"📱 Телефон: {_esc(phone)}\n\n"
+        "Спасибо, что выбрали нас 🌺\n\n"
         "📋 ИП Замятина Мария Андреевна\n"
         "ОГРНИП 290211659807",
         reply_markup=hide_keyboard(),
+        parse_mode="HTML",
     )
 
 
@@ -2032,9 +2105,13 @@ def _process_update(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Спасибо, но сейчас номер телефона не требуется. 📝")
         return
 
-    # Non-text messages (photos, stickers, etc.)
+    # Non-text messages (photos, stickers, etc.) — contact handled above.
     if not text:
-        send_message(chat_id, "Пожалуйста, отправьте текстовое сообщение. 📝")
+        send_message(
+            chat_id,
+            "Сейчас нужен текст или кнопки под сообщением 📝\n"
+            f"{HINT_START if chat_id not in user_data else 'Или продолжите шаг заявки.'}",
+        )
         return
 
     # Normalise /cmd@botname → /cmd
@@ -2052,7 +2129,7 @@ def _process_update(data: Dict[str, Any]) -> None:
         return
 
     if text == "/help":
-        send_message(chat_id, USER_HELP)
+        send_message(chat_id, USER_HELP, parse_mode="HTML")
         return
 
     if text == "/privacy":
@@ -2063,8 +2140,8 @@ def _process_update(data: Dict[str, Any]) -> None:
         delete_user_data(chat_id)
         send_message(
             chat_id,
-            "🗑 Ваши персональные данные удалены, согласие отозвано.\n\n"
-            "Чтобы снова воспользоваться подбором тура — отправьте /start.",
+            "🗑 Готово: персональные данные удалены, согласие отозвано.\n\n"
+            "Снова подобрать тур — /start.",
             reply_markup=hide_keyboard(),
         )
         return
@@ -2078,7 +2155,7 @@ def _process_update(data: Dict[str, Any]) -> None:
         if chat_id in user_data:
             _go_back(chat_id)
         else:
-            send_message(chat_id, "Для начала работы отправьте /start")
+            send_message(chat_id, HINT_START)
         return
 
     # --- Unknown slash-command ---
@@ -2086,20 +2163,17 @@ def _process_update(data: Dict[str, Any]) -> None:
         if chat_id in user_data:
             send_message(
                 chat_id,
-                "Неизвестная команда. /cancel — отменить, /help — справка",
+                "Такой команды нет. /cancel — отменить заявку, /help — справка.",
             )
         else:
-            send_message(
-                chat_id,
-                "Неизвестная команда. /start — начать, /help — справка",
-            )
+            send_message(chat_id, f"Такой команды нет.\n\n{HINT_START}")
         return
 
     # --- Dialog flow ---
     if chat_id in user_data:
         handle_dialog(chat_id, text, message)
     else:
-        send_message(chat_id, "Для начала работы отправьте /start")
+        send_message(chat_id, HINT_START)
 
 
 def _check_webhook_secret() -> bool:
@@ -2192,7 +2266,7 @@ def save_state() -> None:
 # ---------------------------------------------------------------------------
 
 load_state()
-ensure_bot_commands()
+ensure_bot_profile()
 _start_timeout_worker()
 _start_followup_worker()
 _start_retention_worker()
