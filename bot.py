@@ -58,16 +58,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger("turbot")
 
+def _env_int(name: str, default: int = 0) -> int:
+    """Parse int env var; empty/invalid values fall back to default (safe for Render)."""
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        logger.warning("Invalid %s=%r — using default %s", name, raw, default)
+        return default
+
+
 BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
-ADMIN_ID          = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID          = _env_int("ADMIN_ID", 0)
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 AI_MODE           = os.getenv("AI_MODE", "groq").lower().strip()
-PORT                 = int(os.getenv("PORT", "5000"))
+PORT                 = _env_int("PORT", 5000)
 STATE_FILE           = os.getenv("STATE_FILE", "bot_state.json")
 DATABASE_PATH        = os.getenv("DATABASE_PATH", "bot_state.sqlite")
 TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", "")
-DIALOG_TIMEOUT_HOURS = int(os.getenv("DIALOG_TIMEOUT_HOURS", "6"))
+DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
 
@@ -2681,23 +2693,43 @@ def save_state() -> None:
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
+# Keep import-time work light: gunicorn must bind 0.0.0.0:$PORT quickly.
+# Render scans for an open port during deploy; blocking Telegram/MDT HTTP
+# here caused "No open ports detected, continuing to scan...".
 
 load_state()
-ensure_bot_profile()
 _start_timeout_worker()
 _start_followup_worker()
 _start_retention_worker()
 
-if MDT_ENABLED:
-    _mdt_load_countries()
-
 logger.info(
-    "TurBot started (port=%s, admin_set=%s, groq_set=%s, webhook_secret_set=%s)",
+    "TurBot loaded (port=%s, admin_set=%s, groq_set=%s, webhook_secret_set=%s)",
     PORT,
     bool(ADMIN_ID),
     bool(GROQ_API_KEY),
     bool(TELEGRAM_SECRET_TOKEN),
 )
+
+
+def _deferred_network_startup() -> None:
+    """Telegram profile + MDT country list — must not delay HTTP port bind."""
+    try:
+        ensure_bot_profile()
+    except Exception as exc:
+        logger.warning("ensure_bot_profile failed: %s", exc)
+    if MDT_ENABLED:
+        try:
+            _mdt_load_countries()
+        except Exception as exc:
+            logger.warning("MDT country load failed: %s", exc)
+    logger.info("Deferred network startup finished")
+
+
+threading.Thread(
+    target=_deferred_network_startup,
+    name="startup-network",
+    daemon=True,
+).start()
 
 import signal as _signal_module
 
