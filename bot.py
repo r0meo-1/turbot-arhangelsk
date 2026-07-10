@@ -63,6 +63,31 @@ TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", "")
 DIALOG_TIMEOUT_HOURS = int(os.getenv("DIALOG_TIMEOUT_HOURS", "6"))
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
+
+def _parse_chat_ids(raw: str) -> List[int]:
+    """Parse comma-separated Telegram chat IDs; skip empty/invalid parts."""
+    ids: List[int] = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError:
+            logger.warning("Invalid chat id in LEAD_NOTIFY_IDS: %r", part)
+    return ids
+
+
+# Who receives new leads in Telegram. LEAD_NOTIFY_IDS wins if set; otherwise ADMIN_ID.
+# Comma-separated chat IDs, e.g. "123456789,987654321".
+_lead_notify_raw = os.getenv("LEAD_NOTIFY_IDS", "").strip()
+if _lead_notify_raw:
+    LEAD_NOTIFY_IDS: List[int] = list(dict.fromkeys(_parse_chat_ids(_lead_notify_raw)))
+elif ADMIN_ID:
+    LEAD_NOTIFY_IDS = [ADMIN_ID]
+else:
+    LEAD_NOTIFY_IDS = []
+
 # --- Personal-data compliance (152-ФЗ) ------------------------------------
 # URL of the privacy policy / consent text shown to users before their personal
 # data (name, phone) is collected. Operators of RF personal data MUST publish
@@ -109,6 +134,12 @@ if not BOT_TOKEN:
     logger.warning("BOT_TOKEN is not set — bot will not work!")
 if not ADMIN_ID:
     logger.warning("ADMIN_ID is not set — admin features disabled.")
+if not LEAD_NOTIFY_IDS:
+    logger.warning(
+        "LEAD_NOTIFY_IDS/ADMIN_ID not set — completed leads will NOT be sent to Telegram."
+    )
+else:
+    logger.info("Lead Telegram recipients: %s", LEAD_NOTIFY_IDS)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -127,13 +158,28 @@ USER_HELP = (
     "  /privacy — политика обработки персональных данных\n"
     "  /delete — удалить мои данные и отозвать согласие\n"
     "  /help — эта справка\n\n"
-    "Во время диалога доступны кнопки:\n"
-    "  ◀️ Назад — вернуться к прошлому шагу\n"
-    "  ❌ Отменить — прервать заявку\n"
+    "Во время диалога жмите кнопки под сообщениями (inline):\n"
+    "  направления, число человек, ◀️ Назад, ❌ Отменить\n"
     "  📱 Отправить номер — поделиться контактом\n\n"
     "📋 ИП Замятина Мария Андреевна\n"
     "ТА «АПРЕЛЬ тур» · ОГРНИП 290211659807"
 )
+
+# Inline callback_data (≤64 bytes). Stable codes so button labels can change freely.
+CB_CONSENT_YES = "c:yes"
+CB_CONSENT_NO = "c:no"
+CB_DEST_PREFIX = "d:"
+CB_PEOPLE_PREFIX = "p:"
+CB_BACK = "nav:back"
+CB_CANCEL = "nav:cancel"
+
+BOT_COMMANDS = [
+    {"command": "start", "description": "Начать подбор тура"},
+    {"command": "help", "description": "Справка"},
+    {"command": "cancel", "description": "Отменить заявку"},
+    {"command": "privacy", "description": "Политика ПДн"},
+    {"command": "delete", "description": "Удалить мои данные"},
+]
 
 
 def _consent_text() -> str:
@@ -772,6 +818,59 @@ def send_typing(chat_id: int) -> None:
         pass
 
 
+def answer_callback(callback_query_id: str, text: str = "") -> None:
+    """Acknowledge a callback_query so Telegram stops the loading spinner."""
+    if not BOT_TOKEN or not callback_query_id:
+        return
+    payload: Dict[str, Any] = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text[:200]
+    try:
+        telegram_session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery",
+            json=payload,
+            timeout=5,
+        )
+    except Exception as exc:
+        logger.debug("answerCallbackQuery failed: %s", exc)
+
+
+def clear_inline_keyboard(chat_id: int, message_id: int) -> None:
+    """Remove inline buttons from a message after the user picks one."""
+    if not BOT_TOKEN:
+        return
+    try:
+        telegram_session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageReplyMarkup",
+            json={
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reply_markup": {"inline_keyboard": []},
+            },
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
+def ensure_bot_commands() -> None:
+    """Register the slash-command menu via API (no BotFather button setup needed)."""
+    if not BOT_TOKEN:
+        return
+    try:
+        resp = telegram_session.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands",
+            json={"commands": BOT_COMMANDS},
+            timeout=HTTP_TIMEOUT,
+        )
+        if resp.status_code == 200 and resp.json().get("ok"):
+            logger.info("Bot commands registered (%s)", len(BOT_COMMANDS))
+        else:
+            logger.warning("setMyCommands failed: %s", resp.text[:200])
+    except Exception as exc:
+        logger.warning("setMyCommands error: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Admin error alerting
 # ---------------------------------------------------------------------------
@@ -948,16 +1047,21 @@ def send_lead_to_mdt(
     )
 
 
+def _inline_btn(text: str, callback_data: str) -> Dict[str, str]:
+    return {"text": text, "callback_data": callback_data}
+
+
+def inline_keyboard(rows: List[List[Dict[str, str]]]) -> str:
+    """Build an InlineKeyboardMarkup JSON string (buttons under the message)."""
+    return json.dumps({"inline_keyboard": rows})
+
+
 def reply_keyboard(
     options: list,
     one_time: bool = True,
     extra_rows: Optional[list] = None,
 ) -> str:
-    """Build a ReplyKeyboardMarkup JSON string.
-
-    `options` are rendered as one button per row. `extra_rows` (list of rows)
-    are appended unchanged and can contain strings or KeyboardButton dicts.
-    """
+    """Build a ReplyKeyboardMarkup JSON string (legacy; prefer inline_keyboard)."""
     rows = [[opt] for opt in options]
     if extra_rows:
         rows.extend(extra_rows)
@@ -968,8 +1072,55 @@ def reply_keyboard(
     })
 
 
+def kb_consent() -> str:
+    """Inline: agree / decline personal-data consent."""
+    return inline_keyboard([[
+        _inline_btn(CONSENT_YES_TEXT, CB_CONSENT_YES),
+        _inline_btn(CONSENT_NO_TEXT, CB_CONSENT_NO),
+    ]])
+
+
+def kb_destinations() -> str:
+    """Inline: popular destinations + cancel."""
+    rows = [
+        [_inline_btn(label, f"{CB_DEST_PREFIX}{i}")]
+        for i, label in enumerate(POPULAR_DESTINATIONS)
+    ]
+    rows.append([_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)])
+    return inline_keyboard(rows)
+
+
+def kb_people() -> str:
+    """Inline: party size + back/cancel."""
+    # Two rows of people counts, then navigation.
+    opts = PEOPLE_OPTIONS
+    mid = (len(opts) + 1) // 2
+    rows = [
+        [_inline_btn(p, f"{CB_PEOPLE_PREFIX}{p}") for p in opts[:mid]],
+        [_inline_btn(p, f"{CB_PEOPLE_PREFIX}{p}") for p in opts[mid:]],
+        [
+            _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+            _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+        ],
+    ]
+    return inline_keyboard(rows)
+
+
+def kb_nav(*, include_back: bool = True) -> str:
+    """Inline: back + cancel (for free-text steps)."""
+    row: List[Dict[str, str]] = []
+    if include_back:
+        row.append(_inline_btn(BACK_BUTTON_TEXT, CB_BACK))
+    row.append(_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL))
+    return inline_keyboard([row])
+
+
 def contact_keyboard() -> str:
-    """Reply keyboard with a contact-sharing button plus navigation."""
+    """Reply keyboard for contact share (Telegram only supports request_contact here).
+
+    Navigation uses inline on the same message when possible; back/cancel also
+    work as reply buttons so the user can still leave the phone step.
+    """
     return json.dumps({
         "keyboard": [
             [{"text": SHARE_CONTACT_TEXT, "request_contact": True}],
@@ -977,7 +1128,7 @@ def contact_keyboard() -> str:
             [CANCEL_BUTTON_TEXT],
         ],
         "resize_keyboard": True,
-        "one_time_keyboard": False,
+        "one_time_keyboard": True,
     })
 
 
@@ -1308,10 +1459,7 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
         send_message(
             chat_id,
             _consent_text(),
-            reply_markup=reply_keyboard(
-                [CONSENT_YES_TEXT, CONSENT_NO_TEXT],
-                one_time=False,
-            ),
+            reply_markup=kb_consent(),
         )
         return
     _begin_destination(chat_id, first_name)
@@ -1327,11 +1475,8 @@ def _begin_destination(chat_id: int, first_name: str = "") -> None:
         chat_id,
         f"🌴 Здравствуйте{name}! Я помогу подобрать тур под ваши пожелания.\n\n"
         "📍 Куда бы вы хотели отправиться?\n\n"
-        "Выберите из популярных направлений или напишите своё:",
-        reply_markup=reply_keyboard(
-            POPULAR_DESTINATIONS,
-            extra_rows=[[CANCEL_BUTTON_TEXT]],
-        ),
+        "Выберите направление кнопкой или напишите своё:",
+        reply_markup=kb_destinations(),
     )
 
 
@@ -1357,12 +1502,12 @@ def handle_cancel(chat_id: int) -> None:
 
 def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     """Handle the user's answer to the personal-data consent prompt."""
-    if text == CONSENT_YES_TEXT:
+    if text == CONSENT_YES_TEXT or text == CB_CONSENT_YES:
         set_consent(chat_id)
         from_info = message.get("from", {})
         _begin_destination(chat_id, from_info.get("first_name", ""))
         return
-    if text == CONSENT_NO_TEXT:
+    if text == CONSENT_NO_TEXT or text == CB_CONSENT_NO:
         with _lock:
             user_data.pop(chat_id, None)
         _mark_dirty(chat_id, user=False)
@@ -1377,7 +1522,7 @@ def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
     send_message(
         chat_id,
         "Пожалуйста, нажмите «✅ Согласен» или «❌ Отказаться».",
-        reply_markup=reply_keyboard([CONSENT_YES_TEXT, CONSENT_NO_TEXT], one_time=False),
+        reply_markup=kb_consent(),
     )
 
 
@@ -1387,11 +1532,7 @@ def _step_destination(chat_id: int, text: str, message: Dict[str, Any], info: Di
         send_message(
             chat_id,
             "✍️ Напишите ваше направление:",
-            reply_markup=reply_keyboard(
-                [],
-                one_time=False,
-                extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-            ),
+            reply_markup=kb_nav(include_back=True),
         )
         return
     info["destination"] = dest
@@ -1399,11 +1540,7 @@ def _step_destination(chat_id: int, text: str, message: Dict[str, Any], info: Di
     send_message(
         chat_id,
         "📅 На какие даты планируете поездку? (например: 15-22 июня)",
-        reply_markup=reply_keyboard(
-            [],
-            one_time=False,
-            extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-        ),
+        reply_markup=kb_nav(include_back=True),
     )
 
 
@@ -1413,10 +1550,7 @@ def _step_dates(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
     send_message(
         chat_id,
         "👥 Сколько человек будет путешествовать?",
-        reply_markup=reply_keyboard(
-            PEOPLE_OPTIONS,
-            extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-        ),
+        reply_markup=kb_people(),
     )
 
 
@@ -1426,10 +1560,7 @@ def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         send_message(
             chat_id,
             "Пожалуйста, укажите число от 1 до 50 (или «5+»).",
-            reply_markup=reply_keyboard(
-                PEOPLE_OPTIONS,
-                extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-            ),
+            reply_markup=kb_people(),
         )
         return
     info["people"] = value
@@ -1437,11 +1568,7 @@ def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
     send_message(
         chat_id,
         "💰 Какой бюджет рассматриваете на человека? (в рублях)",
-        reply_markup=reply_keyboard(
-            [],
-            one_time=False,
-            extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-        ),
+        reply_markup=kb_nav(include_back=True),
     )
 
 
@@ -1451,18 +1578,15 @@ def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         send_message(
             chat_id,
             "Пожалуйста, укажите бюджет числом (например: 60000).",
-            reply_markup=reply_keyboard(
-                [],
-                one_time=False,
-                extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-            ),
+            reply_markup=kb_nav(include_back=True),
         )
         return
     info["budget"] = value
     info["state"] = STATE_PHONE
     send_message(
         chat_id,
-        "📱 Укажите ваш номер телефона для связи:",
+        "📱 Укажите ваш номер телефона для связи "
+        "(кнопка ниже или введите номер вручную):",
         reply_markup=contact_keyboard(),
     )
 
@@ -1472,7 +1596,8 @@ def _step_phone(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
     if not ok:
         send_message(
             chat_id,
-            "Похоже, номер некорректен. Попробуйте в формате +7XXXXXXXXXX.",
+            "Похоже, номер некорректен. Попробуйте в формате +7XXXXXXXXXX "
+            "или нажмите «📱 Отправить номер».",
             reply_markup=contact_keyboard(),
         )
         return
@@ -1498,50 +1623,37 @@ PREVIOUS_STATE: Dict[str, str] = {
 
 
 def _prompt_for_state(chat_id: int, state: str) -> None:
-    """Re-ask the question for the given dialog state (used by /back)."""
+    """Re-ask the question for the given dialog state (used by back)."""
     if state == STATE_DESTINATION:
         send_message(
             chat_id,
             "📍 Куда бы вы хотели отправиться?\n\n"
-            "Выберите из популярных направлений или напишите своё:",
-            reply_markup=reply_keyboard(
-                POPULAR_DESTINATIONS,
-                extra_rows=[[CANCEL_BUTTON_TEXT]],
-            ),
+            "Выберите направление кнопкой или напишите своё:",
+            reply_markup=kb_destinations(),
         )
     elif state == STATE_DATES:
         send_message(
             chat_id,
             "📅 На какие даты планируете поездку? (например: 15-22 июня)",
-            reply_markup=reply_keyboard(
-                [],
-                one_time=False,
-                extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-            ),
+            reply_markup=kb_nav(include_back=True),
         )
     elif state == STATE_PEOPLE:
         send_message(
             chat_id,
             "👥 Сколько человек будет путешествовать?",
-            reply_markup=reply_keyboard(
-                PEOPLE_OPTIONS,
-                extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-            ),
+            reply_markup=kb_people(),
         )
     elif state == STATE_BUDGET:
         send_message(
             chat_id,
             "💰 Какой бюджет рассматриваете на человека? (в рублях)",
-            reply_markup=reply_keyboard(
-                [],
-                one_time=False,
-                extra_rows=[[BACK_BUTTON_TEXT], [CANCEL_BUTTON_TEXT]],
-            ),
+            reply_markup=kb_nav(include_back=True),
         )
     elif state == STATE_PHONE:
         send_message(
             chat_id,
-            "📱 Укажите ваш номер телефона для связи:",
+            "📱 Укажите ваш номер телефона для связи "
+            "(кнопка ниже или введите номер вручную):",
             reply_markup=contact_keyboard(),
         )
 
@@ -1552,8 +1664,15 @@ def _go_back(chat_id: int) -> None:
     state = info.get("state")
     previous = PREVIOUS_STATE.get(state)
     if previous is None:
-        send_message(chat_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отменить».")
+        send_message(
+            chat_id,
+            "Вы на первом шаге. Можно отменить заявку кнопкой «Отменить».",
+            reply_markup=kb_nav(include_back=False) if state == STATE_DESTINATION else None,
+        )
         return
+    # Leaving the phone step — drop the reply contact keyboard.
+    if state == STATE_PHONE:
+        send_message(chat_id, "◀️ Назад", reply_markup=hide_keyboard())
     info["state"] = previous
     _mark_dirty(chat_id, user=False)
     _prompt_for_state(chat_id, previous)
@@ -1600,22 +1719,82 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
     )
 
 
-def _notify_admin(chat_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
-    """2. Forward the lead to the admin (if configured)."""
-    if not ADMIN_ID:
-        return
-    send_message(
-        ADMIN_ID,
-        "🔔 Новая заявка!\n\n"
-        f"От: {_esc(client_name or 'без имени')} (ID: {chat_id})\n"
+def _format_lead_notify_text(
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+    username: str = "",
+    source_label: str = "Telegram",
+) -> str:
+    """Build HTML text for a new-lead Telegram notification."""
+    name = _esc(client_name or "без имени")
+    # Deep-link to the client when Telegram allows it.
+    who = f'<a href="tg://user?id={chat_id}">{name}</a>'
+    if username:
+        who = f"{who} (@{_esc(username)})"
+    return (
+        f"🔔 <b>Новая заявка</b> ({_esc(source_label)})\n"
+        f"<i>Личное уведомление администратору</i>\n\n"
+        f"От: {who}\n"
+        f"ID: <code>{chat_id}</code>\n"
         f"📍 {_esc(info.get('destination', '?'))}\n"
         f"📅 {_esc(info.get('dates', '?'))}\n"
         f"👥 {_esc(info.get('people', '?'))} чел\n"
         f"💰 {_esc(info.get('budget', '?'))}₽\n"
-        f"📱 {_esc(phone)}\n\n"
-        f"Ответить: /send {chat_id} ваше сообщение",
-        parse_mode="HTML",
+        f"📱 <code>{_esc(phone)}</code>\n\n"
+        f"Ответить клиенту: /send {chat_id} текст"
     )
+
+
+def _notify_admin(
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+    username: str = "",
+) -> None:
+    """2. Forward the lead to the bot creator / admins in Telegram."""
+    recipients = LEAD_NOTIFY_IDS
+    if not recipients:
+        logger.warning(
+            "Lead from chat_id=%s saved but not delivered to Telegram "
+            "(set ADMIN_ID or LEAD_NOTIFY_IDS)",
+            chat_id,
+        )
+        return
+
+    text = _format_lead_notify_text(
+        chat_id, info, phone, client_name, username=username, source_label="Telegram",
+    )
+    for recipient in recipients:
+        resp = send_message(recipient, text, parse_mode="HTML")
+        if resp is not None and getattr(resp, "status_code", 0) == 200:
+            logger.info("Lead from %s delivered to Telegram chat %s", chat_id, recipient)
+            continue
+        # Fallback without HTML if Telegram rejected parse_mode (rare).
+        if resp is not None and getattr(resp, "status_code", 0) != 200:
+            plain = (
+                f"🔔 Новая заявка (Telegram)!\n\n"
+                f"От: {client_name or 'без имени'}"
+                f"{(' @' + username) if username else ''}\n"
+                f"ID: {chat_id}\n"
+                f"📍 {info.get('destination', '?')}\n"
+                f"📅 {info.get('dates', '?')}\n"
+                f"👥 {info.get('people', '?')} чел\n"
+                f"💰 {info.get('budget', '?')}₽\n"
+                f"📱 {phone}\n\n"
+                f"Ответить: /send {chat_id} ваше сообщение"
+            )
+            resp2 = send_message(recipient, plain)
+            if resp2 is not None and getattr(resp2, "status_code", 0) == 200:
+                logger.info(
+                    "Lead from %s delivered to %s (plain-text fallback)", chat_id, recipient,
+                )
+                continue
+        logger.error(
+            "Failed to deliver lead from %s to Telegram chat %s", chat_id, recipient,
+        )
 
 
 def _send_ai_blurb(chat_id: int, info: Dict[str, Any]) -> None:
@@ -1665,8 +1844,9 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None
         logger.error("Failed to save lead for %s: %s", chat_id, exc)
         _alert_admin_error("Failed to save lead", exc)
 
-    _confirm_to_user(chat_id, info, phone)            # 1. Confirm to user
-    _notify_admin(chat_id, info, phone, client_name)  # 2. Notify admin (sync — ops must see it)
+    _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
+    # 2. Notify bot creator / admins in Telegram (sync — ops must see it)
+    _notify_admin(chat_id, info, phone, client_name, username=username or "")
     with _lock:                                       # 3. Clean up session promptly
         user_data.pop(chat_id, None)
     delete_session(chat_id)
@@ -1706,6 +1886,8 @@ def health() -> Any:
         "status": "ok",
         "bot_token_configured": bool(BOT_TOKEN),
         "admin_id_configured": bool(ADMIN_ID),
+        "lead_notify_configured": bool(LEAD_NOTIFY_IDS),
+        "lead_notify_count": len(LEAD_NOTIFY_IDS),
         "groq_configured": bool(GROQ_API_KEY),
         "ai_mode": AI_MODE,
         "mdt_enabled": MDT_ENABLED,
@@ -1718,19 +1900,118 @@ def health() -> Any:
     })
 
 
-def _process_update(data: Dict[str, Any]) -> None:
-    """Parse one Telegram update and route it to the right handler."""
-    # Deduplicate: Telegram may retry the same update_id.
+def _remember_update_id(data: Dict[str, Any]) -> bool:
+    """Return True if this update_id is new; False if it is a Telegram retry."""
     update_id = data.get("update_id")
-    if update_id is not None:
-        with _lock:
-            if update_id in _seen_update_ids:
-                logger.debug("Skipping duplicate update_id=%s", update_id)
-                return
-            _seen_update_ids[update_id] = None
-            # Drop oldest IDs when full — never wipe the whole set.
-            while len(_seen_update_ids) > _SEEN_UPDATE_MAX:
-                _seen_update_ids.popitem(last=False)
+    if update_id is None:
+        return True
+    with _lock:
+        if update_id in _seen_update_ids:
+            logger.debug("Skipping duplicate update_id=%s", update_id)
+            return False
+        _seen_update_ids[update_id] = None
+        while len(_seen_update_ids) > _SEEN_UPDATE_MAX:
+            _seen_update_ids.popitem(last=False)
+    return True
+
+
+def _touch_user(chat_id: int, first_name: str = "", username: str = "") -> None:
+    """Upsert user meta and bump open-session activity."""
+    with _lock:
+        meta = all_users.setdefault(chat_id, {})
+        if first_name:
+            meta["first_name"] = first_name
+        if username:
+            meta["username"] = username
+        meta["last_seen"] = int(time.time())
+        if chat_id in user_data:
+            user_data[chat_id]["updated_at"] = int(time.time())
+            session_open = True
+        else:
+            session_open = False
+    _mark_dirty(chat_id, session=session_open)
+
+
+def _process_callback(data: Dict[str, Any]) -> None:
+    """Handle inline button presses (callback_query)."""
+    if not _remember_update_id(data):
+        return
+
+    cq = data.get("callback_query") or {}
+    cq_id = cq.get("id", "")
+    cb_data = (cq.get("data") or "").strip()
+    from_info = cq.get("from") or {}
+    message = cq.get("message") or {}
+    chat = message.get("chat") or {}
+    chat_id = chat.get("id")
+    message_id = message.get("message_id")
+
+    answer_callback(cq_id)
+    if chat_id is None or not cb_data:
+        return
+
+    first_name = from_info.get("first_name", "")
+    username = from_info.get("username", "")
+    _touch_user(chat_id, first_name, username)
+
+    if message_id is not None:
+        clear_inline_keyboard(chat_id, message_id)
+
+    # Navigation callbacks work from any dialog state.
+    if cb_data == CB_CANCEL:
+        handle_cancel(chat_id)
+        return
+    if cb_data == CB_BACK:
+        if chat_id in user_data:
+            _go_back(chat_id)
+        else:
+            send_message(chat_id, "Для начала работы отправьте /start")
+        return
+
+    info = user_data.get(chat_id)
+    if info is None:
+        send_message(chat_id, "Для начала работы отправьте /start")
+        return
+
+    # Synthetic message so step handlers can read from/user fields.
+    synthetic = {"from": from_info, "chat": chat}
+
+    if cb_data in (CB_CONSENT_YES, CB_CONSENT_NO):
+        _step_consent(chat_id, cb_data, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_DEST_PREFIX):
+        try:
+            idx = int(cb_data[len(CB_DEST_PREFIX):])
+            label = POPULAR_DESTINATIONS[idx]
+        except (ValueError, IndexError):
+            send_message(chat_id, "Кнопка устарела. Выберите направление ещё раз.",
+                         reply_markup=kb_destinations())
+            return
+        if info.get("state") != STATE_DESTINATION:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_destination(chat_id, label, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_PEOPLE_PREFIX):
+        people = cb_data[len(CB_PEOPLE_PREFIX):]
+        if info.get("state") != STATE_PEOPLE:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_people(chat_id, people, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    send_message(chat_id, "Неизвестная кнопка. /start — начать заново.")
+
+
+def _process_update(data: Dict[str, Any]) -> None:
+    """Parse one Telegram message update and route it to the right handler."""
+    if not _remember_update_id(data):
+        return
     message = data["message"]
     chat_id = message["chat"]["id"]
     text = message.get("text", "")
@@ -1738,20 +2019,7 @@ def _process_update(data: Dict[str, Any]) -> None:
     first_name = from_info.get("first_name", "")
     username = from_info.get("username", "")
 
-    # Track every user (preserving an existing consent timestamp).
-    with _lock:
-        meta = all_users.setdefault(chat_id, {})
-        meta["first_name"] = first_name
-        meta["username"] = username
-        meta["last_seen"] = int(time.time())
-        # Update activity timestamp for open dialogs so the timeout worker
-        # doesn't cancel them while the user is actively typing.
-        if chat_id in user_data:
-            user_data[chat_id]["updated_at"] = int(time.time())
-            session_open = True
-        else:
-            session_open = False
-    _mark_dirty(chat_id, session=session_open)
+    _touch_user(chat_id, first_name, username)
 
     # Shared contact (e.g. phone button)
     contact = message.get("contact")
@@ -1805,7 +2073,7 @@ def _process_update(data: Dict[str, Any]) -> None:
         handle_cancel(chat_id)
         return
 
-    # --- Navigation inside the dialog ---
+    # --- Navigation inside the dialog (reply-keyboard fallback on phone step) ---
     if text == BACK_BUTTON_TEXT:
         if chat_id in user_data:
             _go_back(chat_id)
@@ -1850,7 +2118,9 @@ def webhook() -> Tuple[str, int]:
 
     try:
         data = request.get_json(silent=True)
-        if data and "message" in data:
+        if data and "callback_query" in data:
+            _process_callback(data)
+        elif data and "message" in data:
             _process_update(data)
     except Exception as exc:
         logger.error("Error in webhook: %s", exc, exc_info=True)
@@ -1922,6 +2192,7 @@ def save_state() -> None:
 # ---------------------------------------------------------------------------
 
 load_state()
+ensure_bot_commands()
 _start_timeout_worker()
 _start_followup_worker()
 _start_retention_worker()

@@ -1,5 +1,6 @@
 """Unit tests for the TurBot webhook flow and helpers."""
 
+import json
 import os
 import time
 import tempfile
@@ -21,6 +22,12 @@ import bot
 import pytest
 
 
+class _OkResp:
+    """Minimal stand-in for requests.Response with HTTP 200."""
+    status_code = 200
+    text = '{"ok":true}'
+
+
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch):
     """Reset in-memory state and silence Telegram calls before each test."""
@@ -33,8 +40,10 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM users")
         cur.execute("DELETE FROM leads")
     bot._seen_update_ids.clear()
-    monkeypatch.setattr(bot, "send_message", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "answer_callback", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "clear_inline_keyboard", lambda *a, **k: None)
     monkeypatch.setattr(bot, "save_state", lambda: None)
 
 
@@ -140,10 +149,32 @@ def _post(client, chat_id, text=None, contact=None):
     )
 
 
+def _callback(client, chat_id, data, update_id=None):
+    """Post a Telegram callback_query (inline button press)."""
+    payload = {
+        "callback_query": {
+            "id": f"cq-{chat_id}-{data}",
+            "from": {"first_name": "Test", "id": chat_id},
+            "message": {
+                "message_id": 1,
+                "chat": {"id": chat_id},
+            },
+            "data": data,
+        }
+    }
+    if update_id is not None:
+        payload["update_id"] = update_id
+    return client.post(
+        "/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"},
+        json=payload,
+    )
+
+
 def _consent(client, chat_id):
     """Grant personal-data consent so the dialog proceeds to data collection."""
     _post(client, chat_id, "/start")
-    _post(client, chat_id, bot.CONSENT_YES_TEXT)
+    _callback(client, chat_id, bot.CB_CONSENT_YES)
 
 
 def test_start_asks_for_consent_first(client):
@@ -155,16 +186,24 @@ def test_start_asks_for_consent_first(client):
 
 def test_consent_accept_enters_dialog(client):
     _post(client, 111, "/start")
-    _post(client, 111, bot.CONSENT_YES_TEXT)
+    _callback(client, 111, bot.CB_CONSENT_YES)
     assert bot.has_consent(111)
     assert bot.user_data[111]["state"] == bot.STATE_DESTINATION
 
 
 def test_consent_decline_aborts(client):
     _post(client, 112, "/start")
-    _post(client, 112, bot.CONSENT_NO_TEXT)
+    _callback(client, 112, bot.CB_CONSENT_NO)
     assert 112 not in bot.user_data
     assert not bot.has_consent(112)
+
+
+def test_consent_accept_via_text_still_works(client):
+    """Typed consent label remains supported for backward compatibility."""
+    _post(client, 116, "/start")
+    _post(client, 116, bot.CONSENT_YES_TEXT)
+    assert bot.has_consent(116)
+    assert bot.user_data[116]["state"] == bot.STATE_DESTINATION
 
 
 def test_returning_user_skips_consent(client):
@@ -217,6 +256,51 @@ def test_dialog_completion_with_contact(client):
     assert row is not None
     assert row[0] == "+79161234567"
     assert "Египет" in (row[1] or "")
+
+
+def test_dialog_completion_via_inline_buttons(client):
+    """Full funnel using only inline callbacks for choice steps."""
+    _consent(client, 223)
+    # Destination index 0 → first POPULAR_DESTINATIONS entry
+    _callback(client, 223, f"{bot.CB_DEST_PREFIX}0")
+    assert bot.user_data[223]["state"] == bot.STATE_DATES
+    assert "Египет" in bot.user_data[223].get("destination", "")
+
+    _post(client, 223, "10-17 июля")
+    assert bot.user_data[223]["state"] == bot.STATE_PEOPLE
+
+    _callback(client, 223, f"{bot.CB_PEOPLE_PREFIX}2")
+    assert bot.user_data[223]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[223]["people"] == "2"
+
+    _post(client, 223, "80000")
+    assert bot.user_data[223]["state"] == bot.STATE_PHONE
+
+    _post(client, 223, "+79161234567")
+    assert 223 not in bot.user_data
+    assert bot.count_leads() == 1
+
+
+def test_inline_cancel_aborts_dialog(client):
+    _consent(client, 224)
+    _callback(client, 224, bot.CB_CANCEL)
+    assert 224 not in bot.user_data
+
+
+def test_inline_keyboard_builders():
+    consent = json.loads(bot.kb_consent())
+    assert "inline_keyboard" in consent
+    assert consent["inline_keyboard"][0][0]["callback_data"] == bot.CB_CONSENT_YES
+
+    dest = json.loads(bot.kb_destinations())
+    assert len(dest["inline_keyboard"]) == len(bot.POPULAR_DESTINATIONS) + 1
+    assert dest["inline_keyboard"][0][0]["callback_data"].startswith(bot.CB_DEST_PREFIX)
+
+    people = json.loads(bot.kb_people())
+    flat = [b["callback_data"] for row in people["inline_keyboard"] for b in row]
+    assert f"{bot.CB_PEOPLE_PREFIX}2" in flat
+    assert bot.CB_BACK in flat
+    assert bot.CB_CANCEL in flat
 
 
 def test_back_button(client):
@@ -544,6 +628,45 @@ def test_html_escape_in_notify(client):
     # If we got here without crashing, HTML was escaped properly
     assert 802 not in bot.user_data
     bot.delete_user_data(802)
+
+
+def test_lead_is_sent_to_admin_telegram(client, monkeypatch):
+    """Completed lead must be forwarded to ADMIN_ID / LEAD_NOTIFY_IDS in Telegram."""
+    sent = []
+
+    def capture(chat_id, text, parse_mode=None, reply_markup=None):
+        sent.append({
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+        })
+        return _OkResp()
+
+    monkeypatch.setattr(bot, "send_message", capture)
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+
+    _consent(client, 903)
+    for text in ["Турция", "1-7 августа", "2", "70000"]:
+        _post(client, 903, text)
+    _post(client, 903, "+79161234567")
+
+    assert 903 not in bot.user_data
+    assert bot.count_leads() == 1
+
+    admin_msgs = [m for m in sent if m["chat_id"] == 999]
+    assert admin_msgs, "admin must receive at least one Telegram message with the lead"
+    body = admin_msgs[-1]["text"]
+    assert "Новая заявка" in body
+    assert "Турция" in body
+    assert "+79161234567" in body
+    assert "70000" in body
+    assert admin_msgs[-1]["parse_mode"] == "HTML"
+
+
+def test_parse_chat_ids():
+    assert bot._parse_chat_ids("1, 2,3") == [1, 2, 3]
+    assert bot._parse_chat_ids("") == []
+    assert bot._parse_chat_ids("bad,42") == [42]
 
 
 def test_graceful_shutdown_handler():

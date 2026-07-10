@@ -77,6 +77,30 @@ ADMIN_ID          = int(os.getenv("ADMIN_ID", "0"))
 DIALOG_TIMEOUT_HOURS = int(os.getenv("DIALOG_TIMEOUT_HOURS", "6"))
 HTTP_TIMEOUT      = 15
 
+
+def _parse_chat_ids(raw: str) -> List[int]:
+    """Parse comma-separated chat IDs; skip empty/invalid parts."""
+    ids: List[int] = []
+    for part in (raw or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError:
+            logger.warning("Invalid chat id in LEAD_NOTIFY_IDS: %r", part)
+    return ids
+
+
+# Who receives new leads in Telegram (admin bot). LEAD_NOTIFY_IDS or ADMIN_ID.
+_lead_notify_raw = os.getenv("LEAD_NOTIFY_IDS", "").strip()
+if _lead_notify_raw:
+    LEAD_NOTIFY_IDS: List[int] = list(dict.fromkeys(_parse_chat_ids(_lead_notify_raw)))
+elif ADMIN_ID:
+    LEAD_NOTIFY_IDS = [ADMIN_ID]
+else:
+    LEAD_NOTIFY_IDS = []
+
 # MDT CRM (same env vars as Telegram bot)
 MDT_ENABLED    = os.getenv("MDT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
 MDT_ACCOUNT    = os.getenv("MDT_ACCOUNT", "")
@@ -831,19 +855,64 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
     )
 
 
-def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
-    if not ADMIN_ID:
+def _notify_admin_telegram(
+    user_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+) -> None:
+    """Deliver VK lead to the bot creator in Telegram (ADMIN_ID / LEAD_NOTIFY_IDS)."""
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
+    if not bot_token or not LEAD_NOTIFY_IDS:
         return
-    send_message(
-        ADMIN_ID,
+    text = (
         "🔔 Новая заявка (VK)!\n\n"
-        f"От: {client_name or 'без имени'} (ID: {user_id})\n"
+        f"От: {client_name or 'без имени'}\n"
+        f"VK ID: {user_id}\n"
         f"📍 {info.get('destination', '?')}\n"
         f"📅 {info.get('dates', '?')}\n"
         f"👥 {info.get('people', '?')} чел\n"
         f"💰 {info.get('budget', '?')}₽\n"
-        f"📱 {phone}",
+        f"📱 {phone}"
     )
+    for recipient in LEAD_NOTIFY_IDS:
+        try:
+            resp = http_session.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": recipient, "text": text},
+                timeout=HTTP_TIMEOUT,
+            )
+            if resp.status_code == 200:
+                logger.info("VK lead from %s delivered to Telegram chat %s", user_id, recipient)
+            else:
+                logger.error(
+                    "Telegram notify failed for %s→%s: %s",
+                    user_id, recipient, resp.text[:200],
+                )
+        except Exception as exc:
+            logger.error("Telegram notify error for VK lead %s: %s", user_id, exc)
+
+
+def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
+    """Notify admin: Telegram (creator) + optional VK peer if ADMIN_ID is a VK user."""
+    _notify_admin_telegram(user_id, info, phone, client_name)
+    if ADMIN_ID:
+        # Legacy: also ping ADMIN_ID inside VK (if it is a VK user id).
+        send_message(
+            ADMIN_ID,
+            "🔔 Новая заявка (VK)!\n\n"
+            f"От: {client_name or 'без имени'} (ID: {user_id})\n"
+            f"📍 {info.get('destination', '?')}\n"
+            f"📅 {info.get('dates', '?')}\n"
+            f"👥 {info.get('people', '?')} чел\n"
+            f"💰 {info.get('budget', '?')}₽\n"
+            f"📱 {phone}",
+        )
+    elif not LEAD_NOTIFY_IDS:
+        logger.warning(
+            "VK lead from %s not delivered: set ADMIN_ID or LEAD_NOTIFY_IDS (+ BOT_TOKEN for TG)",
+            user_id,
+        )
 
 
 # When true, MDT + AI run inline (tests). Production defers them off the webhook.
