@@ -1,10 +1,10 @@
-"""TurBot VK — Telegram-бот для турагентства «АПРЕЛЬ тур», версия для VK.com.
+"""TurBot VK — бот турагентства «АПРЕЛЬ тур» для VK.com.
 
-Самодостаточный Flask-webhook для группы ВКонтакте. Делит ту же логику диалога,
-AI-подборки, согласие 152-ФЗ и интеграцию с MDT CRM с Telegram-версией (bot.py),
-но использует VK Callback API и собственную SQLite-БД (DATABASE_PATH/VK_DATABASE_PATH).
+Самодостаточный Flask-webhook для группы ВКонтакте. Паритет с bot.py:
+soft/strict согласие, кнопки на всех шагах (даты, бюджет, люди),
+связь VK / телефон / Telegram, лиды в Telegram админу, MDT CRM.
 
-Деплой: отдельный процесс на той же VM (см. deploy/vk-turbot.service).
+Деплой: отдельный процесс (см. deploy/vk-turbot.service).
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ except ImportError:  # groq may not be installed in all environments
 from shared.constants import (
     STATE_BUDGET,
     STATE_CONSENT,
+    STATE_CONTACT,
     STATE_DATES,
     STATE_DESTINATION,
     STATE_PEOPLE,
@@ -41,6 +42,10 @@ from shared.constants import (
     CANCEL_BUTTON_TEXT,
     CONSENT_YES_TEXT,
     CONSENT_NO_TEXT,
+    START_BUTTON_TEXT,
+    CONTACT_TG_TEXT,
+    CONTACT_PHONE_TEXT,
+    CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
 )
 from shared.validation import validate_phone, validate_people, validate_budget
@@ -128,6 +133,11 @@ DATA_OPERATOR_NAME = os.getenv(
     "ИП Замятина Мария Андреевна (ТА «АПРЕЛЬ тур», ОГРНИП 290211659807)",
 )
 DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
+# soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
+# strict: classic «Согласен / Отказаться».
+CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
+if CONSENT_MODE not in ("soft", "strict"):
+    CONSENT_MODE = "soft"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -135,18 +145,52 @@ DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
 
 POPULAR_DESTINATIONS = POPULAR_DESTINATIONS_PLAIN
 
+# Quick picks (label on keyboard → value stored in lead). VK label ≤ 40 chars.
+DATE_PRESETS: List[Tuple[str, str]] = [
+    ("🏖 Выходные", "ближайшие выходные"),
+    ("📅 1–2 недели", "через 1-2 недели"),
+    ("🗓 Через месяц", "через месяц"),
+    ("☀️ Лето", "лето"),
+    ("❄️ Зима", "зима"),
+    ("🤷 Даты гибкие", "даты гибкие"),
+]
+BUDGET_PRESETS: List[Tuple[str, int]] = [
+    ("до 40 000 ₽", 40000),
+    ("60 000 ₽", 60000),
+    ("80 000 ₽", 80000),
+    ("100 000 ₽", 100000),
+    ("150 000 ₽", 150000),
+    ("200 000+ ₽", 200000),
+]
+DATE_CUSTOM_LABEL = "✏️ Свои даты"
+BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
+CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
+
 USER_HELP = (
-    "🤖 Я бот туристического агентства «АПРЕЛЬ тур».\n\n"
-    "Помогу подобрать тур по вашим пожеланиям и передам заявку менеджеру.\n\n"
+    "🌴 «АПРЕЛЬ тур» — подбор отдыха\n\n"
+    "Соберу короткую заявку и передам менеджеру. Можно почти всё кнопками.\n\n"
     "Команды:\n"
-    "  Начать — начать подбор тура\n"
-    "  Отмена — отменить текущую заявку\n"
-    "  Политика — политика обработки персональных данных\n"
-    "  Удалить — удалить мои данные и отозвать согласие\n"
+    "  Начать — подбор тура\n"
+    "  Отмена — отменить заявку\n"
+    "  Политика — персональные данные\n"
+    "  Удалить — стереть мои данные\n"
     "  Помощь — эта справка\n\n"
+    "Связь: VK / телефон / Telegram — на выбор.\n\n"
     "📋 ИП Замятина Мария Андреевна\n"
     "ТА «АПРЕЛЬ тур» · ОГРНИП 290211659807"
 )
+
+WELCOME_BODY = (
+    "Подберём тур под даты и бюджет — заявка уйдёт менеджеру.\n\n"
+    "Как это работает:\n"
+    "1) несколько вопросов (можно кнопками)\n"
+    "2) удобный способ связи: VK, телефон или Telegram\n"
+    "3) менеджер напишет или позвонит\n\n"
+    "Около минуты. Данные — только чтобы связаться (Политика).\n"
+    "Жмите кнопку ниже 👇"
+)
+
+HINT_START = "Чтобы подобрать тур, напишите «Начать» или нажмите кнопку.\nСправка — «Помощь»."
 
 # ---------------------------------------------------------------------------
 # Groq client
@@ -534,8 +578,21 @@ def _btn(label: str, color: str = "secondary", payload: Optional[Dict] = None) -
     return {"action": action, "color": color}
 
 
+def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) -> List[List[Dict[str, Any]]]:
+    rows: List[List[Dict[str, Any]]] = []
+    row: List[Dict[str, Any]] = []
+    for label in labels:
+        row.append(_btn(label, color))
+        if len(row) >= per_row:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return rows
+
+
 def _dest_keyboard() -> str:
-    rows = [[_btn(d, "primary")] for d in POPULAR_DESTINATIONS]
+    rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 2)
     rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
@@ -549,6 +606,14 @@ def _nav_keyboard(extra_top: Optional[List[Dict]] = None) -> str:
     return _keyboard(rows)
 
 
+def _dates_keyboard() -> str:
+    labels = [label for label, _ in DATE_PRESETS] + [DATE_CUSTOM_LABEL]
+    rows = _chunk_buttons(labels, "primary", 2)
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
+    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    return _keyboard(rows)
+
+
 def _people_keyboard() -> str:
     rows = [[_btn(p, "primary") for p in PEOPLE_OPTIONS]]
     rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
@@ -556,8 +621,33 @@ def _people_keyboard() -> str:
     return _keyboard(rows)
 
 
+def _budget_keyboard() -> str:
+    labels = [label for label, _ in BUDGET_PRESETS] + [BUDGET_CUSTOM_LABEL]
+    rows = _chunk_buttons(labels, "primary", 2)
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
+    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    return _keyboard(rows)
+
+
+def _contact_keyboard() -> str:
+    return _keyboard([
+        [_btn(CONTACT_VK_CHAT_LABEL, "positive")],
+        [_btn(CONTACT_PHONE_TEXT, "primary")],
+        [_btn(CONTACT_TG_TEXT, "primary")],
+        [_btn(BACK_BUTTON_TEXT, "secondary")],
+        [_btn(CANCEL_BUTTON_TEXT, "negative")],
+    ])
+
+
 def _consent_keyboard() -> str:
-    return _keyboard([[_btn(CONSENT_YES_TEXT, "positive")], [_btn(CONSENT_NO_TEXT, "negative")]])
+    return _keyboard([
+        [_btn(CONSENT_YES_TEXT, "positive")],
+        [_btn(CONSENT_NO_TEXT, "negative")],
+    ])
+
+
+def _soft_start_keyboard() -> str:
+    return _keyboard([[_btn(START_BUTTON_TEXT, "positive")]])
 
 
 def _hide_keyboard() -> str:
@@ -675,13 +765,34 @@ def _privacy_text() -> str:
 # Dialog handlers
 # ---------------------------------------------------------------------------
 
+def _welcome_text(first_name: str = "") -> str:
+    if first_name:
+        head = f"🌴 Добро пожаловать, {first_name}!"
+    else:
+        head = "🌴 Добро пожаловать в «АПРЕЛЬ тур»!"
+    return f"{head}\n\n{WELCOME_BODY}"
+
+
 def handle_start(user_id: int, first_name: str = "") -> None:
-    if not has_consent(user_id):
+    if CONSENT_MODE == "strict" and not has_consent(user_id):
         with _lock:
             user_data[user_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
         _mark_dirty(user_id)
+        send_message(user_id, _welcome_text(first_name))
         send_message(user_id, _consent_text(), keyboard=_consent_keyboard())
         return
+
+    if CONSENT_MODE == "soft" and not has_consent(user_id):
+        with _lock:
+            user_data[user_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+        _mark_dirty(user_id)
+        send_message(
+            user_id,
+            _welcome_text(first_name),
+            keyboard=_soft_start_keyboard(),
+        )
+        return
+
     _begin_destination(user_id, first_name)
 
 
@@ -692,9 +803,9 @@ def _begin_destination(user_id: int, first_name: str = "") -> None:
     name = f", {first_name}" if first_name else ""
     send_message(
         user_id,
-        f"🌴 Здравствуйте{name}! Я помогу подобрать тур под ваши пожелания.\n\n"
-        "📍 Куда бы вы хотели отправиться?\n\n"
-        "Выберите из популярных направлений или напишите своё:",
+        f"🌴 Отлично{name}! Давайте подберём тур.\n\n"
+        "📍 Куда хотите поехать?\n\n"
+        "Жмите кнопку — или напишите своё направление:",
         keyboard=_dest_keyboard(),
     )
 
@@ -705,32 +816,79 @@ def handle_cancel(user_id: int) -> None:
     if existed:
         _mark_dirty(user_id)
         delete_session(user_id)
-        send_message(user_id, "❌ Заявка отменена. Чтобы начать заново — напишите «Начать».",
-                      keyboard=_hide_keyboard())
+        send_message(
+            user_id,
+            "❌ Заявка отменена.\n\nКогда будете готовы — «Начать».",
+            keyboard=_hide_keyboard(),
+        )
     else:
-        send_message(user_id, "Нет активной заявки. Напишите «Начать», чтобы начать.")
+        send_message(user_id, f"Сейчас нет активной заявки.\n\n{HINT_START}")
+
+
+def _ask_dates(user_id: int) -> None:
+    send_message(
+        user_id,
+        "📅 Когда планируете поездку?\n\n"
+        "Кнопка или свои даты (например: 15-22 июня):",
+        keyboard=_dates_keyboard(),
+    )
+
+
+def _ask_people(user_id: int) -> None:
+    send_message(
+        user_id,
+        "👥 Сколько человек поедет?\nКнопка или число 1–50:",
+        keyboard=_people_keyboard(),
+    )
+
+
+def _ask_budget(user_id: int) -> None:
+    send_message(
+        user_id,
+        "💰 Бюджет на человека (примерно, ₽)\nКнопка или своя сумма:",
+        keyboard=_budget_keyboard(),
+    )
+
+
+def _ask_contact(user_id: int) -> None:
+    send_message(
+        user_id,
+        "📞 Как удобнее связаться?\n\n"
+        "Можно просто VK (этот чат) — телефон не обязателен.\n"
+        "Или телефон / Telegram.",
+        keyboard=_contact_keyboard(),
+    )
 
 
 def _step_consent(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    if text == CONSENT_YES_TEXT:
+    first_name = message.get("_user_name", "")
+    if text in (START_BUTTON_TEXT, CONSENT_YES_TEXT, "Начать подбор"):
         set_consent(user_id)
-        first_name = message.get("_user_name", "")
         _begin_destination(user_id, first_name)
         return
-    if text == CONSENT_NO_TEXT:
+    if CONSENT_MODE == "strict" and text == CONSENT_NO_TEXT:
         with _lock:
             user_data.pop(user_id, None)
         _mark_dirty(user_id, user=False)
         delete_session(user_id)
         send_message(
             user_id,
-            "Без согласия на обработку персональных данных мы, к сожалению, не сможем подобрать тур.\n\n"
-            "Если передумаете — напишите «Начать».",
+            "Поняли. Без согласия заявку оформить нельзя.\n\nЕсли передумаете — «Начать».",
             keyboard=_hide_keyboard(),
         )
         return
-    send_message(user_id, "Пожалуйста, нажмите «✅ Согласен» или «❌ Отказаться».",
-                 keyboard=_consent_keyboard())
+    if CONSENT_MODE == "soft":
+        send_message(
+            user_id,
+            "Нажмите «🚀 Начать подбор», чтобы продолжить.",
+            keyboard=_soft_start_keyboard(),
+        )
+    else:
+        send_message(
+            user_id,
+            "Нажмите «✅ Согласен» или «❌ Отказаться».",
+            keyboard=_consent_keyboard(),
+        )
 
 
 def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -740,46 +898,139 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         return
     info["destination"] = dest
     info["state"] = STATE_DATES
-    send_message(user_id, "📅 На какие даты планируете поездку? (например: 15-22 июня)",
-                 keyboard=_nav_keyboard())
+    _ask_dates(user_id)
 
 
 def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    info["dates"] = text
+    raw = (text or "").strip()
+    if raw in (DATE_CUSTOM_LABEL, "свои даты"):
+        send_message(
+            user_id,
+            "✍️ Напишите даты текстом (например: 15-22 июня):",
+            keyboard=_nav_keyboard(),
+        )
+        return
+    preset_map = {label: val for label, val in DATE_PRESETS}
+    if raw in preset_map:
+        raw = preset_map[raw]
+    if not raw:
+        _ask_dates(user_id)
+        return
+    info["dates"] = raw
     info["state"] = STATE_PEOPLE
-    send_message(user_id, "👥 Сколько человек будет путешествовать?", keyboard=_people_keyboard())
+    _ask_people(user_id)
 
 
 def _step_people(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     ok, value = validate_people(text)
     if not ok:
-        send_message(user_id, "Пожалуйста, укажите число от 1 до 50 (или «5+»).",
-                     keyboard=_people_keyboard())
+        send_message(
+            user_id,
+            "Укажите число от 1 до 50 (или «5+») — удобнее кнопкой.",
+            keyboard=_people_keyboard(),
+        )
         return
     info["people"] = value
     info["state"] = STATE_BUDGET
-    send_message(user_id, "💰 Какой бюджет рассматриваете на человека? (в рублях)",
-                 keyboard=_nav_keyboard())
+    _ask_budget(user_id)
 
 
 def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    ok, value = validate_budget(text)
+    raw = (text or "").strip()
+    if raw in (BUDGET_CUSTOM_LABEL, "свой бюджет"):
+        send_message(
+            user_id,
+            "✍️ Напишите бюджет числом (например: 75000):",
+            keyboard=_nav_keyboard(),
+        )
+        return
+    budget_map = {label: val for label, val in BUDGET_PRESETS}
+    if raw in budget_map:
+        info["budget"] = budget_map[raw]
+        info["state"] = STATE_CONTACT
+        _ask_contact(user_id)
+        return
+    ok, value = validate_budget(raw)
     if not ok:
-        send_message(user_id, "Пожалуйста, укажите бюджет числом (например: 60000).",
-                     keyboard=_nav_keyboard())
+        send_message(
+            user_id,
+            "Нужна сумма числом или кнопка с бюджетом.",
+            keyboard=_budget_keyboard(),
+        )
         return
     info["budget"] = value
-    info["state"] = STATE_PHONE
-    send_message(user_id, "📱 Укажите ваш номер телефона для связи:", keyboard=_nav_keyboard())
+    info["state"] = STATE_CONTACT
+    _ask_contact(user_id)
+
+
+def _step_contact(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    t = (text or "").strip()
+    client_name = message.get("_user_name") or f"VK {user_id}"
+
+    if t in (CONTACT_VK_CHAT_LABEL, CONTACT_VK_TEXT, "vk", "вк", "VK"):
+        info["contact_method"] = "vk"
+        handle_completion(user_id, f"VK (чат id {user_id}) · {client_name}", message)
+        return
+
+    if t in (CONTACT_PHONE_TEXT, "телефон", "phone"):
+        info["contact_method"] = "phone"
+        info["state"] = STATE_PHONE
+        send_message(
+            user_id,
+            "📱 Укажите номер телефона (+7…):",
+            keyboard=_nav_keyboard(),
+        )
+        return
+
+    if t in (CONTACT_TG_TEXT, "telegram", "tg", "телеграм"):
+        info["contact_method"] = "telegram"
+        info["state"] = "telegram_handle"
+        send_message(
+            user_id,
+            "✈️ Напишите Telegram: @username или номер, привязанный к TG:",
+            keyboard=_nav_keyboard(),
+        )
+        return
+
+    ok, phone = validate_phone(t)
+    if ok and phone:
+        info["contact_method"] = "phone"
+        handle_completion(user_id, phone, message)
+        return
+
+    send_message(
+        user_id,
+        "Выберите способ связи кнопкой — или введите номер телефона.",
+        keyboard=_contact_keyboard(),
+    )
 
 
 def _step_phone(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     ok, phone = validate_phone(text)
     if not ok:
-        send_message(user_id, "Похоже, номер некорректен. Попробуйте в формате +7XXXXXXXXXX.",
-                     keyboard=_nav_keyboard())
+        send_message(
+            user_id,
+            "Номер некорректен. Формат +7XXXXXXXXXX.\nНазад — другой способ связи.",
+            keyboard=_nav_keyboard(),
+        )
         return
+    info["contact_method"] = "phone"
     handle_completion(user_id, phone, message)
+
+
+def _step_telegram_handle(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    raw = (text or "").strip()
+    if not raw or len(raw) < 2:
+        send_message(
+            user_id,
+            "Нужен @username или контакт Telegram.",
+            keyboard=_nav_keyboard(),
+        )
+        return
+    if not raw.startswith("@") and not raw.startswith("+") and not raw.isdigit():
+        raw = f"@{raw}" if " " not in raw else raw
+    info["contact_method"] = "telegram"
+    handle_completion(user_id, f"Telegram {raw}", message)
 
 
 STATE_HANDLERS: Dict[str, Callable] = {
@@ -788,27 +1039,46 @@ STATE_HANDLERS: Dict[str, Callable] = {
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
     STATE_BUDGET:      _step_budget,
+    STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
+    "telegram_handle": _step_telegram_handle,
 }
 
 PREVIOUS_STATE: Dict[str, str] = {
-    STATE_DATES:  STATE_DESTINATION,
-    STATE_PEOPLE: STATE_DATES,
-    STATE_BUDGET: STATE_PEOPLE,
-    STATE_PHONE:  STATE_BUDGET,
+    STATE_DATES:       STATE_DESTINATION,
+    STATE_PEOPLE:      STATE_DATES,
+    STATE_BUDGET:      STATE_PEOPLE,
+    STATE_CONTACT:     STATE_BUDGET,
+    STATE_PHONE:       STATE_CONTACT,
+    "telegram_handle": STATE_CONTACT,
 }
 
 
 def _prompt_for_state(user_id: int, state: str) -> None:
-    prompts = {
-        STATE_DESTINATION: ("📍 Куда бы вы хотели отправиться?", _dest_keyboard()),
-        STATE_DATES: ("📅 На какие даты планируете поездку? (например: 15-22 июня)", _nav_keyboard()),
-        STATE_PEOPLE: ("👥 Сколько человек будет путешествовать?", _people_keyboard()),
-        STATE_BUDGET: ("💰 Какой бюджет рассматриваете на человека? (в рублях)", _nav_keyboard()),
-        STATE_PHONE: ("📱 Укажите ваш номер телефона для связи:", _nav_keyboard()),
-    }
-    text, kb = prompts.get(state, ("Продолжите ввод:", _nav_keyboard()))
-    send_message(user_id, text, keyboard=kb)
+    if state == STATE_DESTINATION:
+        send_message(
+            user_id,
+            "📍 Куда хотите поехать?\nКнопка или своё направление:",
+            keyboard=_dest_keyboard(),
+        )
+    elif state == STATE_DATES:
+        _ask_dates(user_id)
+    elif state == STATE_PEOPLE:
+        _ask_people(user_id)
+    elif state == STATE_BUDGET:
+        _ask_budget(user_id)
+    elif state == STATE_CONTACT:
+        _ask_contact(user_id)
+    elif state == STATE_PHONE:
+        send_message(user_id, "📱 Укажите номер телефона (+7…):", keyboard=_nav_keyboard())
+    elif state == "telegram_handle":
+        send_message(
+            user_id,
+            "✈️ Напишите Telegram (@username):",
+            keyboard=_nav_keyboard(),
+        )
+    else:
+        send_message(user_id, "Продолжите ввод:", keyboard=_nav_keyboard())
 
 
 def _go_back(user_id: int) -> None:
@@ -827,7 +1097,7 @@ def handle_dialog(user_id: int, text: str, message: Dict[str, Any]) -> None:
     info = user_data.get(user_id, {})
     state = info.get("state")
     if state is None:
-        send_message(user_id, "Для начала работы напишите «Начать»")
+        send_message(user_id, HINT_START)
         return
     handler = STATE_HANDLERS.get(state)
     if handler is None:
@@ -843,13 +1113,13 @@ def handle_dialog(user_id: int, text: str, message: Dict[str, Any]) -> None:
 def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
     send_message(
         user_id,
-        "✅ Ваша заявка принята! Наш менеджер свяжется с вами в ближайшее время.\n\n"
+        "✅ Заявка принята! Менеджер «АПРЕЛЬ тур» свяжется с вами.\n\n"
         f"📍 Направление: {info.get('destination', '?')}\n"
         f"📅 Даты: {info.get('dates', '?')}\n"
         f"👥 Человек: {info.get('people', '?')}\n"
         f"💰 Бюджет: {info.get('budget', '?')}₽\n"
-        f"📱 Телефон: {phone}\n\n"
-        "Спасибо за обращение в «АПРЕЛЬ тур»! 🌺\n\n"
+        f"📞 Связь: {phone}\n\n"
+        "Спасибо, что выбрали нас 🌺\n\n"
         "📋 ИП Замятина Мария Андреевна\nОГРНИП 290211659807",
         keyboard=_hide_keyboard(),
     )
@@ -873,7 +1143,7 @@ def _notify_admin_telegram(
         f"📅 {info.get('dates', '?')}\n"
         f"👥 {info.get('people', '?')} чел\n"
         f"💰 {info.get('budget', '?')}₽\n"
-        f"📱 {phone}"
+        f"📞 Связь: {phone}"
     )
     for recipient in LEAD_NOTIFY_IDS:
         try:
@@ -906,7 +1176,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             f"📅 {info.get('dates', '?')}\n"
             f"👥 {info.get('people', '?')} чел\n"
             f"💰 {info.get('budget', '?')}₽\n"
-            f"📱 {phone}",
+            f"📞 Связь: {phone}",
         )
     elif not LEAD_NOTIFY_IDS:
         logger.warning(
@@ -1078,6 +1348,13 @@ def _process_message(message: Dict[str, Any]) -> None:
     # Command recognition (case-insensitive, natural language)
     text_lower = text.lower()
     command = _COMMAND_ALIASES.get(text_lower)
+    # Soft-start button must not re-trigger handle_start while already on consent step.
+    if text == START_BUTTON_TEXT or text_lower in ("🚀 начать подбор", "начать подбор"):
+        cur_state = (user_data.get(user_id) or {}).get("state")
+        if cur_state == STATE_CONSENT:
+            command = None
+        else:
+            command = "start"
     arg_or_text = text  # full text for broadcast, etc.
 
     # Admin commands
@@ -1160,7 +1437,7 @@ def _process_message(message: Dict[str, Any]) -> None:
         if user_id in user_data:
             _go_back(user_id)
         else:
-            send_message(user_id, "Для начала работы напишите «Начать»")
+            send_message(user_id, HINT_START)
         return
 
     # Button-text matching (exact match against known buttons)
@@ -1168,7 +1445,7 @@ def _process_message(message: Dict[str, Any]) -> None:
         if user_id in user_data:
             _go_back(user_id)
         else:
-            send_message(user_id, "Для начала работы напишите «Начать»")
+            send_message(user_id, HINT_START)
         return
     if text == CANCEL_BUTTON_TEXT:
         handle_cancel(user_id)
@@ -1178,7 +1455,7 @@ def _process_message(message: Dict[str, Any]) -> None:
     if user_id in user_data:
         handle_dialog(user_id, text, msg)
     else:
-        send_message(user_id, "Для начала работы напишите «Начать»")
+        send_message(user_id, HINT_START)
 
 
 # ---------------------------------------------------------------------------
@@ -1242,6 +1519,7 @@ def health() -> Any:
         "vk_token_configured": bool(VK_ACCESS_TOKEN),
         "vk_group_id": VK_GROUP_ID,
         "admin_id_configured": bool(ADMIN_ID),
+        "lead_notify_configured": bool(LEAD_NOTIFY_IDS),
         "groq_configured": bool(GROQ_API_KEY),
         "ai_mode": AI_MODE,
         "mdt_enabled": MDT_ENABLED,
@@ -1250,6 +1528,7 @@ def health() -> Any:
         "active_sessions": len(user_data),
         "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
         "data_retention_days": DATA_RETENTION_DAYS,
+        "consent_mode": CONSENT_MODE,
     })
 
 

@@ -13,6 +13,7 @@ os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 os.environ.setdefault("AI_MODE", "template")
+os.environ.setdefault("CONSENT_MODE", "strict")  # classic consent in unit tests
 os.environ.setdefault(
     "DATABASE_PATH",
     os.path.join(tempfile.gettempdir(), f"vk_turbot_test_{os.getpid()}.sqlite"),
@@ -125,8 +126,10 @@ def test_returning_user_skips_consent(client):
 def test_dialog_completion(client):
     _post(client, 222, "Начать")
     _post(client, 222, bot.CONSENT_YES_TEXT)
-    for text in ["Египет", "15-22 июня", "2", "60000", "+79161234567"]:
+    for text in ["Египет", "15-22 июня", "2", "60000"]:
         _post(client, 222, text)
+    assert bot.user_data[222]["state"] == bot.STATE_CONTACT
+    _post(client, 222, "+79161234567")
     assert 222 not in bot.user_data
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone, destination FROM leads WHERE chat_id = ?", (222,))
@@ -134,6 +137,36 @@ def test_dialog_completion(client):
     assert row is not None
     assert row[0] == "+79161234567"
     assert "Египет" in (row[1] or "")
+
+
+def test_soft_mode_and_vk_contact(client, monkeypatch):
+    monkeypatch.setattr(bot, "CONSENT_MODE", "soft")
+    _post(client, 901, "Начать")
+    assert bot.user_data[901]["state"] == bot.STATE_CONSENT
+    _post(client, 901, bot.START_BUTTON_TEXT)
+    assert bot.has_consent(901)
+    assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
+    for text in ["Турция", bot.DATE_PRESETS[0][0], "2", bot.BUDGET_PRESETS[1][0]]:
+        _post(client, 901, text)
+    assert bot.user_data[901]["state"] == bot.STATE_CONTACT
+    assert bot.user_data[901]["budget"] == bot.BUDGET_PRESETS[1][1]
+    _post(client, 901, bot.CONTACT_VK_CHAT_LABEL)
+    assert 901 not in bot.user_data
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (901,))
+        row = cur.fetchone()
+    assert row is not None
+    assert "VK" in row[0]
+
+
+def test_dates_and_budget_keyboards():
+    d = json.loads(bot._dates_keyboard())
+    labels = [b["action"]["label"] for row in d["buttons"] for b in row]
+    assert bot.DATE_PRESETS[0][0] in labels
+    assert bot.DATE_CUSTOM_LABEL in labels
+    b = json.loads(bot._budget_keyboard())
+    blabels = [btn["action"]["label"] for row in b["buttons"] for btn in row]
+    assert bot.BUDGET_PRESETS[0][0] in blabels
 
 
 def test_back_button(client):
