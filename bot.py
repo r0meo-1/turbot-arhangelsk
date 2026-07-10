@@ -221,12 +221,32 @@ CB_CONSENT_YES = "c:yes"
 CB_CONSENT_NO = "c:no"
 CB_START = "c:start"
 CB_DEST_PREFIX = "d:"
+CB_DATE_PREFIX = "dt:"
 CB_PEOPLE_PREFIX = "p:"
+CB_BUDGET_PREFIX = "bd:"
 CB_CONTACT_TG = "ct:tg"
 CB_CONTACT_PHONE = "ct:phone"
 CB_CONTACT_VK = "ct:vk"
 CB_BACK = "nav:back"
 CB_CANCEL = "nav:cancel"
+
+# Quick picks (callback suffix → value stored in the lead)
+DATE_PRESETS: List[Tuple[str, str]] = [
+    ("🏖 Ближайшие выходные", "ближайшие выходные"),
+    ("📅 Через 1–2 недели", "через 1-2 недели"),
+    ("🗓 Через месяц", "через месяц"),
+    ("☀️ Лето", "лето"),
+    ("❄️ Зима", "зима"),
+    ("🤷 Даты гибкие", "даты гибкие"),
+]
+BUDGET_PRESETS: List[Tuple[str, int]] = [
+    ("до 40 000 ₽", 40000),
+    ("60 000 ₽", 60000),
+    ("80 000 ₽", 80000),
+    ("100 000 ₽", 100000),
+    ("150 000 ₽", 150000),
+    ("200 000+ ₽", 200000),
+]
 
 BOT_COMMANDS = [
     {"command": "start", "description": "🌴 Начать подбор тура"},
@@ -1182,18 +1202,41 @@ def kb_contact_methods() -> str:
 
 
 def kb_destinations() -> str:
-    """Inline: popular destinations + cancel."""
-    rows = [
-        [_inline_btn(label, f"{CB_DEST_PREFIX}{i}")]
-        for i, label in enumerate(POPULAR_DESTINATIONS)
-    ]
+    """Inline: popular destinations in two columns + cancel."""
+    rows: List[List[Dict[str, str]]] = []
+    row: List[Dict[str, str]] = []
+    for i, label in enumerate(POPULAR_DESTINATIONS):
+        row.append(_inline_btn(label, f"{CB_DEST_PREFIX}{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
     rows.append([_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)])
+    return inline_keyboard(rows)
+
+
+def kb_dates() -> str:
+    """Inline: date presets + free-text + nav."""
+    rows: List[List[Dict[str, str]]] = []
+    row: List[Dict[str, str]] = []
+    for i, (label, _val) in enumerate(DATE_PRESETS):
+        row.append(_inline_btn(label, f"{CB_DATE_PREFIX}{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([_inline_btn("✏️ Свои даты", f"{CB_DATE_PREFIX}custom")])
+    rows.append([
+        _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+        _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+    ])
     return inline_keyboard(rows)
 
 
 def kb_people() -> str:
     """Inline: party size + back/cancel."""
-    # Two rows of people counts, then navigation.
     opts = PEOPLE_OPTIONS
     mid = (len(opts) + 1) // 2
     rows = [
@@ -1204,6 +1247,25 @@ def kb_people() -> str:
             _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
         ],
     ]
+    return inline_keyboard(rows)
+
+
+def kb_budget() -> str:
+    """Inline: budget presets + free-text + nav."""
+    rows: List[List[Dict[str, str]]] = []
+    row: List[Dict[str, str]] = []
+    for i, (label, _val) in enumerate(BUDGET_PRESETS):
+        row.append(_inline_btn(label, f"{CB_BUDGET_PREFIX}{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([_inline_btn("✏️ Свой бюджет", f"{CB_BUDGET_PREFIX}custom")])
+    rows.append([
+        _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+        _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+    ])
     return inline_keyboard(rows)
 
 
@@ -1591,7 +1653,7 @@ def _begin_destination(chat_id: int, first_name: str = "") -> None:
         chat_id,
         f"🌴 Отлично{name}! Давайте подберём тур.\n\n"
         "📍 <b>Куда хотите поехать?</b>\n\n"
-        "Выберите направление кнопкой или напишите своё — например: «Сочи», «Греция».",
+        "Жмите кнопку — или напишите своё направление (Сочи, Греция…).",
         reply_markup=kb_destinations(),
         parse_mode="HTML",
     )
@@ -1655,6 +1717,48 @@ def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
         )
 
 
+def _ask_dates(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "📅 <b>Когда планируете поездку?</b>\n\n"
+        "Выберите вариант кнопкой или напишите свои даты "
+        "(например: 15-22 июня).",
+        reply_markup=kb_dates(),
+        parse_mode="HTML",
+    )
+
+
+def _ask_people(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "👥 <b>Сколько человек поедет?</b>\n\n"
+        "Кнопка или число от 1 до 50.",
+        reply_markup=kb_people(),
+        parse_mode="HTML",
+    )
+
+
+def _ask_budget(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "💰 <b>Бюджет на человека</b> (примерно, в рублях)\n\n"
+        "Выберите кнопку или введите свою сумму.",
+        reply_markup=kb_budget(),
+        parse_mode="HTML",
+    )
+
+
+def _ask_contact(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "📞 <b>Как удобнее связаться?</b>\n\n"
+        "Можно просто Telegram (этот чат) — телефон не обязателен.\n"
+        "Или укажите номер / VK.",
+        reply_markup=kb_contact_methods(),
+        parse_mode="HTML",
+    )
+
+
 def _step_destination(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     dest = _strip_emoji_prefix(text)
     if dest.lower() == "другое":
@@ -1666,21 +1770,41 @@ def _step_destination(chat_id: int, text: str, message: Dict[str, Any], info: Di
         return
     info["destination"] = dest
     info["state"] = STATE_DATES
-    send_message(
-        chat_id,
-        "📅 На какие даты планируете поездку? (например: 15-22 июня)",
-        reply_markup=kb_nav(include_back=True),
-    )
+    _ask_dates(chat_id)
 
 
 def _step_dates(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    info["dates"] = text
+    raw = (text or "").strip()
+    # Custom-date prompt (from button or typed marker)
+    if raw in (f"{CB_DATE_PREFIX}custom", "✏️ Свои даты", "свои даты"):
+        send_message(
+            chat_id,
+            "✍️ Напишите даты текстом\n"
+            "(например: 15-22 июня или 1–10 августа):",
+            reply_markup=kb_nav(include_back=True),
+        )
+        return
+    # Preset callback: dt:0 … dt:N
+    if raw.startswith(CB_DATE_PREFIX):
+        key = raw[len(CB_DATE_PREFIX):]
+        if key.isdigit():
+            idx = int(key)
+            if 0 <= idx < len(DATE_PRESETS):
+                raw = DATE_PRESETS[idx][1]
+            else:
+                send_message(chat_id, "Кнопка устарела — выберите даты ещё раз.",
+                             reply_markup=kb_dates())
+                return
+        else:
+            send_message(chat_id, "Кнопка устарела — выберите даты ещё раз.",
+                         reply_markup=kb_dates())
+            return
+    if not raw:
+        _ask_dates(chat_id)
+        return
+    info["dates"] = raw
     info["state"] = STATE_PEOPLE
-    send_message(
-        chat_id,
-        "👥 Сколько человек будет путешествовать?",
-        reply_markup=kb_people(),
-    )
+    _ask_people(chat_id)
 
 
 def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -1688,38 +1812,47 @@ def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not ok:
         send_message(
             chat_id,
-            "Пожалуйста, укажите число от 1 до 50 (или «5+»).",
+            "Укажите число от 1 до 50 (или «5+») — удобнее кнопкой ниже.",
             reply_markup=kb_people(),
         )
         return
     info["people"] = value
     info["state"] = STATE_BUDGET
-    send_message(
-        chat_id,
-        "💰 Какой бюджет рассматриваете на человека? (в рублях)",
-        reply_markup=kb_nav(include_back=True),
-    )
+    _ask_budget(chat_id)
 
 
 def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    ok, value = validate_budget(text)
+    raw = (text or "").strip()
+    if raw in (f"{CB_BUDGET_PREFIX}custom", "✏️ Свой бюджет", "свой бюджет"):
+        send_message(
+            chat_id,
+            "✍️ Напишите бюджет числом (например: 75000):",
+            reply_markup=kb_nav(include_back=True),
+        )
+        return
+    if raw.startswith(CB_BUDGET_PREFIX):
+        key = raw[len(CB_BUDGET_PREFIX):]
+        if key.isdigit():
+            idx = int(key)
+            if 0 <= idx < len(BUDGET_PRESETS):
+                info["budget"] = BUDGET_PRESETS[idx][1]
+                info["state"] = STATE_CONTACT
+                _ask_contact(chat_id)
+                return
+        send_message(chat_id, "Кнопка устарела — выберите бюджет ещё раз.",
+                     reply_markup=kb_budget())
+        return
+    ok, value = validate_budget(raw)
     if not ok:
         send_message(
             chat_id,
-            "Пожалуйста, укажите бюджет числом (например: 60000).",
-            reply_markup=kb_nav(include_back=True),
+            "Нужна сумма числом или кнопка с бюджетом ниже.",
+            reply_markup=kb_budget(),
         )
         return
     info["budget"] = value
     info["state"] = STATE_CONTACT
-    send_message(
-        chat_id,
-        "📞 <b>Как удобнее связаться?</b>\n\n"
-        "Можно просто Telegram (этот чат) — телефон не обязателен.\n"
-        "Или укажите номер / VK.",
-        reply_markup=kb_contact_methods(),
-        parse_mode="HTML",
-    )
+    _ask_contact(chat_id)
 
 
 def _step_contact(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -1842,31 +1975,13 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
             parse_mode="HTML",
         )
     elif state == STATE_DATES:
-        send_message(
-            chat_id,
-            "📅 На какие даты планируете поездку? (например: 15-22 июня)",
-            reply_markup=kb_nav(include_back=True),
-        )
+        _ask_dates(chat_id)
     elif state == STATE_PEOPLE:
-        send_message(
-            chat_id,
-            "👥 Сколько человек будет путешествовать?",
-            reply_markup=kb_people(),
-        )
+        _ask_people(chat_id)
     elif state == STATE_BUDGET:
-        send_message(
-            chat_id,
-            "💰 Какой бюджет рассматриваете на человека? (в рублях)",
-            reply_markup=kb_nav(include_back=True),
-        )
+        _ask_budget(chat_id)
     elif state == STATE_CONTACT:
-        send_message(
-            chat_id,
-            "📞 <b>Как удобнее связаться?</b>\n\n"
-            "Telegram, телефон или VK — на выбор.",
-            reply_markup=kb_contact_methods(),
-            parse_mode="HTML",
-        )
+        _ask_contact(chat_id)
     elif state == STATE_PHONE:
         send_message(
             chat_id,
@@ -2229,12 +2344,28 @@ def _process_callback(data: Dict[str, Any]) -> None:
         _mark_dirty(chat_id, user=False)
         return
 
+    if cb_data.startswith(CB_DATE_PREFIX):
+        if info.get("state") != STATE_DATES:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_dates(chat_id, cb_data, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
     if cb_data.startswith(CB_PEOPLE_PREFIX):
         people = cb_data[len(CB_PEOPLE_PREFIX):]
         if info.get("state") != STATE_PEOPLE:
             send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
             return
         _step_people(chat_id, people, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_BUDGET_PREFIX):
+        if info.get("state") != STATE_BUDGET:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_budget(chat_id, cb_data, synthetic, info)
         _mark_dirty(chat_id, user=False)
         return
 

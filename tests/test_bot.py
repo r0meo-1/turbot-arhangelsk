@@ -336,7 +336,7 @@ def test_inline_keyboard_builders():
     assert consent["inline_keyboard"][0][0]["callback_data"] == bot.CB_CONSENT_YES
 
     dest = json.loads(bot.kb_destinations())
-    assert len(dest["inline_keyboard"]) == len(bot.POPULAR_DESTINATIONS) + 1
+    # destinations in pairs + cancel row
     assert dest["inline_keyboard"][0][0]["callback_data"].startswith(bot.CB_DEST_PREFIX)
 
     people = json.loads(bot.kb_people())
@@ -344,6 +344,34 @@ def test_inline_keyboard_builders():
     assert f"{bot.CB_PEOPLE_PREFIX}2" in flat
     assert bot.CB_BACK in flat
     assert bot.CB_CANCEL in flat
+
+    dates = json.loads(bot.kb_dates())
+    dflat = [b["callback_data"] for row in dates["inline_keyboard"] for b in row]
+    assert f"{bot.CB_DATE_PREFIX}0" in dflat
+    assert f"{bot.CB_DATE_PREFIX}custom" in dflat
+
+    budget = json.loads(bot.kb_budget())
+    bflat = [b["callback_data"] for row in budget["inline_keyboard"] for b in row]
+    assert f"{bot.CB_BUDGET_PREFIX}0" in bflat
+    assert f"{bot.CB_BUDGET_PREFIX}custom" in bflat
+
+
+def test_full_flow_all_buttons(client):
+    """Complete a lead using only preset buttons (no free typing)."""
+    _consent(client, 910)
+    _callback(client, 910, f"{bot.CB_DEST_PREFIX}0")
+    assert bot.user_data[910]["state"] == bot.STATE_DATES
+    _callback(client, 910, f"{bot.CB_DATE_PREFIX}0")
+    assert bot.user_data[910]["state"] == bot.STATE_PEOPLE
+    assert "выходные" in bot.user_data[910]["dates"]
+    _callback(client, 910, f"{bot.CB_PEOPLE_PREFIX}2")
+    assert bot.user_data[910]["state"] == bot.STATE_BUDGET
+    _callback(client, 910, f"{bot.CB_BUDGET_PREFIX}1")
+    assert bot.user_data[910]["state"] == bot.STATE_CONTACT
+    assert bot.user_data[910]["budget"] == bot.BUDGET_PRESETS[1][1]
+    _callback(client, 910, bot.CB_CONTACT_TG)
+    assert 910 not in bot.user_data
+    assert bot.count_leads() == 1
 
 
 def test_back_button(client):
