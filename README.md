@@ -15,6 +15,16 @@ Flask webhook · gunicorn · SQLite · MDT CRM · пакет `shared/` с VK-в�
 
 **Репозиторий:** [github.com/r0meo-1/turbot-arhangelsk](https://github.com/r0meo-1/turbot-arhangelsk)
 
+## За 20 секунд
+
+| | |
+|--|--|
+| **Что** | Lead-бот: диалог → валидация → SQLite → админ → MDT CRM |
+| **Зачем** | Заявка не теряется в чате «ну я записал» |
+| **Проверить** | `pytest -q` · [CI](https://github.com/r0meo-1/turbot-arhangelsk/actions) · README ниже |
+
+Сайт: **[r0meo1.ru](https://r0meo1.ru)** · версия для MAX: [turbot-arhangelsk-max](https://github.com/r0meo-1/turbot-arhangelsk-max)
+
 ---
 
 ## Что умеет (спойлер: не только `/start`)
