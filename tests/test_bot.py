@@ -374,6 +374,40 @@ def test_full_flow_all_buttons(client):
     assert bot.count_leads() == 1
 
 
+def test_admin_send_arms_reply_mode(client, monkeypatch):
+    """/send with only chat_id waits for the next admin message."""
+    sent = []
+
+    def capture(chat_id, text, parse_mode=None, reply_markup=None):
+        sent.append({"chat_id": chat_id, "text": text})
+        return _OkResp()
+
+    monkeypatch.setattr(bot, "send_message", capture)
+    bot._admin_reply_to.clear()
+    bot._last_lead_client_id = None
+
+    # Admin (999) arms reply to client 231403545
+    _post(client, 999, "/send 231403545")
+    assert bot._admin_reply_to.get(999) == 231403545
+
+    # Next plain message goes to the client
+    _post(client, 999, "Здравствуйте! Мы подобрали варианты.")
+    assert 999 not in bot._admin_reply_to
+    to_client = [m for m in sent if m["chat_id"] == 231403545]
+    assert to_client
+    assert "подобрали" in to_client[-1]["text"]
+
+
+def test_admin_send_empty_uses_last_lead(client, monkeypatch):
+    monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
+    bot._admin_reply_to.clear()
+    bot._last_lead_client_id = 777001
+    _post(client, 999, "/send")
+    assert bot._admin_reply_to.get(999) == 777001
+    bot._admin_reply_to.clear()
+    bot._last_lead_client_id = None
+
+
 def test_back_button(client):
     _consent(client, 333)
     _post(client, 333, "🏖 Египет")

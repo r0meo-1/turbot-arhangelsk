@@ -278,21 +278,28 @@ def _privacy_text() -> str:
 
 ADMIN_HELP = (
     "🔧 Команды админа:\n\n"
-    "/send {chat_id} {текст} — отправить сообщение пользователю\n"
+    "/send — ответить на <b>последнюю</b> заявку (далее пишете текст)\n"
+    "/send {chat_id} — ответить этому клиенту (далее пишете текст)\n"
+    "/send {chat_id} {текст} — сразу отправить\n"
+    "/cancel_reply — отменить режим ответа\n"
     "/broadcast {текст} — рассылка всем\n"
     "/broadcast {направление} {текст} — рассылка по направлению\n"
     "/users — список пользователей\n"
     "/stats — статистика\n"
     "/restart — сбросить все активные сессии\n"
     "/analytics — аналитика (заявки, направления)\n"
-    "/export — экспорт завершённых заявок с телефонами\n"
-    "/followup — отправить напоминания незавершившим\n"
-    "/mdt [test|reload] — статус MDT CRM (test — проверить соединение, reload — обновить страны)\n"
+    "/export — экспорт завершённых заявок\n"
+    "/followup — напоминания незавершившим\n"
+    "/mdt [test|reload] — статус MDT CRM\n"
     "/help — эта справка\n\n"
-    "Поддерживаются HTML-теги: <b>жирный</b>, <i>курсив</i>\n\n"
-    "Пример:\n"
-    "/send 123456789 🌴 <b>Подборка туров</b>"
+    "В уведомлении о заявке есть кнопка «✍️ Ответить клиенту».\n"
+    "HTML: <b>жирный</b>, <i>курсив</i>"
 )
+
+# Admin → client reply flow (pending text after button /send).
+_admin_reply_to: Dict[int, int] = {}  # admin_chat_id → client_chat_id
+_last_lead_client_id: Optional[int] = None
+CB_ADMIN_REPLY_PREFIX = "ar:"
 
 # ---------------------------------------------------------------------------
 # Groq client (created once at startup)
@@ -1361,21 +1368,100 @@ def _admin_restart(chat_id: int, arg: str) -> bool:
     return True
 
 
+def _admin_start_reply(admin_id: int, client_id: int) -> None:
+    """Arm the next admin message to be forwarded to client_id."""
+    global _last_lead_client_id
+    with _lock:
+        _admin_reply_to[admin_id] = client_id
+        _last_lead_client_id = client_id
+    send_message(
+        admin_id,
+        f"✍️ Режим ответа клиенту <code>{client_id}</code>.\n\n"
+        "Напишите <b>следующим сообщением</b> текст — уйдёт клиенту.\n"
+        "Отмена: /cancel_reply",
+        parse_mode="HTML",
+    )
+
+
+def _admin_cancel_reply(admin_id: int) -> bool:
+    with _lock:
+        had = _admin_reply_to.pop(admin_id, None) is not None
+    if had:
+        send_message(admin_id, "Режим ответа отменён.")
+    else:
+        send_message(admin_id, "Сейчас вы никому не отвечаете.")
+    return True
+
+
+def _admin_deliver_pending(admin_id: int, text: str) -> bool:
+    """If admin is in reply mode, forward text to the client. Returns True if handled."""
+    with _lock:
+        target = _admin_reply_to.get(admin_id)
+    if target is None:
+        return False
+    resp = send_message(
+        target,
+        f"💬 Сообщение от менеджера «АПРЕЛЬ тур»:\n\n{text}",
+    )
+    ok = resp is not None and getattr(resp, "status_code", 0) == 200
+    with _lock:
+        _admin_reply_to.pop(admin_id, None)
+    if ok:
+        send_message(admin_id, f"✅ Отправлено клиенту <code>{target}</code>", parse_mode="HTML")
+    else:
+        send_message(
+            admin_id,
+            f"❌ Не удалось отправить клиенту {target}. "
+            "Клиент должен был хотя бы раз написать боту (/start).",
+        )
+    return True
+
+
 def _admin_send(chat_id: int, arg: str) -> bool:
-    """`/send {chat_id} {сообщение}` — forward a message to one user."""
-    if not arg.strip():
-        send_message(chat_id, "Использование: /send {chat_id} {сообщение}")
+    """Send to a user now, or arm reply mode for the next message.
+
+    /send                         → reply to last lead (if any)
+    /send {chat_id}               → arm reply to that client
+    /send {chat_id} {message}     → send immediately
+    """
+    arg = (arg or "").strip()
+    if not arg:
+        target = _last_lead_client_id
+        if target:
+            _admin_start_reply(chat_id, target)
+        else:
+            send_message(
+                chat_id,
+                "Пока нет «последней» заявки.\n\n"
+                "Использование:\n"
+                "• кнопка «✍️ Ответить» в уведомлении\n"
+                "• /send {chat_id}\n"
+                "• /send {chat_id} текст сообщения",
+            )
         return True
+
     parts = arg.split(" ", 1)
-    if len(parts) < 2 or not parts[1].strip():
-        send_message(chat_id, "Использование: /send {chat_id} {сообщение}")
-        return True
-    target, msg = parts[0], parts[1]
     try:
-        send_message(int(target), msg, parse_mode="HTML")
+        target = int(parts[0])
+    except ValueError:
+        send_message(chat_id, "chat_id должен быть числом. Пример: /send 123456789 Здравствуйте!")
+        return True
+
+    if len(parts) < 2 or not parts[1].strip():
+        _admin_start_reply(chat_id, target)
+        return True
+
+    msg = parts[1]
+    resp = send_message(target, msg, parse_mode="HTML")
+    ok = resp is not None and getattr(resp, "status_code", 0) == 200
+    if ok:
         send_message(chat_id, f"✅ Отправлено пользователю {target}")
-    except Exception as exc:
-        send_message(chat_id, f"❌ Ошибка: {exc}")
+    else:
+        send_message(
+            chat_id,
+            f"❌ Не удалось отправить {target}. "
+            "Пользователь должен был написать боту (/start).",
+        )
     return True
 
 
@@ -1577,17 +1663,22 @@ def _admin_followup(chat_id: int, arg: str) -> bool:
 
 
 # command -> handler(chat_id, arg). Each handler returns True (recognised).
+def _admin_cancel_reply_cmd(chat_id: int, arg: str) -> bool:
+    return _admin_cancel_reply(chat_id)
+
+
 ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
-    "/help":      _admin_help,
-    "/users":     _admin_users,
-    "/stats":      _admin_stats,
-    "/analytics":  _admin_analytics,
-    "/export":     _admin_export,
-    "/restart":   _admin_restart,
-    "/send":       _admin_send,
-    "/broadcast":  _admin_broadcast,
-    "/followup":   _admin_followup,
-    "/mdt":        _admin_mdt,
+    "/help":         _admin_help,
+    "/users":        _admin_users,
+    "/stats":        _admin_stats,
+    "/analytics":    _admin_analytics,
+    "/export":       _admin_export,
+    "/restart":      _admin_restart,
+    "/send":         _admin_send,
+    "/cancel_reply": _admin_cancel_reply_cmd,
+    "/broadcast":    _admin_broadcast,
+    "/followup":     _admin_followup,
+    "/mdt":          _admin_mdt,
 }
 
 
@@ -2082,8 +2173,15 @@ def _format_lead_notify_text(
         f"👥 {_esc(info.get('people', '?'))} чел\n"
         f"💰 {_esc(info.get('budget', '?'))}₽\n"
         f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
-        f"Ответить в Telegram: /send {chat_id} текст"
+        f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}"
     )
+
+
+def kb_admin_reply(client_chat_id: int) -> str:
+    """Inline button on lead notify: one tap to arm reply mode."""
+    return inline_keyboard([[
+        _inline_btn("✍️ Ответить клиенту", f"{CB_ADMIN_REPLY_PREFIX}{client_chat_id}"),
+    ]])
 
 
 def _notify_admin(
@@ -2094,6 +2192,7 @@ def _notify_admin(
     username: str = "",
 ) -> None:
     """2. Forward the lead to the bot creator / admins in Telegram."""
+    global _last_lead_client_id
     recipients = LEAD_NOTIFY_IDS
     if not recipients:
         logger.warning(
@@ -2103,11 +2202,15 @@ def _notify_admin(
         )
         return
 
+    with _lock:
+        _last_lead_client_id = chat_id
+
     text = _format_lead_notify_text(
         chat_id, info, phone, client_name, username=username, source_label="Telegram",
     )
+    reply_kb = kb_admin_reply(chat_id)
     for recipient in recipients:
-        resp = send_message(recipient, text, parse_mode="HTML")
+        resp = send_message(recipient, text, parse_mode="HTML", reply_markup=reply_kb)
         if resp is not None and getattr(resp, "status_code", 0) == 200:
             logger.info("Lead from %s delivered to Telegram chat %s", chat_id, recipient)
             continue
@@ -2122,10 +2225,10 @@ def _notify_admin(
                 f"📅 {info.get('dates', '?')}\n"
                 f"👥 {info.get('people', '?')} чел\n"
                 f"💰 {info.get('budget', '?')}₽\n"
-                f"📱 {phone}\n\n"
-                f"Ответить: /send {chat_id} ваше сообщение"
+                f"📞 {phone}\n\n"
+                f"Ответить: /send {chat_id}"
             )
-            resp2 = send_message(recipient, plain)
+            resp2 = send_message(recipient, plain, reply_markup=reply_kb)
             if resp2 is not None and getattr(resp2, "status_code", 0) == 200:
                 logger.info(
                     "Lead from %s delivered to %s (plain-text fallback)", chat_id, recipient,
@@ -2297,6 +2400,19 @@ def _process_callback(data: Dict[str, Any]) -> None:
     if message_id is not None:
         clear_inline_keyboard(chat_id, message_id)
 
+    # Admin: one-tap reply from lead notification.
+    if cb_data.startswith(CB_ADMIN_REPLY_PREFIX):
+        if chat_id != ADMIN_ID and chat_id not in LEAD_NOTIFY_IDS:
+            send_message(chat_id, "Только для администратора.")
+            return
+        try:
+            client_id = int(cb_data[len(CB_ADMIN_REPLY_PREFIX):])
+        except ValueError:
+            send_message(chat_id, "Некорректная кнопка ответа.")
+            return
+        _admin_start_reply(chat_id, client_id)
+        return
+
     # Navigation callbacks work from any dialog state.
     if cb_data == CB_CANCEL:
         handle_cancel(chat_id)
@@ -2411,11 +2527,17 @@ def _process_update(data: Dict[str, Any]) -> None:
 
     # Normalise /cmd@botname → /cmd
     if text.startswith("/"):
-        text = text.split("@")[0]
+        text = text.split("@", 1)[0]
 
-    # --- Admin commands (checked first) ---
-    if chat_id == ADMIN_ID:
-        if handle_admin(chat_id, text):
+    # --- Admin: pending reply to client, then admin commands ---
+    if chat_id == ADMIN_ID or chat_id in LEAD_NOTIFY_IDS:
+        if text in ("/cancel_reply", "/cancel_send"):
+            _admin_cancel_reply(chat_id)
+            return
+        # Next plain message after «Ответить» / `/send {id}` goes to the client.
+        if not text.startswith("/") and _admin_deliver_pending(chat_id, text):
+            return
+        if chat_id == ADMIN_ID and handle_admin(chat_id, text):
             return
 
     # --- User commands ---
