@@ -1,22 +1,21 @@
 # Keep a free-tier Render demo awake (spins down after ~15 min idle).
 #
-# Setup (once):
-#   GitHub → Settings → Secrets and variables → Actions
-#   New repository secret: RENDER_HEALTH_URL
-#   Value: https://YOUR-SERVICE.onrender.com/health
+# DISABLED by default — free instance hours (~750/mo) are better saved.
+# Cold start (~30–60s) is fine for demos; open /health once before a live demo.
 #
-# Cron on free GitHub runners can lag 5–15 min — fine for portfolio demos.
-# For a more reliable ping, use UptimeRobot (same URL, every 5 min).
+# To re-enable:
+#   1) gh workflow enable "Keep-alive (Render demo)"
+#   2) Secret RENDER_HEALTH_URL = https://YOUR-SERVICE.onrender.com/health
+#   3) Uncomment the schedule block below (or use workflow_dispatch only).
 #
 # ⚠️ Demo only. Do not collect real RF personal data on Render (152-ФЗ).
 
 name: Keep-alive (Render demo)
 
 on:
-  schedule:
-    # Every 10 minutes — under Render free idle timeout (~15 min).
-    - cron: "*/10 * * * *"
-  workflow_dispatch:
+  # schedule:
+  #   - cron: "*/10 * * * *"
+  workflow_dispatch:  # manual only while keep-alive is off
 
 jobs:
   ping:
