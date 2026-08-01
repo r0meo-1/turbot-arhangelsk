@@ -19,6 +19,7 @@ def generate_ai_selection(
     ai_mode: str = "template",
     groq_client: Any = None,
     groq_model: str = "llama-3.3-70b-versatile",
+    timeout: float = 20.0,
     log: Optional[logging.Logger] = None,
 ) -> str:
     """Generate a tour blurb via Groq or fall back to templates."""
@@ -52,6 +53,9 @@ def generate_ai_selection(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=300,
             temperature=0.7,
+            # Explicit timeout: without it a hung call leaks the background
+            # thread that runs post-completion side effects.
+            timeout=timeout,
         )
         ai_text = response.choices[0].message.content
         log.info("AI selection generated for '%s'", destination)

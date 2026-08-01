@@ -1542,7 +1542,7 @@ def vk_webhook() -> Any:
     # Optional secret-key verification
     if VK_SECRET_KEY:
         received_secret = data.get("secret", "")
-        if received_secret != VK_SECRET_KEY:
+        if not hmac.compare_digest(received_secret, VK_SECRET_KEY):
             logger.warning("VK webhook: invalid secret key")
             return "ok", 200
 

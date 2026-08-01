@@ -11,6 +11,11 @@ os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret123")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")  # disable background worker
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
+# Unit tests must never touch the network. Tutu ships enabled by default so the
+# deployed demo works without anyone setting a variable; here it stays off, and
+# tests/test_tutu.py exercises that client against injected transports instead.
+os.environ.setdefault("TUTU_ENABLED", "false")
+os.environ.setdefault("DEMO_MODE", "false")  # tests assert on real stored values
 os.environ.setdefault("CONSENT_MODE", "strict")  # keep classic consent in unit tests
 os.environ.setdefault("STATE_FILE", ":memory:")  # not used when save_state is mocked
 os.environ.setdefault(
@@ -776,12 +781,15 @@ def test_lead_is_sent_to_admin_telegram(client, monkeypatch):
 
     admin_msgs = [m for m in sent if m["chat_id"] == 999]
     assert admin_msgs, "admin must receive at least one Telegram message with the lead"
-    body = admin_msgs[-1]["text"]
-    assert "Новая заявка" in body
+    # Pick the lead notification explicitly: with Tutu enabled a price
+    # follow-up legitimately arrives after it, so "the last message" is fragile.
+    lead_msgs = [m for m in admin_msgs if "Новая заявка" in m["text"]]
+    assert lead_msgs, "admin must receive the lead notification itself"
+    body = lead_msgs[-1]["text"]
     assert "Турция" in body
     assert "+79161234567" in body
     assert "70000" in body
-    assert admin_msgs[-1]["parse_mode"] == "HTML"
+    assert lead_msgs[-1]["parse_mode"] == "HTML"
 
 
 def test_parse_chat_ids():
@@ -793,3 +801,101 @@ def test_parse_chat_ids():
 def test_graceful_shutdown_handler():
     """_graceful_shutdown should exist and be callable."""
     assert callable(bot._graceful_shutdown)
+
+
+# ---------------------------------------------------------------------------
+# Demo mode, self-served privacy policy and concurrent-completion guard
+
+
+def test_mask_phone_keeps_shape_not_number():
+    assert bot.mask_phone("+79161234567") == "+7916***4567"
+    assert bot.mask_phone("89161234567") == "+8916***4567"
+    assert bot.mask_phone("123") == "+7***"
+    assert bot.mask_phone("") == "+7***"
+
+
+def test_demo_mode_stores_masked_phone(client, monkeypatch):
+    """A public showcase must not persist a real subscriber number."""
+    monkeypatch.setattr(bot, "DEMO_MODE", True)
+    _consent(client, 5001)
+    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+        _post(client, 5001, text)
+    _post(client, 5001, "+79161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (5001,))
+        stored = cur.fetchone()[0]
+    assert stored == "+7916***4567"
+    assert "1234567" not in stored
+
+
+def test_real_mode_stores_real_phone(client, monkeypatch):
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    _consent(client, 5002)
+    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+        _post(client, 5002, text)
+    _post(client, 5002, "+79161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (5002,))
+        assert cur.fetchone()[0] == "+79161234567"
+
+
+def test_privacy_page_is_served(client):
+    """The consent text links here, so it must never 404."""
+    resp = client.get("/privacy")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "персональных данных" in body
+    assert "<h1" in body or "<h2" in body
+
+
+def test_health_reports_demo_and_tutu_flags(client):
+    data = client.get("/health").get_json()
+    assert "demo_mode" in data
+    assert "tutu_enabled" in data
+
+
+def test_concurrent_completion_creates_one_lead(client, monkeypatch):
+    """Two threads finishing the same dialog must not double the lead.
+
+    The real-world trigger is a double-tapped "share contact" button: two
+    genuinely distinct updates, so update_id dedup does not catch them.
+    """
+    import threading
+
+    chat = 5150
+    bot.user_data[chat] = {
+        "state": bot.STATE_PHONE,
+        "destination": "Турция",
+        "origin": "Москва",
+        "dates": "1-7 августа",
+        "people": "2",
+        "budget": 70000,
+        "updated_at": int(time.time()),
+    }
+    monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
+    monkeypatch.setattr(bot, "_notify_admin", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **k: None)
+
+    real_save = bot.save_lead
+
+    def slow_save(*args, **kwargs):
+        time.sleep(0.05)          # widen the window the guard has to close
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(bot, "save_lead", slow_save)
+
+    barrier = threading.Barrier(2)
+    message = {"from": {"first_name": "Гонка", "username": "race"}}
+
+    def run():
+        barrier.wait()
+        bot.handle_completion(chat, "+79161234567", message)
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    assert bot.count_leads() == 1, "concurrent completion produced duplicate leads"
+    bot.delete_user_data(chat)
