@@ -2,6 +2,7 @@
 
 STATE_CONSENT = "consent"
 STATE_DESTINATION = "destination"
+STATE_ORIGIN = "origin"  # departure city — needed for a real transport search
 STATE_DATES = "dates"
 STATE_PEOPLE = "people"
 STATE_BUDGET = "budget"
@@ -38,4 +39,21 @@ POPULAR_DESTINATIONS_TG = [
     "🌊 Мальдивы",
     "🏛 ОАЭ",
     "✏️ Другое",
+]
+
+# Departure cities. The agency is in Arkhangelsk, so it leads — but clients
+# routinely fly out of Moscow or St Petersburg, and guessing wrong makes the
+# quoted price meaningless.
+ORIGIN_OPTIONS_PLAIN = [
+    "Архангельск",
+    "Москва",
+    "Санкт-Петербург",
+    "Другой город",
+]
+
+ORIGIN_OPTIONS_TG = [
+    "🏠 Архангельск",
+    "🏙 Москва",
+    "🌉 Санкт-Петербург",
+    "✏️ Другой город",
 ]

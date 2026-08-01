@@ -227,7 +227,7 @@ def test_delete_command_erases_data(client):
 def test_delete_command_erases_leads(client):
     """152-ФЗ: /delete must remove completed leads for that user too."""
     _consent(client, 115)
-    for text in ["🏖 Египет", "15-22 июня", "2", "60000"]:
+    for text in ["🏖 Египет", "Москва", "15-22 июня", "2", "60000"]:
         _post(client, 115, text)
     _post(client, 115, contact={"phone_number": "79161234567", "user_id": 115})
     assert bot.count_leads() == 1
@@ -238,7 +238,7 @@ def test_delete_command_erases_leads(client):
 def test_dialog_completion_with_contact(client):
     # Walk through the whole flow.
     _consent(client, 222)
-    for text in ["🏖 Египет", "15-22 июня", "2", "60000"]:
+    for text in ["🏖 Египет", "Москва", "15-22 июня", "2", "60000"]:
         _post(client, 222, text)
 
     info = bot.user_data.get(222)
@@ -264,8 +264,13 @@ def test_dialog_completion_via_inline_buttons(client):
     _consent(client, 223)
     # Destination index 0 → first POPULAR_DESTINATIONS entry
     _callback(client, 223, f"{bot.CB_DEST_PREFIX}0")
-    assert bot.user_data[223]["state"] == bot.STATE_DATES
+    assert bot.user_data[223]["state"] == bot.STATE_ORIGIN
     assert "Египет" in bot.user_data[223].get("destination", "")
+
+    # Departure city (index 0 → Архангельск)
+    _callback(client, 223, f"{bot.CB_ORIGIN_PREFIX}0")
+    assert bot.user_data[223]["state"] == bot.STATE_DATES
+    assert bot.user_data[223]["origin"] == "Архангельск"
 
     _post(client, 223, "10-17 июля")
     assert bot.user_data[223]["state"] == bot.STATE_PEOPLE
@@ -294,7 +299,7 @@ def test_soft_mode_start_and_telegram_contact(client, monkeypatch):
     assert bot.has_consent(901)
     assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
 
-    for text in ["Турция", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
         _post(client, 901, text)
     assert bot.user_data[901]["state"] == bot.STATE_CONTACT
 
@@ -360,7 +365,10 @@ def test_full_flow_all_buttons(client):
     """Complete a lead using only preset buttons (no free typing)."""
     _consent(client, 910)
     _callback(client, 910, f"{bot.CB_DEST_PREFIX}0")
+    assert bot.user_data[910]["state"] == bot.STATE_ORIGIN
+    _callback(client, 910, f"{bot.CB_ORIGIN_PREFIX}1")
     assert bot.user_data[910]["state"] == bot.STATE_DATES
+    assert bot.user_data[910]["origin"] == "Москва"
     _callback(client, 910, f"{bot.CB_DATE_PREFIX}0")
     assert bot.user_data[910]["state"] == bot.STATE_PEOPLE
     assert "выходные" in bot.user_data[910]["dates"]
@@ -411,10 +419,17 @@ def test_admin_send_empty_uses_last_lead(client, monkeypatch):
 def test_back_button(client):
     _consent(client, 333)
     _post(client, 333, "🏖 Египет")
-    assert bot.user_data[333]["state"] == bot.STATE_DATES
+    assert bot.user_data[333]["state"] == bot.STATE_ORIGIN
 
     _post(client, 333, "◀️ Назад")
     assert bot.user_data[333]["state"] == bot.STATE_DESTINATION
+
+    # And back again from dates → origin (the newly inserted step)
+    _post(client, 333, "🏖 Египет")
+    _post(client, 333, "Москва")
+    assert bot.user_data[333]["state"] == bot.STATE_DATES
+    _post(client, 333, "◀️ Назад")
+    assert bot.user_data[333]["state"] == bot.STATE_ORIGIN
 
 
 def test_cancel_button(client):
@@ -693,10 +708,10 @@ def test_duplicate_update_ignored(client):
     update["message"]["text"] = "Египет"
     client.post("/webhook", json=update,
                 headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"})
-    assert bot.user_data[800]["state"] == bot.STATE_DATES
+    assert bot.user_data[800]["state"] == bot.STATE_ORIGIN
     assert bot.user_data[800].get("destination") == "Египет"
     # Send the same update again — should be ignored
-    bot.user_data[800]["state"] = bot.STATE_DATES  # reset
+    bot.user_data[800]["state"] = bot.STATE_ORIGIN  # reset
     update["message"]["text"] = "Турция"
     client.post("/webhook", json=update,
                 headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"})
@@ -725,6 +740,7 @@ def test_html_escape_in_notify(client):
     """User input with HTML tags should be escaped in admin notifications."""
     _consent(client, 802)
     _post(client, 802, "<script>alert(1)</script>")
+    _post(client, 802, "Москва")
     _post(client, 802, "1-10 июля")
     _post(client, 802, "2")
     _post(client, 802, "50000")
@@ -751,7 +767,7 @@ def test_lead_is_sent_to_admin_telegram(client, monkeypatch):
     monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
 
     _consent(client, 903)
-    for text in ["Турция", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
         _post(client, 903, text)
     _post(client, 903, "+79161234567")
 
