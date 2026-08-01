@@ -379,6 +379,35 @@ def test_admin_block_has_anchor_and_checkout():
     assert "2026-09-15" in text
 
 
+def test_identical_fare_families_are_collapsed():
+    """Tutu returns one entry per fare family; three identical lines in a row
+    reads as a broken bot, so same price + carrier + departure collapses."""
+    payload = {
+        "offers": [
+            {"price": {"amount": 86396.0, "currency": "RUB"}, "carriers": ["Pegasus"],
+             "departure_at": "2026-09-15T15:05:00+03:00", "duration_min": 825},
+            {"price": {"amount": 86396.0, "currency": "RUB"}, "carriers": ["Pegasus"],
+             "departure_at": "2026-09-15T15:05:00+03:00", "duration_min": 825},
+            {"price": {"amount": 86396.0, "currency": "RUB"}, "carriers": ["Pegasus"],
+             "departure_at": "2026-09-15T15:05:00+03:00", "duration_min": 825},
+            {"price": {"amount": 91000.0, "currency": "RUB"}, "carriers": ["Аэрофлот"],
+             "departure_at": "2026-09-15T06:00:00+03:00", "duration_min": 700},
+        ],
+        "meta": {},
+    }
+    offers = tutu._normalise_offers(payload, 3)
+    assert len(offers) == 2
+    assert [o.price for o in offers] == [86396.0, 91000.0]
+
+
+def test_search_over_fetches_to_survive_dedup(settings):
+    fn = _stub([SAMPLE_SEARCH])
+    tutu.search_offers(settings, FakeSession(), destination="Египет",
+                       dates_raw="через месяц", request_fn=fn)
+    assert fn.seen[0][1]["page_size"] > settings.max_offers
+    assert fn.seen[0][1]["page_size"] <= 30
+
+
 def test_empty_result_renders_nothing():
     empty = tutu.SearchResult()
     assert tutu.format_client_message(empty) == ""

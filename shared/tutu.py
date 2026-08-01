@@ -369,13 +369,32 @@ def _fmt_departure(iso_ts: str) -> str:
 
 
 def _normalise_offers(payload: Dict[str, Any], limit: int) -> List[Offer]:
+    """Normalise and de-duplicate offers for display.
+
+    Tutu returns one entry per fare family, so the same physical flight can
+    appear several times with an identical price. Three identical lines in a
+    row reads as a broken bot, so collapse anything a human would see as the
+    same option: price + carriers + departure + duration.
+    """
     offers: List[Offer] = []
-    for raw in (payload.get("offers") or [])[:limit]:
+    seen: set = set()
+    for raw in (payload.get("offers") or []):
+        if len(offers) >= limit:
+            break
         price = (raw.get("price") or {})
         try:
             amount = float(price.get("amount"))
         except (TypeError, ValueError):
             continue
+        signature = (
+            amount,
+            tuple(raw.get("carriers") or []),
+            raw.get("departure_at") or "",
+            raw.get("duration_min") or 0,
+        )
+        if signature in seen:
+            continue
+        seen.add(signature)
         offers.append(Offer(
             price=amount,
             currency=price.get("currency", "RUB"),
@@ -425,7 +444,9 @@ def search_offers(
         "origin": (origin or settings.default_origin).strip(),
         "destination": city,
         "departure_date": depart,
-        "page_size": max(settings.max_offers, 1),
+        # Over-fetch: fare families collapse during de-duplication, so asking
+        # for exactly max_offers would often render fewer than intended.
+        "page_size": min(max(settings.max_offers, 1) * 4, 30),
         "sort": "price_asc",
     }
     # A tour is a round trip whenever the client gave an end date.
