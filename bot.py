@@ -4,6 +4,7 @@ import os
 import json
 import hmac
 import html
+import re
 import sqlite3
 import time
 import logging
@@ -14,7 +15,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -114,7 +115,7 @@ else:
 # Read-only search against Tutu's public MCP server. Runs only in the
 # post-completion background thread, never on the webhook critical path, and
 # degrades silently to the template blurb when unavailable.
-TUTU_ENABLED = os.getenv("TUTU_ENABLED", "false").lower().strip() in ("1", "true", "yes")
+TUTU_ENABLED = os.getenv("TUTU_ENABLED", "true").lower().strip() in ("1", "true", "yes")
 TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
 TUTU_TIMEOUT = int(os.getenv("TUTU_TIMEOUT", "12"))
 TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
@@ -141,11 +142,36 @@ def _tutu_settings() -> "_tutu.TutuSettings":
     )
 
 
+# --- Demo mode --------------------------------------------------------------
+# A public portfolio instance must not quietly collect real phone numbers on
+# behalf of a real registered business. In demo mode the funnel still runs end
+# to end (and Tutu still returns live prices), but the bot says plainly that it
+# is a showcase and stores a masked number instead of the real one.
+#
+# Render sets RENDER=true on every instance, so the showcase turns itself on
+# without anyone remembering to flip a switch; a real deployment on a VM has no
+# such variable and behaves normally. Override explicitly with DEMO_MODE.
+_render_host = bool(os.getenv("RENDER"))
+DEMO_MODE = os.getenv(
+    "DEMO_MODE", "true" if _render_host else "false"
+).lower().strip() in ("1", "true", "yes")
+
+DEMO_NOTICE = (
+    "⚠️ <b>Это демонстрационная версия</b> для портфолио.\n"
+    "Заявка <b>не попадёт</b> в турагентство, а телефон не сохраняется — "
+    "вводите любой номер вида +79001234567.\n"
+    "Цены на перелёт при этом настоящие: они приходят из Tutu.ru."
+)
+
 # --- Personal-data compliance (152-ФЗ) ------------------------------------
 # URL of the privacy policy / consent text shown to users before their personal
 # data (name, phone) is collected. Operators of RF personal data MUST publish
-# such a document; set this to your hosted policy URL.
-PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip()
+# such a document. The bot serves its own copy at /privacy, so the link is never
+# empty just because nobody hosted the document separately.
+_render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip() or (
+    f"{_render_url}/privacy" if _render_url else ""
+)
 # Name of the data operator shown in the consent text.
 DATA_OPERATOR_NAME = os.getenv(
     "DATA_OPERATOR_NAME",
@@ -198,6 +224,19 @@ if not LEAD_NOTIFY_IDS:
     )
 else:
     logger.info("Lead Telegram recipients: %s", LEAD_NOTIFY_IDS)
+if not TELEGRAM_SECRET_TOKEN:
+    logger.warning(
+        "TELEGRAM_SECRET_TOKEN is not set — the webhook accepts unauthenticated "
+        "POSTs, so anyone who learns the URL can inject fake updates. Generate a "
+        "random string and pass it to setWebhook."
+    )
+if not PRIVACY_POLICY_URL:
+    logger.warning(
+        "PRIVACY_POLICY_URL is not set and could not be derived — the consent "
+        "text will have no policy link while the bot collects phone numbers."
+    )
+if DEMO_MODE:
+    logger.info("DEMO_MODE is on — leads are not forwarded and phones are masked.")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -255,6 +294,8 @@ def _welcome_text(first_name: str = "") -> str:
         head = f"🌴 <b>Добро пожаловать, {safe}!</b>"
     else:
         head = "🌴 <b>Добро пожаловать в «АПРЕЛЬ тур»!</b>"
+    if DEMO_MODE:
+        return f"{head}\n\n{DEMO_NOTICE}\n\n{WELCOME_BODY}"
     return f"{head}\n\n{WELCOME_BODY}"
 
 HINT_START = (
@@ -607,6 +648,18 @@ def list_stale_sessions(cutoff: int) -> List[int]:
         return [row[0] for row in cur.fetchall()]
 
 
+def mask_phone(phone: str) -> str:
+    """Keep the shape of a number without keeping the number.
+
+    Used in demo mode so a public showcase never persists a real subscriber
+    number: +79161234567 → +7916***4567.
+    """
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if len(digits) < 8:
+        return "+7***"
+    return f"+{digits[:4]}***{digits[-4:]}"
+
+
 def save_lead(
     chat_id: int,
     info: Dict[str, Any],
@@ -616,6 +669,8 @@ def save_lead(
 ) -> None:
     """Persist a completed tour request for export/analytics."""
     now = int(time.time())
+    if DEMO_MODE:
+        phone = mask_phone(phone)
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
@@ -2487,8 +2542,25 @@ def _post_completion_side_effects(
 
 
 def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None:
-    """Finalise the request: confirm, notify admin, persist lead; defer MDT/AI."""
-    info = dict(user_data.get(chat_id, {}))
+    """Finalise the request: confirm, notify admin, persist lead; defer MDT/AI.
+
+    Guarded against concurrent completion. With ``--threads 2`` two distinct
+    updates for the same chat can be processed at once — a double-tapped
+    "share contact" button, or a typed number racing the contact event. Both
+    would otherwise pass validation and complete, producing two leads, two
+    admin pings and two CRM pushes, so the sales team calls the client twice.
+    Telegram's update_id dedup does not help here: the updates are genuinely
+    different. Check-and-set under the same lock that guards user_data.
+    """
+    with _lock:
+        live = user_data.get(chat_id)
+        if live is None or live.get("_completing"):
+            logger.info("Concurrent completion ignored for chat_id=%s", chat_id)
+            return
+        live["_completing"] = True
+        info = dict(live)
+    info.pop("_completing", None)
+
     from_info = message.get("from", {})
     first_name = from_info.get("first_name", "")
     username = from_info.get("username", "")
@@ -2532,6 +2604,89 @@ def index() -> str:
     return "TurBot is running!"
 
 
+def _markdown_to_html(source: str) -> str:
+    """Render the small Markdown subset used by the privacy policy.
+
+    Deliberately dependency-free: pulling a Markdown library onto a 512 MB
+    instance to render one static document is not a good trade.
+    """
+    out: List[str] = []
+    in_list = False
+    for raw_line in source.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.lstrip("> ").strip() if line.startswith(">") else line.strip()
+        if not stripped:
+            if in_list:
+                out.append("</ul>")
+                in_list = False
+            continue
+        safe = html.escape(stripped, quote=False)
+        safe = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", safe)
+        safe = re.sub(r"`(.+?)`", r"<code>\1</code>", safe)
+        if stripped.startswith("- "):
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{safe[2:]}</li>")
+            continue
+        if in_list:
+            out.append("</ul>")
+            in_list = False
+        heading = len(stripped) - len(stripped.lstrip("#"))
+        if heading:
+            level = min(heading + 1, 6)
+            out.append(f"<h{level}>{safe.lstrip('# ')}</h{level}>")
+        elif line.startswith(">"):
+            out.append(f'<blockquote>{safe}</blockquote>')
+        else:
+            out.append(f"<p>{safe}</p>")
+    if in_list:
+        out.append("</ul>")
+    return "\n".join(out)
+
+
+@app.route("/privacy")
+def privacy_page() -> Any:
+    """Serve the privacy policy the bot links to in its consent text.
+
+    Operators of RF personal data must publish this document. Hosting it from
+    the bot itself means the link can never be dead just because nobody set up
+    separate hosting for a single static page.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "docs", "privacy_policy.md")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            body = _markdown_to_html(fh.read())
+    except OSError as exc:
+        logger.error("Privacy policy is not readable at %s: %s", path, exc)
+        return "Политика обработки персональных данных временно недоступна.", 503
+
+    banner = (
+        '<div class="demo">Инстанс работает в демонстрационном режиме: '
+        'заявки не передаются в турагентство, телефон не сохраняется.</div>'
+        if DEMO_MODE else ""
+    )
+    page = (
+        '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        "<title>Политика обработки персональных данных — TurBot</title><style>"
+        "body{max-width:760px;margin:0 auto;padding:40px 6%;"
+        "font:16px/1.65 -apple-system,Segoe UI,Roboto,sans-serif;color:#15171c}"
+        "h1{font-size:1.8rem;letter-spacing:-.02em;line-height:1.2}"
+        "h2{font-size:1.2rem;margin-top:2em;letter-spacing:-.01em}"
+        "h3{font-size:1.03rem;margin-top:1.5em}"
+        "p,li{color:#39414c}ul{padding-left:1.2em}li{margin:.3em 0}"
+        "code{background:#eef1f4;padding:1px 5px;border-radius:3px;font-size:.9em}"
+        "blockquote{border-left:3px solid #d99a2b;background:#fdf7ec;margin:1.4em 0;"
+        "padding:12px 18px;color:#4a4235}"
+        ".demo{border-left:3px solid #2b7fd4;background:#eef4fb;padding:12px 18px;"
+        "margin-bottom:26px;color:#26445f}"
+        "</style></head><body>" + banner + body + "</body></html>"
+    )
+    return Response(page, mimetype="text/html; charset=utf-8")
+
+
 @app.route("/health")
 def health() -> Any:
     """Simple health/readiness endpoint for monitoring."""
@@ -2555,6 +2710,8 @@ def health() -> Any:
         "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
         "data_retention_days": DATA_RETENTION_DAYS,
         "consent_mode": CONSENT_MODE,
+        "demo_mode": DEMO_MODE,
+        "tutu_enabled": TUTU_ENABLED,
     })
 
 

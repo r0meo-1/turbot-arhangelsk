@@ -1,0 +1,14 @@
+# Minimal project config — the package layout is flat on purpose (bot.py and
+# vk_bot.py are entry points, shared/ is the common layer), so this file exists
+# mainly to make the test run reproducible.
+#
+# Without pythonpath here, a bare `pytest` from the repo root fails with
+# ModuleNotFoundError: only `python -m pytest` worked, because `python -m` adds
+# the current directory to sys.path and the bare console script does not. CI
+# papered over this with an explicit PYTHONPATH env line; new contributors hit
+# a confusing import error instead.
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"
