@@ -26,6 +26,7 @@ from shared.constants import (
     STATE_CONTACT,
     STATE_DATES,
     STATE_DESTINATION,
+    STATE_ORIGIN,
     STATE_PEOPLE,
     STATE_PHONE,
     STATE_VK,
@@ -39,10 +40,12 @@ from shared.constants import (
     CONTACT_PHONE_TEXT,
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_TG,
+    ORIGIN_OPTIONS_TG,
 )
 from shared.validation import validate_phone, validate_people, validate_budget
 from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
+from shared import tutu as _tutu
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
 
@@ -106,6 +109,37 @@ elif ADMIN_ID:
     LEAD_NOTIFY_IDS = [ADMIN_ID]
 else:
     LEAD_NOTIFY_IDS = []
+
+# --- Tutu.ru MCP (live transport offers) -----------------------------------
+# Read-only search against Tutu's public MCP server. Runs only in the
+# post-completion background thread, never on the webhook critical path, and
+# degrades silently to the template blurb when unavailable.
+TUTU_ENABLED = os.getenv("TUTU_ENABLED", "false").lower().strip() in ("1", "true", "yes")
+TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
+TUTU_TIMEOUT = int(os.getenv("TUTU_TIMEOUT", "12"))
+TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
+TUTU_MAX_OFFERS = int(os.getenv("TUTU_MAX_OFFERS", "3"))
+TUTU_CACHE_TTL = int(os.getenv("TUTU_CACHE_TTL", "900"))
+# Who sees the result. Client gets orientation pricing only (no checkout link —
+# handing the client a "buy" button routes the sale around the agency);
+# the manager gets the price anchor plus checkout links.
+TUTU_SHOW_CLIENT = os.getenv("TUTU_SHOW_CLIENT", "true").lower().strip() in ("1", "true", "yes")
+TUTU_SHOW_ADMIN = os.getenv("TUTU_SHOW_ADMIN", "true").lower().strip() in ("1", "true", "yes")
+
+
+def _tutu_settings() -> "_tutu.TutuSettings":
+    """Build settings from live env globals (mirrors the MDT pattern)."""
+    return _tutu.TutuSettings(
+        enabled=TUTU_ENABLED,
+        endpoint=TUTU_ENDPOINT,
+        timeout=TUTU_TIMEOUT,
+        default_origin=TUTU_DEFAULT_ORIGIN,
+        max_offers=TUTU_MAX_OFFERS,
+        cache_ttl=TUTU_CACHE_TTL,
+        show_client=TUTU_SHOW_CLIENT,
+        show_admin=TUTU_SHOW_ADMIN,
+    )
+
 
 # --- Personal-data compliance (152-ФЗ) ------------------------------------
 # URL of the privacy policy / consent text shown to users before their personal
@@ -233,6 +267,7 @@ CB_CONSENT_YES = "c:yes"
 CB_CONSENT_NO = "c:no"
 CB_START = "c:start"
 CB_DEST_PREFIX = "d:"
+CB_ORIGIN_PREFIX = "or:"
 CB_DATE_PREFIX = "dt:"
 CB_PEOPLE_PREFIX = "p:"
 CB_BUDGET_PREFIX = "bd:"
@@ -251,6 +286,7 @@ DATE_PRESETS: List[Tuple[str, str]] = [
     ("❄️ Зима", "зима"),
     ("🤷 Даты гибкие", "даты гибкие"),
 ]
+ORIGIN_OPTIONS: List[str] = ORIGIN_OPTIONS_TG
 BUDGET_PRESETS: List[Tuple[str, int]] = [
     ("до 40 000 ₽", 40000),
     ("60 000 ₽", 60000),
@@ -419,6 +455,7 @@ def init_db() -> None:
                 chat_id INTEGER PRIMARY KEY,
                 state TEXT NOT NULL,
                 destination TEXT,
+                origin TEXT,
                 dates TEXT,
                 people TEXT,
                 budget INTEGER,
@@ -436,6 +473,7 @@ def init_db() -> None:
                 first_name TEXT,
                 username TEXT,
                 destination TEXT,
+                origin TEXT,
                 dates TEXT,
                 people TEXT,
                 budget INTEGER,
@@ -444,6 +482,11 @@ def init_db() -> None:
             )
             """
         )
+        # Additive migration for databases created before the origin step.
+        for _table in ("sessions", "leads"):
+            cur.execute(f"PRAGMA table_info({_table})")
+            if "origin" not in {row[1] for row in cur.fetchall()}:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN origin TEXT")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)"
         )
@@ -487,11 +530,12 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
-            INSERT INTO sessions (chat_id, state, destination, dates, people, budget, phone, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (chat_id, state, destination, origin, dates, people, budget, phone, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
+                origin=excluded.origin,
                 dates=excluded.dates,
                 people=excluded.people,
                 budget=excluded.budget,
@@ -502,6 +546,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 chat_id,
                 data.get("state", ""),
                 data.get("destination"),
+                data.get("origin"),
                 data.get("dates"),
                 data.get("people"),
                 data.get("budget"),
@@ -513,7 +558,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
 
 def update_session(chat_id: int, **kwargs) -> None:
     """Update specific fields of an existing session."""
-    allowed = {"state", "destination", "dates", "people", "budget", "phone", "updated_at"}
+    allowed = {"state", "destination", "origin", "dates", "people", "budget", "phone", "updated_at"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -575,15 +620,16 @@ def save_lead(
         cur.execute(
             """
             INSERT INTO leads (
-                chat_id, first_name, username, destination, dates,
+                chat_id, first_name, username, destination, origin, dates,
                 people, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
                 first_name or None,
                 username or None,
                 info.get("destination"),
+                info.get("origin"),
                 info.get("dates"),
                 info.get("people"),
                 info.get("budget"),
@@ -1235,6 +1281,24 @@ def kb_destinations() -> str:
     return inline_keyboard(rows)
 
 
+def kb_origin() -> str:
+    """Inline: departure cities in two columns + nav."""
+    rows: List[List[Dict[str, str]]] = []
+    row: List[Dict[str, str]] = []
+    for i, label in enumerate(ORIGIN_OPTIONS):
+        row.append(_inline_btn(label, f"{CB_ORIGIN_PREFIX}{i}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([
+        _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+        _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+    ])
+    return inline_keyboard(rows)
+
+
 def kb_dates() -> str:
     """Inline: date presets + free-text + nav."""
     rows: List[List[Dict[str, str]]] = []
@@ -1506,6 +1570,47 @@ def _admin_mdt(chat_id: int, arg: str) -> bool:
     return True
 
 
+def _admin_tutu(chat_id: int, arg: str) -> bool:
+    """`/tutu` — Tutu MCP status; `/tutu test` — live search smoke test."""
+    if not TUTU_ENABLED:
+        send_message(chat_id, "Интеграция с Tutu отключена (TUTU_ENABLED=false).")
+        return True
+    settings = _tutu_settings()
+    lines = [
+        "🚄 Tutu MCP статус:",
+        f"  Endpoint: {settings.endpoint}",
+        f"  Таймаут: {settings.timeout} с",
+        f"  Город вылета по умолчанию: {settings.default_origin}",
+        f"  Предложений: {settings.max_offers}",
+        f"  Кэш TTL: {settings.cache_ttl} с",
+        f"  Показывать клиенту: {'✅' if settings.show_client else '❌'}",
+        f"  Показывать админу: {'✅' if settings.show_admin else '❌'}",
+    ]
+    if arg.strip() == "test":
+        started = time.time()
+        result = _tutu.search_offers(
+            settings,
+            telegram_session,
+            destination="Египет",
+            dates_raw="через месяц",
+            origin=settings.default_origin,
+            people=2,
+            log=logger,
+        )
+        elapsed = time.time() - started
+        if result and result.offers:
+            cheapest = result.offers[0]
+            lines.append(
+                f"\n✅ Поиск работает ({elapsed:.1f} с): "
+                f"{result.from_city} → {result.to_city}, "
+                f"от {cheapest.price:.0f} {cheapest.currency}"
+            )
+        else:
+            lines.append(f"\n❌ Поиск не вернул предложений ({elapsed:.1f} с).")
+    send_message(chat_id, "\n".join(lines))
+    return True
+
+
 def _admin_analytics(chat_id: int, arg: str) -> bool:
     """Show analytics: completed leads, funnel, popular destinations."""
     with _db_cursor() as cur:
@@ -1691,6 +1796,7 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/broadcast":    _admin_broadcast,
     "/followup":     _admin_followup,
     "/mdt":          _admin_mdt,
+    "/tutu":         _admin_tutu,
 }
 
 
@@ -1706,13 +1812,17 @@ def handle_admin(chat_id: int, text: str) -> bool:
 # User dialog
 # ---------------------------------------------------------------------------
 
-def _strip_emoji_prefix(text: str) -> str:
-    """If text matches a keyboard button, return the part after the emoji."""
+def _strip_emoji_prefix(text: str, options: Optional[List[str]] = None) -> str:
+    """If text matches a keyboard button, return the part after the emoji.
+
+    ``options`` defaults to the destination labels; pass another keyboard's
+    labels (e.g. ORIGIN_OPTIONS) to strip those instead.
+    """
     text = text.strip()
-    for dest in POPULAR_DESTINATIONS:
-        if text == dest:
-            parts = dest.split(" ", 1)
-            return parts[1] if len(parts) > 1 else dest
+    for label in (POPULAR_DESTINATIONS if options is None else options):
+        if text == label:
+            parts = label.split(" ", 1)
+            return parts[1] if len(parts) > 1 else label
     return text
 
 
@@ -1820,6 +1930,16 @@ def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
         )
 
 
+def _ask_origin(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "🛫 <b>Откуда вылетаете?</b>\n\n"
+        "Нужно, чтобы посчитать перелёт — цена сильно зависит от города.",
+        reply_markup=kb_origin(),
+        parse_mode="HTML",
+    )
+
+
 def _ask_dates(chat_id: int) -> None:
     send_message(
         chat_id,
@@ -1872,6 +1992,35 @@ def _step_destination(chat_id: int, text: str, message: Dict[str, Any], info: Di
         )
         return
     info["destination"] = dest
+    info["state"] = STATE_ORIGIN
+    _ask_origin(chat_id)
+
+
+def _step_origin(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    raw = (text or "").strip()
+
+    # Preset callback: or:0 … or:N
+    if raw.startswith(CB_ORIGIN_PREFIX):
+        key = raw[len(CB_ORIGIN_PREFIX):]
+        if not key.isdigit() or not (0 <= int(key) < len(ORIGIN_OPTIONS)):
+            send_message(chat_id, "Кнопка устарела — выберите город ещё раз.",
+                         reply_markup=kb_origin())
+            return
+        raw = ORIGIN_OPTIONS[int(key)]
+
+    city = _strip_emoji_prefix(raw, ORIGIN_OPTIONS)
+    if city.lower() in ("другой город", "другое"):
+        send_message(
+            chat_id,
+            "✍️ Напишите город вылета:",
+            reply_markup=kb_nav(include_back=True),
+        )
+        return
+    if not city:
+        _ask_origin(chat_id)
+        return
+
+    info["origin"] = city
     info["state"] = STATE_DATES
     _ask_dates(chat_id)
 
@@ -2049,6 +2198,7 @@ def _step_vk(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, A
 STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], None]] = {
     STATE_CONSENT:     _step_consent,
     STATE_DESTINATION: _step_destination,
+    STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
     STATE_BUDGET:      _step_budget,
@@ -2058,7 +2208,8 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
 }
 
 PREVIOUS_STATE: Dict[str, str] = {
-    STATE_DATES:       STATE_DESTINATION,
+    STATE_ORIGIN:      STATE_DESTINATION,
+    STATE_DATES:       STATE_ORIGIN,
     STATE_PEOPLE:      STATE_DATES,
     STATE_BUDGET:      STATE_PEOPLE,
     STATE_CONTACT:     STATE_BUDGET,
@@ -2077,6 +2228,8 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
             reply_markup=kb_destinations(),
             parse_mode="HTML",
         )
+    elif state == STATE_ORIGIN:
+        _ask_origin(chat_id)
     elif state == STATE_DATES:
         _ask_dates(chat_id)
     elif state == STATE_PEOPLE:
@@ -2268,16 +2421,66 @@ def _send_ai_blurb(chat_id: int, info: Dict[str, Any]) -> None:
 SYNC_COMPLETION = os.getenv("SYNC_COMPLETION", "").lower().strip() in ("1", "true", "yes")
 
 
+def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
+    """Live transport search for a completed lead. Never raises."""
+    if not TUTU_ENABLED:
+        return None
+    try:
+        return _tutu.search_offers(
+            _tutu_settings(),
+            telegram_session,
+            destination=info.get("destination", ""),
+            dates_raw=info.get("dates", ""),
+            origin=info.get("origin", ""),
+            people=info.get("people", 1),
+            budget=info.get("budget"),
+            log=logger,
+        )
+    except Exception as exc:  # defensive: a search must never break completion
+        logger.error("Tutu search failed: %s", exc)
+        return None
+
+
+def _send_tutu_to_admin(chat_id: int, result: Any, client_name: Optional[str]) -> None:
+    """Follow-up to the manager with the price anchor and checkout links.
+
+    Deliberately a separate message: the lead notification itself is sent
+    synchronously on the critical path and must not wait for a search.
+    """
+    block = _tutu.format_admin_block(result)
+    if not block:
+        return
+    who = _esc(client_name or f"chat {chat_id}")
+    text = f"💼 <b>По заявке от {who}</b>{block}"
+    for recipient in LEAD_NOTIFY_IDS:
+        send_message(recipient, text, parse_mode="HTML")
+
+
 def _post_completion_side_effects(
     chat_id: int,
     info: Dict[str, Any],
     phone: str,
     client_name: Optional[str],
 ) -> None:
-    """MDT push + AI blurb — intentionally off the webhook critical path."""
+    """MDT push + live offers + AI blurb — off the webhook critical path."""
     try:
         send_lead_to_mdt(chat_id, info, phone, client_name)
-        _send_ai_blurb(chat_id, info)
+
+        result = _tutu_search(info)
+        client_text = ""
+        if result and TUTU_SHOW_CLIENT:
+            client_text = _tutu.format_client_message(result)
+
+        if client_text:
+            send_typing(chat_id)
+            send_message(chat_id, client_text, parse_mode="HTML")
+        else:
+            # No offers (or Tutu disabled/unavailable) — the client still gets
+            # the usual suggestion. Degradation must be invisible to them.
+            _send_ai_blurb(chat_id, info)
+
+        if result and TUTU_SHOW_ADMIN:
+            _send_tutu_to_admin(chat_id, result, client_name)
     except Exception as exc:
         logger.error("Post-completion side effects failed for %s: %s", chat_id, exc)
         _alert_admin_error("Post-completion side effects failed", exc)
@@ -2469,6 +2672,14 @@ def _process_callback(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
             return
         _step_destination(chat_id, label, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_ORIGIN_PREFIX):
+        if info.get("state") != STATE_ORIGIN:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_origin(chat_id, cb_data, synthetic, info)
         _mark_dirty(chat_id, user=False)
         return
 
