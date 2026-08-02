@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 AI_FALLBACK_MESSAGE = (
-    "🌴 Спасибо за заявку! Наш менеджер подберёт для вас\n"
-    "лучшие варианты туров и свяжется с вами в ближайшее время."
+    "🌴 Спасибо за заявку! Менеджер подберёт варианты\n"
+    "и свяжется с вами в ближайшее время."
 )
 
 TEMPLATE_INTROS: Dict[str, str] = {

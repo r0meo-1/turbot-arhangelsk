@@ -36,7 +36,8 @@ def generate_ai_selection(
 
     try:
         prompt = (
-            "Ты — эксперт по туризму туристического агентства «АПРЕЛЬ тур».\n\n"
+            "Ты — эксперт по туризму туристического агентства «АПРЕЛЬ тур».\n"
+            "Не предлагай конкретные туры и отели — их подбирает менеджер.\n\n"
             "Клиент хочет:\n"
             f"- Направление: {destination}\n"
             f"- Даты: {dates}\n"
@@ -59,10 +60,13 @@ def generate_ai_selection(
         )
         ai_text = response.choices[0].message.content
         log.info("AI selection generated for '%s'", destination)
+        # Not «подборка туров»: the bot has no hotels, transfers or packages —
+        # Tutu returns flights only. Promising a tour and delivering a
+        # paragraph about the destination is the kind of overclaim a client
+        # notices immediately.
         return (
-            "🌴 Ваша подборка туров\n\n"
-            f"{ai_text}\n\n"
-            "ℹ️ Наш менеджер скоро свяжется с вами для уточнения деталей!"
+            f"🌴 О направлении\n\n{ai_text}\n\n"
+            "ℹ️ Менеджер подберёт тур целиком и свяжется с вами."
         )
     except Exception as exc:
         log.error("Error generating AI selection: %s", exc)
