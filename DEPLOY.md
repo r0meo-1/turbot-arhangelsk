@@ -129,39 +129,18 @@ actionable than "Telegram does not work".
 
 ## 0. Why not Render.com?
 
-The included `render.yaml` deploys to **Render.com (USA)**. That's fine for a
-demo, but **personal data (names, phone numbers) must not be stored on foreign
-servers** (152-ФЗ ст. 18 ч. 5). Use a Russian provider instead:
+This project ran on Render's free tier and moved off it. Two reasons, both
+measured rather than assumed: the instance slept, and a cold start regularly
+exceeded 45 seconds — for a webhook bot that is lost updates and, for a
+portfolio link, a closed tab. The filesystem is also ephemeral, so every
+redeploy wiped the SQLite database.
 
-| Provider        | Free start        | Cheapest VPS  | Notes                          |
-| --------------- | ----------------- | ------------- | ------------------------------ |
-| Yandex Cloud    | ~4000 ₽ grant     | ~500 ₽/мес    | Best free trial, solid infra    |
-| VK Cloud        | ~3000 ₽ bonus     | ~400 ₽/мес    | Good trial credits              |
-| Timeweb Cloud   | trial period      | ~150–200 ₽/мес | Simplest, cheapest long-term   |
-| Beget           | trial             | ~200 ₽/мес    | Friendly panel                  |
-| Selectel        | —                 | from ~600 ₽/мес | Most reliable, enterprise-grade |
+The deciding reason is legal, though: personal data of RF citizens must be
+stored on RF territory (152-ФЗ ст. 18 ч. 5), and Render is US-hosted.
 
-For a lightweight Telegram bot, **Timeweb Cloud** is the sweet spot (cheap +
-simple), and **Yandex Cloud** gives you the longest free runway.
-
-### Demo / portfolio on free Render (optional keep-alive)
-
-Free Render **sleeps ~15 minutes** without HTTP traffic. Cold start = slow first
-message. For a “try the bot” demo (not real client phones):
-
-1. Deploy with `render.yaml` (or Blueprint).
-2. Open `https://YOUR-SERVICE.onrender.com/health` — should return JSON.
-3. **GitHub keep-alive** (already in the repo):
-   - Repo → **Settings → Secrets and variables → Actions**
-   - Secret name: `RENDER_HEALTH_URL`
-   - Value: `https://YOUR-SERVICE.onrender.com/health`
-   - Workflow: [`.github/workflows/keep-alive.yml`](.github/workflows/keep-alive.yml)  
-     runs every 10 minutes + manual **Run workflow**.
-4. Or use [UptimeRobot](https://uptimerobot.com) / cron-job.org → same URL every 5 min  
-   (often more reliable than GitHub Actions cron, which can lag).
-
-Do **not** use this for production personal data. SQLite on free Render is also
-ephemeral unless you add a persistent disk.
+Russian providers worth a look: Timeweb Cloud (cheapest, simplest), Yandex
+Cloud (longest free trial), Selectel (most reliable). Any of them runs this
+bot comfortably on 1 vCPU / 1 GB — the two bots together use ~310 MB.
 
 ---
 

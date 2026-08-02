@@ -48,3 +48,9 @@ bot_state.json
 # SQLite WAL/SHM sidecar files
 *.sqlite-wal
 *.sqlite-shm
+
+# One-off scratch output. demo_capture.json IS committed: tools/render_dialog_svg.py
+# needs it to regenerate docs/dialog.svg, and keeping the captured run in the
+# repo is what makes the picture reviewable instead of taken on trust.
+demo_page.html
+build_demo_page.py
