@@ -1068,3 +1068,29 @@ def test_dispatch_update_routes_and_survives_bad_payload(monkeypatch):
     assert seen.count("message") == 1
     assert seen.count("callback") == 1
     assert seen.count("saved") == 3, "state must be flushed on every path"
+
+
+def test_env_int_survives_empty_and_garbage(monkeypatch):
+    """`int(os.getenv("X", "12"))` uses its default only when the variable is
+    ABSENT. A .env copied from .env.example is full of present-but-empty keys,
+    and int("") raises at import — which surfaces as a bare gunicorn exit 3."""
+    monkeypatch.setenv("TURBOT_TEST_INT", "")
+    assert bot._env_int("TURBOT_TEST_INT", 42) == 42
+    monkeypatch.setenv("TURBOT_TEST_INT", "   ")
+    assert bot._env_int("TURBOT_TEST_INT", 42) == 42
+    monkeypatch.setenv("TURBOT_TEST_INT", "не число")
+    assert bot._env_int("TURBOT_TEST_INT", 42) == 42
+    monkeypatch.setenv("TURBOT_TEST_INT", " 7 ")
+    assert bot._env_int("TURBOT_TEST_INT", 42) == 7
+    monkeypatch.delenv("TURBOT_TEST_INT")
+    assert bot._env_int("TURBOT_TEST_INT", 42) == 42
+
+
+def test_no_raw_int_env_parsing_remains():
+    """Guard the whole class of bug, not just the ten call sites fixed today."""
+    import re as _re
+    for path in ("bot.py", "vk_bot.py"):
+        with open(path, encoding="utf-8") as fh:
+            code = "".join(l for l in fh if not l.lstrip().startswith(("#", "*")))
+        bad = _re.findall(r'^\s*[A-Z_]+\s*=\s*int\(os\.getenv', code, _re.M)
+        assert not bad, f"{path}: use _env_int() instead of raw int(os.getenv): {bad}"

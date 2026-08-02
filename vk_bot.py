@@ -69,8 +69,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger("turbot-vk")
 
+
+def _env_int(name: str, default: int = 0) -> int:
+    """Parse an int env var; empty or invalid values fall back to the default.
+
+    `int(os.getenv("X", "12"))` only uses its default when the variable is
+    ABSENT. A .env copied from .env.example is full of keys that are present
+    and empty, and `int("")` raises — which kills the process at import and
+    shows up as a bare gunicorn exit code 3. Already fixed in bot.py; this is
+    the same guard, ported.
+    """
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return int(str(raw).strip())
+    except ValueError:
+        logger.warning("Invalid %s=%r — using default %s", name, raw, default)
+        return default
+
 VK_ACCESS_TOKEN      = os.getenv("VK_ACCESS_TOKEN", "")
-VK_GROUP_ID          = int(os.getenv("VK_GROUP_ID", "0"))
+VK_GROUP_ID          = _env_int("VK_GROUP_ID", 0)
 VK_CONFIRMATION      = os.getenv("VK_CONFIRMATION", "")
 VK_API_VERSION       = os.getenv("VK_API_VERSION", "5.199")
 VK_SECRET_KEY        = os.getenv("VK_SECRET_KEY", "")  # optional callback secret
@@ -79,10 +98,10 @@ VK_API_BASE          = "https://api.vk.com/method/"
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
-PORT              = int(os.getenv("VK_PORT", os.getenv("PORT", "5100")))
+PORT              = _env_int("VK_PORT", _env_int("PORT", 5100))
 DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", os.getenv("DATABASE_PATH", "vk_bot_state.sqlite"))
-ADMIN_ID          = int(os.getenv("ADMIN_ID", "0"))
-DIALOG_TIMEOUT_HOURS = int(os.getenv("DIALOG_TIMEOUT_HOURS", "6"))
+ADMIN_ID          = _env_int("ADMIN_ID", 0)
+DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT      = 15
 
 
@@ -120,7 +139,7 @@ MDT_NOTIFY_MANAGERS = os.getenv("MDT_NOTIFY_MANAGERS", "false").lower().strip() 
 MDT_MANAGER_IDS = [int(x.strip()) for x in os.getenv("MDT_MANAGER_IDS", "").split(",") if x.strip()]
 MDT_REMINDER_ENABLED = os.getenv("MDT_REMINDER_ENABLED", "true").lower().strip() in ("1", "true", "yes")
 try:
-    MDT_REMINDER_DAYS = int(os.getenv("MDT_REMINDER_DAYS", "1"))
+    MDT_REMINDER_DAYS = _env_int("MDT_REMINDER_DAYS", 1)
 except (ValueError, TypeError):
     MDT_REMINDER_DAYS = 1
 MDT_REMINDER_TEXT = os.getenv("MDT_REMINDER_TEXT", "Позвонить по заявке с VK-бота")
@@ -135,7 +154,7 @@ DATA_OPERATOR_NAME = os.getenv(
     "DATA_OPERATOR_NAME",
     "ИП Замятина Мария Андреевна (ТА «АПРЕЛЬ тур», ОГРНИП 290211659807)",
 )
-DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
+DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
 # soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
 # strict: classic «Согласен / Отказаться».
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -157,10 +176,10 @@ DEMO_NOTICE = (
 # --- Tutu.ru MCP ------------------------------------------------------------
 TUTU_ENABLED = os.getenv("TUTU_ENABLED", "true").lower().strip() in ("1", "true", "yes")
 TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
-TUTU_TIMEOUT = int(os.getenv("TUTU_TIMEOUT", "12"))
+TUTU_TIMEOUT = _env_int("TUTU_TIMEOUT", 12)
 TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
-TUTU_MAX_OFFERS = int(os.getenv("TUTU_MAX_OFFERS", "3"))
-TUTU_CACHE_TTL = int(os.getenv("TUTU_CACHE_TTL", "900"))
+TUTU_MAX_OFFERS = _env_int("TUTU_MAX_OFFERS", 3)
+TUTU_CACHE_TTL = _env_int("TUTU_CACHE_TTL", 900)
 TUTU_SHOW_CLIENT = os.getenv("TUTU_SHOW_CLIENT", "true").lower().strip() in ("1", "true", "yes")
 TUTU_SHOW_ADMIN = os.getenv("TUTU_SHOW_ADMIN", "true").lower().strip() in ("1", "true", "yes")
 
@@ -1387,7 +1406,7 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
 # Follow-up for incomplete dialogs
 # ---------------------------------------------------------------------------
 
-FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "3"))
+FOLLOWUP_DELAY_HOURS = _env_int("FOLLOWUP_DELAY_HOURS", 3)
 
 
 def _send_followups() -> int:
