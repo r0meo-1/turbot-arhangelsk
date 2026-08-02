@@ -7,6 +7,11 @@ Type=simple
 User=turbot
 Group=turbot
 WorkingDirectory=/opt/turbot
+# ProtectHome=true hides /home, and gunicorn wants a home directory for its
+# control socket — without this it logs "Permission denied: '/home/turbot'" on
+# every boot. Harmless, but a scary line in the log costs real minutes during
+# an incident.
+Environment=HOME=/opt/turbot
 EnvironmentFile=/opt/turbot/.env
 ExecStart=/opt/turbot/venv/bin/gunicorn bot:app \
     --bind 127.0.0.1:8000 \

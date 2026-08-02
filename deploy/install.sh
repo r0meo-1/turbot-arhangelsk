@@ -20,6 +20,7 @@
 # Options:
 #   INSTALL_VK=1     also install and enable the VK bot service
 #   SKIP_BACKUP=1    do not install the nightly backup cron job
+#   SKIP_WATCHDOG=1  do not install the health watchdog timer
 #
 set -euo pipefail
 
@@ -51,7 +52,7 @@ else
     SERVER_NAME="_"
 fi
 
-TOTAL=9
+TOTAL=10
 echo "==> [1/$TOTAL] Installing system packages (mode: $MODE, host: $HOST)"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -168,6 +169,25 @@ else
 CRON
     chmod 644 /etc/cron.d/turbot-backup
     echo "    /etc/cron.d/turbot-backup installed (03:00 daily)"
+fi
+
+echo "==> [10/$TOTAL] Installing the watchdog"
+if [ "${SKIP_WATCHDOG:-0}" = "1" ]; then
+    echo "    skipped (SKIP_WATCHDOG=1)"
+else
+    # Restart=always only covers a process that dies. Twice this bot stayed up
+    # and stopped answering, which systemd is happy to call success. The
+    # watchdog checks /health, which now fails when the poller goes quiet.
+    chmod +x "$APP_DIR/deploy/watchdog.sh"
+    cp "$APP_DIR/deploy/turbot-watchdog@.service" /etc/systemd/system/
+    cp "$APP_DIR/deploy/turbot-watchdog@.timer" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now turbot-watchdog@turbot.timer > /dev/null
+    echo "    turbot-watchdog@turbot.timer enabled (every 2 min)"
+    if [ "${INSTALL_VK:-0}" = "1" ]; then
+        systemctl enable --now turbot-watchdog@vk-turbot.timer > /dev/null
+        echo "    turbot-watchdog@vk-turbot.timer enabled (every 2 min)"
+    fi
 fi
 
 WEBHOOK_URL="https://$HOST/webhook"

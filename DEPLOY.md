@@ -124,6 +124,10 @@ actionable than "Telegram does not work".
   copies. The script always documented this cron line but nothing installed it.
 - An nginx route for the VK bot (`/vk/` → `127.0.0.1:5100`). Add
   `INSTALL_VK=1` to also install and enable that service.
+- `turbot-watchdog@turbot.timer` — checks `/health` every two minutes and
+  restarts the service when the bot reports itself deaf. See
+  [section 11](#11-watchdog-when-the-bot-is-up-but-not-answering).
+  `SKIP_WATCHDOG=1` opts out.
 
 ---
 
@@ -375,3 +379,69 @@ curl https://bot.example.ru/vk/webhook -X POST \
 
 Then go back to VK group settings and click "Confirm" — VK will send the
 verification request and your server should respond with the confirmation string.
+
+---
+
+## 11. Watchdog: when the bot is up but not answering
+
+`Restart=always` only covers a process that dies. Twice this bot stayed up and
+stopped answering, which systemd is perfectly happy to call success:
+
+```
+● turbot.service - TurBot
+     Active: active (running)          <- true, and useless
+```
+
+`/health` returned `200` both times, the log was silent, and the outage was
+found by a client who got no reply. So the health check was made capable of
+failing.
+
+### What /health reports now
+
+```bash
+curl -s http://127.0.0.1:8000/health | python3 -m json.tool | head -6
+```
+
+```json
+{
+    "status": "ok",
+    "seconds_since_poll_ok": 3.1,
+    "poll_stale_after": 180,
+    "seconds_since_update": 412.7
+}
+```
+
+`seconds_since_poll_ok` is the age of the last **completed** `getUpdates` call,
+empty results included — proof the link to Telegram is alive without waiting
+for a client to write in. Past `POLL_STALE_AFTER` (default 180s) the endpoint
+answers **HTTP 503** with `"status": "degraded"`.
+
+Under `BOT_MODE=webhook` nothing is expected to poll, so the field is `null`
+and never degrades.
+
+### What the watchdog does
+
+`turbot-watchdog@turbot.timer` runs every two minutes:
+
+1. `GET /health`. Exit quietly on `200`.
+2. Otherwise restart the unit and send the admin a Telegram message.
+3. Re-check after 15s and report whether the restart helped.
+
+A 600-second cooldown (`WATCHDOG_COOLDOWN`) keeps a genuine Telegram outage
+from becoming a restart loop — if restarting did not help, doing it again every
+two minutes will not either, and the alert is the useful part.
+
+```bash
+systemctl list-timers 'turbot-watchdog*' --no-pager   # is it armed
+journalctl -u 'turbot-watchdog@turbot' --since today  # what it saw
+/opt/turbot/deploy/watchdog.sh turbot                 # run it by hand
+```
+
+The script reads `BOT_TOKEN` and `ADMIN_ID` from `.env` with `sed`, never
+`source` — an unquoted value in that same file once turned a config read into
+command execution. The alert is sent via `curl -K -`, so the token never
+appears in `ps`.
+
+Add `INSTALL_VK=1` at install time and the VK bot gets its own timer. There the
+check is weaker by nature — VK is inbound, so there is no heartbeat to age —
+but it still catches a wedged gunicorn that stopped answering HTTP.

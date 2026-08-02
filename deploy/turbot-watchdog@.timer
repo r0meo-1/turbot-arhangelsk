@@ -1,0 +1,13 @@
+[Unit]
+Description=Check %i every couple of minutes
+
+[Timer]
+# Two minutes is the resolution of the outage window, and /health only goes
+# stale after three minutes of silence, so this cannot fire on a slow poll.
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=turbot-watchdog@%i.service
+
+[Install]
+WantedBy=timers.target

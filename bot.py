@@ -167,6 +167,14 @@ if BOT_MODE not in ("webhook", "polling"):
 # Long-poll window. Telegram holds the request open until an update arrives or
 # this elapses, so a high value means fewer requests, not slower delivery.
 POLL_TIMEOUT = _env_int("POLL_TIMEOUT", 25)
+# A poller that quietly stops talking to Telegram is worse than a crash: the
+# process stays up, systemd keeps printing active (running), /health keeps
+# answering ok, and the outage is found by a client rather than by us. That
+# happened twice. Past this many seconds without a completed getUpdates the
+# bot reports itself unhealthy. One failed cycle at maximum backoff costs
+# about 100s, so the default leaves room for a flaky network without crying
+# wolf.
+POLL_STALE_AFTER = _env_int("POLL_STALE_AFTER", 180)
 
 # --- Tutu.ru MCP (live transport offers) -----------------------------------
 # Read-only search against Tutu's public MCP server. Runs only in the
@@ -505,6 +513,13 @@ _dirty_users: set[int] = set()
 # instead of wiping the whole set (which would re-accept recent duplicates).
 _seen_update_ids: OrderedDict[int, None] = OrderedDict()
 _SEEN_UPDATE_MAX = 1000
+
+# Liveness that means something. "The process is up" is the wrong question;
+# "when did Telegram last answer us" is the right one. Written by the poller,
+# read by /health. No lock: rebinding a float is atomic under the GIL, and a
+# reader that catches the previous value is one poll cycle stale at worst.
+_last_poll_ok: float = 0.0
+_last_update_at: float = 0.0
 
 
 def _mark_dirty(chat_id: int, *, session: bool = True, user: bool = True) -> None:
@@ -2927,13 +2942,36 @@ def privacy_page() -> Any:
 
 @app.route("/health")
 def health() -> Any:
-    """Simple health/readiness endpoint for monitoring."""
+    """Health endpoint that can actually fail.
+
+    An endpoint that always returns ok is decoration. Twice this bot went deaf
+    while every indicator stayed green, so in polling mode this reports the age
+    of the last completed getUpdates and answers 503 once that goes stale. The
+    watchdog in deploy/ keys off the status code.
+    """
     try:
         leads_total = count_leads()
     except Exception:
         leads_total = -1
-    return jsonify({
-        "status": "ok",
+
+    now = time.time()
+    # Only meaningful while polling. Under a webhook nothing is expected to
+    # phone Telegram on a schedule, so silence proves nothing.
+    poll_age = round(now - _last_poll_ok, 1) if BOT_MODE == "polling" else None
+    stale = poll_age is not None and poll_age > POLL_STALE_AFTER
+    if stale:
+        logger.error(
+            "Health: no successful getUpdates for %.0fs (limit %ss) — reporting degraded",
+            poll_age, POLL_STALE_AFTER,
+        )
+
+    payload = jsonify({
+        "status": "degraded" if stale else "ok",
+        "seconds_since_poll_ok": poll_age,
+        "poll_stale_after": POLL_STALE_AFTER if BOT_MODE == "polling" else None,
+        "seconds_since_update": (
+            round(now - _last_update_at, 1) if _last_update_at else None
+        ),
         "bot_token_configured": bool(BOT_TOKEN),
         "admin_id_configured": bool(ADMIN_ID),
         "lead_notify_configured": bool(LEAD_NOTIFY_IDS),
@@ -2952,6 +2990,9 @@ def health() -> Any:
         "tutu_enabled": TUTU_ENABLED,
         "bot_mode": BOT_MODE,
     })
+    # 503 rather than 200-with-a-sad-field: monitoring reads status codes, and
+    # a body nobody parses is how the last two outages stayed invisible.
+    return (payload, 503) if stale else payload
 
 
 def _remember_update_id(data: Dict[str, Any]) -> bool:
@@ -3242,6 +3283,8 @@ def dispatch_update(data: Optional[Dict[str, Any]]) -> None:
     Both transports must behave identically — including the state flush in
     `finally`, which is what makes an in-progress dialog survive a restart.
     """
+    global _last_update_at
+    _last_update_at = time.time()
     try:
         if data and "callback_query" in data:
             _process_callback(data)
@@ -3349,6 +3392,8 @@ def _polling_worker() -> None:
     is removed first — without dropping pending updates, which would throw
     away the requests that piled up while delivery was failing.
     """
+    global _last_poll_ok
+
     if not BOT_TOKEN:
         logger.error("Polling mode requested but BOT_TOKEN is empty — not starting")
         return
@@ -3366,6 +3411,9 @@ def _polling_worker() -> None:
 
     offset = 0
     backoff = 1.0
+    # Count the start as a heartbeat, or /health reports the bot stale during
+    # the very first long poll.
+    _last_poll_ok = time.time()
     logger.info("Polling started (long-poll timeout %ss)", POLL_TIMEOUT)
 
     while not _shutdown_event.is_set():
@@ -3403,6 +3451,11 @@ def _polling_worker() -> None:
             logger.error("Polling: API returned not-ok: %s", str(payload)[:200])
             _shutdown_event.wait(5)
             continue
+
+        # A completed round trip, empty result included. This is the heartbeat:
+        # it proves the link to Telegram is alive without needing a client to
+        # write in.
+        _last_poll_ok = time.time()
 
         for update in payload.get("result", []):
             # Advance the offset first, so a poison update is never re-fetched

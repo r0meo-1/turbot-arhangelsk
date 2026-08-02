@@ -7,6 +7,8 @@ Type=simple
 User=turbot
 Group=turbot
 WorkingDirectory=/opt/turbot
+# See turbot.service: ProtectHome hides /home, gunicorn wants a HOME.
+Environment=HOME=/opt/turbot
 EnvironmentFile=/opt/turbot/.env
 ExecStart=/opt/turbot/venv/bin/gunicorn vk_bot:app \
     --bind 127.0.0.1:5100 \

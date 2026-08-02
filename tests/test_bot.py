@@ -864,6 +864,49 @@ def test_health_reports_demo_and_tutu_flags(client):
     assert "tutu_enabled" in data
 
 
+def test_health_fails_when_poller_went_quiet(client, monkeypatch):
+    """A bot nobody can reach must not report itself healthy.
+
+    This is the exact shape of the two real outages: process alive, systemd
+    green, log silent, Telegram unreachable. The status code is what the
+    watchdog reads, so that is the part worth asserting.
+    """
+    monkeypatch.setattr(bot, "BOT_MODE", "polling")
+    monkeypatch.setattr(bot, "POLL_STALE_AFTER", 180)
+    monkeypatch.setattr(bot, "_last_poll_ok", time.time() - 600)
+
+    resp = client.get("/health")
+    assert resp.status_code == 503, "a deaf bot answered 200"
+    data = resp.get_json()
+    assert data["status"] == "degraded"
+    assert data["seconds_since_poll_ok"] > 180
+
+
+def test_health_stays_ok_while_the_poller_answers(client, monkeypatch):
+    monkeypatch.setattr(bot, "BOT_MODE", "polling")
+    monkeypatch.setattr(bot, "_last_poll_ok", time.time() - 5)
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "ok"
+
+
+def test_health_ignores_poll_age_under_webhook(client, monkeypatch):
+    """Nothing polls under a webhook, so silence there proves nothing.
+
+    Without this the bot would report itself broken the moment it ran in the
+    mode it was originally written for.
+    """
+    monkeypatch.setattr(bot, "BOT_MODE", "webhook")
+    monkeypatch.setattr(bot, "_last_poll_ok", 0.0)
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["seconds_since_poll_ok"] is None
+
+
 def test_concurrent_completion_creates_one_lead(client, monkeypatch):
     """Two threads finishing the same dialog must not double the lead.
 

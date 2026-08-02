@@ -1,0 +1,8 @@
+[Unit]
+Description=Watchdog for %i — restart it when it stops answering Telegram
+After=network.target
+
+[Service]
+Type=oneshot
+# Runs as root on purpose: the whole job is `systemctl restart`.
+ExecStart=/opt/turbot/deploy/watchdog.sh %i
