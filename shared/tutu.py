@@ -416,6 +416,8 @@ def search_offers(
     dates_raw: str,
     origin: str = "",
     people: Any = 1,
+    kids: Any = 0,
+    infants: Any = 0,
     budget: Any = None,
     log: Optional[logging.Logger] = None,
     request_fn: Optional[RequestFn] = None,
@@ -455,11 +457,22 @@ def search_offers(
     adults = parse_people(people)
     if adults > 1:
         arguments["adults"] = adults
+    # Age bands are priced separately by every airline. Sending a family of
+    # four as four adults overstates the fare, which is what the funnel did
+    # before it asked about children at all.
+    children = parse_people(kids) if kids else 0
+    babies = parse_people(infants) if infants else 0
+    if children:
+        arguments["children"] = children
+    if babies:
+        arguments["infants"] = babies
     # The funnel asks for a budget PER PERSON; Tutu caps the price of the whole
     # offer. Comparing them directly would filter far too aggressively.
     try:
         if budget:
-            arguments["price_max"] = int(budget) * adults
+            # Budget is per person; children and infants occupy the same trip,
+            # so the cap tracks everyone travelling, not just the adults.
+            arguments["price_max"] = int(budget) * max(adults + children + babies, 1)
     except (TypeError, ValueError):
         pass
 
