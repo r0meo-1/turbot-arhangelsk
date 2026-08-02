@@ -66,6 +66,7 @@ Render (по переменной `RENDER`), на своей VM выключен
 - **MDT CRM** — lead / preorder / both, push, напоминания  
 - **VK-бот** — `vk_bot.py`, тот же мозг в `shared/`  
 - **Контакты** — согласие перед телефоном, `/privacy`, `/delete` (lead для заявки, не «навсегда в чате»)  
+- **Webhook или polling** — `BOT_MODE=polling` для сетей, где Telegram не может достучаться до сервера
 - **Прод-мелочи** — secret token, retries, dedup `update_id`, graceful shutdown, алерты админу  
 
 ---

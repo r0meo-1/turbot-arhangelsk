@@ -60,6 +60,38 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+
+
+class _TokenRedactingFilter(logging.Filter):
+    """Keep the bot token out of the logs.
+
+    The Telegram API carries the token in the URL path, and urllib3 logs the
+    full URL when a connection breaks. One network blip is therefore enough to
+    write the credential into journald, where it survives indefinitely and
+    gets pasted verbatim into bug reports and support tickets. Observed in
+    the wild, not hypothetical.
+
+    Attached to the root handlers so it also covers libraries that log on our
+    behalf — the bot's own code never prints the token.
+    """
+
+    _PATTERN = re.compile(r"bot(\d{5,}):[A-Za-z0-9_-]{20,}")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = self._PATTERN.sub(r"bot\1:<redacted>", message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
+for _handler in logging.root.handlers:
+    _handler.addFilter(_TokenRedactingFilter())
+
 logger = logging.getLogger("turbot")
 
 def _env_int(name: str, default: int = 0) -> int:
@@ -110,6 +142,25 @@ elif ADMIN_ID:
     LEAD_NOTIFY_IDS = [ADMIN_ID]
 else:
     LEAD_NOTIFY_IDS = []
+
+# --- How updates reach the bot ----------------------------------------------
+# "webhook" (default): Telegram POSTs to /webhook. Needs an inbound HTTPS path
+#   from Telegram's network to this host.
+# "polling": the bot pulls updates itself with getUpdates. Needs only outbound
+#   access.
+#
+# Polling exists because some hosting networks filter Telegram's address
+# ranges in BOTH directions. On one such host getWebhookInfo reported
+# "Connection timed out" with updates piling up while nginx logged not a
+# single request from Telegram — the webhook could never arrive, and no
+# amount of configuration on this side would change that. Polling survives
+# there, because the connection is opened from inside.
+BOT_MODE = os.getenv("BOT_MODE", "webhook").lower().strip()
+if BOT_MODE not in ("webhook", "polling"):
+    BOT_MODE = "webhook"
+# Long-poll window. Telegram holds the request open until an update arrives or
+# this elapses, so a high value means fewer requests, not slower delivery.
+POLL_TIMEOUT = _env_int("POLL_TIMEOUT", 25)
 
 # --- Tutu.ru MCP (live transport offers) -----------------------------------
 # Read-only search against Tutu's public MCP server. Runs only in the
@@ -2718,6 +2769,7 @@ def health() -> Any:
         "consent_mode": CONSENT_MODE,
         "demo_mode": DEMO_MODE,
         "tutu_enabled": TUTU_ENABLED,
+        "bot_mode": BOT_MODE,
     })
 
 
@@ -2987,25 +3039,30 @@ def _check_webhook_secret() -> bool:
     return hmac.compare_digest(header, TELEGRAM_SECRET_TOKEN)
 
 
-@app.route("/webhook", methods=["POST"])
-def webhook() -> Tuple[str, int]:
-    if not _check_webhook_secret():
-        logger.warning("Webhook called with missing/invalid secret token")
-        return "Forbidden", 403
+def dispatch_update(data: Optional[Dict[str, Any]]) -> None:
+    """Route one Telegram update. Shared by the webhook and the poller.
 
+    Both transports must behave identically — including the state flush in
+    `finally`, which is what makes an in-progress dialog survive a restart.
+    """
     try:
-        data = request.get_json(silent=True)
         if data and "callback_query" in data:
             _process_callback(data)
         elif data and "message" in data:
             _process_update(data)
     except Exception as exc:
-        logger.error("Error in webhook: %s", exc, exc_info=True)
-        _alert_admin_error("Webhook processing error", exc)
-
+        logger.error("Error processing update: %s", exc, exc_info=True)
+        _alert_admin_error("Update processing error", exc)
     finally:
         save_state()
 
+
+@app.route("/webhook", methods=["POST"])
+def webhook() -> Tuple[str, int]:
+    if not _check_webhook_secret():
+        logger.warning("Webhook called with missing/invalid secret token")
+        return "Forbidden", 403
+    dispatch_update(request.get_json(silent=True))
     return "OK", 200
 
 
@@ -3085,6 +3142,86 @@ logger.info(
 )
 
 
+_shutdown_event = threading.Event()
+
+
+def _polling_worker() -> None:
+    """Pull updates with getUpdates instead of waiting to be called.
+
+    Telegram refuses getUpdates while a webhook is registered, so the webhook
+    is removed first — without dropping pending updates, which would throw
+    away the requests that piled up while delivery was failing.
+    """
+    if not BOT_TOKEN:
+        logger.error("Polling mode requested but BOT_TOKEN is empty — not starting")
+        return
+
+    base = f"https://api.telegram.org/bot{BOT_TOKEN}"
+    try:
+        resp = telegram_session.post(
+            f"{base}/deleteWebhook",
+            data={"drop_pending_updates": "false"},
+            timeout=HTTP_TIMEOUT,
+        )
+        logger.info("Polling: deleteWebhook returned HTTP %s", resp.status_code)
+    except Exception as exc:
+        logger.warning("Polling: deleteWebhook failed (%s) — continuing anyway", exc)
+
+    offset = 0
+    backoff = 1.0
+    logger.info("Polling started (long-poll timeout %ss)", POLL_TIMEOUT)
+
+    while not _shutdown_event.is_set():
+        try:
+            resp = telegram_session.get(
+                f"{base}/getUpdates",
+                params={
+                    "offset": offset,
+                    "timeout": POLL_TIMEOUT,
+                    # Ask only for what the bot handles; anything else would
+                    # still advance the offset and waste a round trip.
+                    "allowed_updates": json.dumps(["message", "callback_query"]),
+                },
+                # Must exceed the long-poll window, or every idle poll "fails".
+                timeout=POLL_TIMEOUT + 15,
+            )
+            if resp.status_code == 409:
+                # A webhook got set again, or a second poller is running.
+                logger.warning("Polling: 409 Conflict — removing webhook and retrying")
+                telegram_session.post(f"{base}/deleteWebhook", timeout=HTTP_TIMEOUT)
+                _shutdown_event.wait(5)
+                continue
+            resp.raise_for_status()
+            payload = resp.json()
+        except Exception as exc:
+            # Network flakiness is expected on a filtered network; keep going
+            # with a bounded backoff rather than dying and needing a restart.
+            logger.warning("Polling: getUpdates failed (%s) — retry in %.0fs", exc, backoff)
+            _shutdown_event.wait(backoff)
+            backoff = min(backoff * 2, 60.0)
+            continue
+
+        backoff = 1.0
+        if not payload.get("ok"):
+            logger.error("Polling: API returned not-ok: %s", str(payload)[:200])
+            _shutdown_event.wait(5)
+            continue
+
+        for update in payload.get("result", []):
+            # Advance the offset first, so a poison update is never re-fetched
+            # forever. And catch here rather than trusting the callee: if
+            # dispatch_update ever stops swallowing, this thread would die
+            # silently and the bot would go deaf while the service stayed green.
+            offset = max(offset, update.get("update_id", 0) + 1)
+            try:
+                dispatch_update(update)
+            except Exception as exc:
+                logger.error("Polling: update %s failed: %s",
+                             update.get("update_id"), exc, exc_info=True)
+
+    logger.info("Polling stopped")
+
+
 def _deferred_network_startup() -> None:
     """Telegram profile + MDT country list — must not delay HTTP port bind."""
     try:
@@ -3096,7 +3233,9 @@ def _deferred_network_startup() -> None:
             _mdt_load_countries()
         except Exception as exc:
             logger.warning("MDT country load failed: %s", exc)
-    logger.info("Deferred network startup finished")
+    if BOT_MODE == "polling":
+        threading.Thread(target=_polling_worker, name="polling", daemon=True).start()
+    logger.info("Deferred network startup finished (mode: %s)", BOT_MODE)
 
 
 threading.Thread(
@@ -3110,6 +3249,7 @@ import signal as _signal_module
 def _graceful_shutdown(signum: int, frame: Any) -> None:
     """Save state on SIGTERM/SIGINT so no data is lost during deploy."""
     logger.info("Received signal %s — saving state and exiting", signum)
+    _shutdown_event.set()   # let the poller finish its current long poll
     try:
         # Flush ALL in-memory state, not just dirty entries.
         with _lock:

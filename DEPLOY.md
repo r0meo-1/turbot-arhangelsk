@@ -76,6 +76,46 @@ bash deploy/install.sh
 
 Certbot renews on its own, and the webhook then needs no certificate upload.
 
+### If Telegram cannot reach your server
+
+Some hosts filter Telegram's address ranges. The symptom is specific and worth
+recognising, because it looks like a broken bot rather than a broken network:
+
+```
+getWebhookInfo → last_error_message: Connection timed out
+                 pending_update_count: 2
+nginx access.log → no requests from Telegram at all
+```
+
+The bot is fine; the delivery never arrives. No certificate, secret or nginx
+change fixes this — the route belongs to the provider. Switch to polling,
+where the bot opens the connection itself:
+
+```bash
+echo 'BOT_MODE=polling' >> /opt/turbot/.env
+systemctl restart turbot
+```
+
+Nothing else changes: the same handlers run, `/health` and `/privacy` keep
+working, and the poller removes the registered webhook on start (without
+dropping updates already queued). To go back, set `BOT_MODE=webhook` and
+re-register.
+
+Outbound may be filtered too. Check which of Telegram's addresses answer —
+they are not all treated the same:
+
+```bash
+for ip in 149.154.167.220 149.154.166.110; do
+  timeout 6 bash -c "echo > /dev/tcp/$ip/443" 2>/dev/null \
+    && echo "$ip open" || echo "$ip blocked"
+done
+```
+
+If one answers and DNS hands you another, pin the working one in `/etc/hosts`.
+Treat that as a stopgap: Telegram rotates addresses, and the pin will go stale.
+Raise a ticket with the provider quoting the exact addresses — it is far more
+actionable than "Telegram does not work".
+
 ### What the installer sets up beyond the bot
 
 - `DEMO_MODE=false` in the generated `.env` — a VM in Russia is the real
