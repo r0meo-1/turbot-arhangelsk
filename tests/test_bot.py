@@ -468,17 +468,21 @@ def test_stale_dialog_cleanup():
 
 
 def test_template_selection_uses_known_destination():
+    """A destination note is kept only where there is something real to say."""
     text = bot._template_selection("Турция", "15-22 июня", "2", "60000")
     assert "Турция" in text
-    assert "15-22 июня" in text
-    assert "60000" in text
-    assert "Возьмите с собой" in text
+    assert "all inclusive" in text.lower() or "пляжного отдыха" in text
+    assert "Заявка у менеджера" in text
 
 
-def test_template_selection_fallback_for_unknown_destination():
-    text = bot._template_selection("Шри-Ланка", "1-10 марта", "3", "80000")
-    assert "Шри-Ланка" in text
-    assert "отличное направление" in text
+
+def test_template_selection_says_nothing_rather_than_filler():
+    """Unknown destination used to produce «X — отличное направление для X»."""
+    text = bot._template_selection("Урюпинск", "лето", "2", "50000")
+    assert "отличное направление" not in text
+    assert text.count("Урюпинск") == 0, "no echoing the input back as insight"
+    assert "Менеджер подберёт" in text
+
 
 
 def test_generate_ai_selection_uses_template_when_mode_is_template():

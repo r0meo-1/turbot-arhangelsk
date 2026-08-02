@@ -39,22 +39,29 @@ TEMPLATE_PACKING = (
 
 
 def template_selection(destination: str, dates: str, people: str, budget: str) -> str:
-    """Generate a tour blurb from templates (no external AI required)."""
-    dest_lower = destination.lower()
+    """Fallback text when no real offers are available.
+
+    Deliberately not called «подборка туров» any more. It contained no offers,
+    no prices and no dates the client did not already type in — a paragraph of
+    filler under a heading that promised results. Worse than saying nothing,
+    because it reads as a bot padding for the sake of a reply.
+
+    What a client actually wants here is to know their request landed and when
+    someone will answer. A destination note is kept only where there is
+    something real to say.
+    """
+    dest_lower = (destination or "").lower()
     intro: Optional[str] = None
     for keyword, text in TEMPLATE_INTROS.items():
         if keyword in dest_lower:
             intro = text
             break
-    if intro is None:
-        intro = f"{destination} — отличное направление для вашего отдыха."
 
-    return (
-        "🌴 Ваша подборка туров\n\n"
-        f"📍 {destination}: {intro}\n\n"
-        f"Поездка на {dates} для {people} человек — хороший выбор, "
-        f"чтобы успеть всё и при этом отдохнуть. Бюджет {budget}₽ на человека "
-        f"позволяет подобрать комфортный вариант.\n\n"
-        f"💡 {TEMPLATE_PACKING}\n\n"
-        "ℹ️ Наш менеджер скоро свяжется с вами для уточнения деталей!"
+    parts = ["✅ Заявка у менеджера."]
+    if intro:
+        parts.append(f"📍 {destination}. {intro}")
+    parts.append(
+        "Менеджер подберёт варианты под ваши даты и бюджет и напишет сюда. "
+        "В рабочее время это обычно занимает до часа."
     )
+    return "\n\n".join(parts)
