@@ -168,9 +168,15 @@ DEMO_NOTICE = (
 # data (name, phone) is collected. Operators of RF personal data MUST publish
 # such a document. The bot serves its own copy at /privacy, so the link is never
 # empty just because nobody hosted the document separately.
-_render_url = os.getenv("RENDER_EXTERNAL_URL", "").strip().rstrip("/")
+# Where this instance is reachable from outside. PUBLIC_BASE_URL is the
+# portable knob (install.sh writes it); RENDER_EXTERNAL_URL is Render's own
+# and needs no configuration there.
+PUBLIC_BASE_URL = (
+    os.getenv("PUBLIC_BASE_URL", "").strip()
+    or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+).rstrip("/")
 PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip() or (
-    f"{_render_url}/privacy" if _render_url else ""
+    f"{PUBLIC_BASE_URL}/privacy" if PUBLIC_BASE_URL else ""
 )
 # Name of the data operator shown in the consent text.
 DATA_OPERATOR_NAME = os.getenv(

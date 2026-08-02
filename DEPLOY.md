@@ -7,6 +7,82 @@ Tested on **Ubuntu 22.04 / 24.04** and **Debian 12**.
 
 ---
 
+## Quick start: a VPS with a bare IP (no domain)
+
+The fast path when you already have a Russian VPS — reg.ru, Timeweb, Yandex
+Cloud, anything with root over SSH — and no domain pointed at it yet.
+
+**Telegram accepts a self-signed certificate** if you upload it with
+`setWebhook`, so the bot works on a bare IP. The installer generates that
+certificate with the IP in `subjectAltName`, which is what Telegram checks.
+
+```bash
+ssh root@<VM_IP>
+
+apt-get update && apt-get install -y git
+git clone https://github.com/r0meo-1/turbot-arhangelsk.git /tmp/turbot
+cd /tmp/turbot
+
+BOT_IP=<VM_IP> \
+BOT_REPO=https://github.com/r0meo-1/turbot-arhangelsk.git \
+bash deploy/install.sh
+```
+
+Then fill in the secrets and start it:
+
+```bash
+nano /opt/turbot/.env          # BOT_TOKEN, ADMIN_ID, TELEGRAM_SECRET_TOKEN
+systemctl start turbot
+systemctl status turbot --no-pager
+```
+
+Register the webhook — note `-F` and the certificate upload, both required in
+self-signed mode:
+
+```bash
+set -a; . /opt/turbot/.env; set +a
+curl -sS "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
+  -F "url=https://<VM_IP>/webhook" \
+  -F "secret_token=$TELEGRAM_SECRET_TOKEN" \
+  -F "certificate=@/etc/ssl/turbot/fullchain.pem"
+
+curl -sS "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo"
+```
+
+`getWebhookInfo` should echo your URL with an empty `last_error_message`.
+Check the service itself with `curl -sk https://<VM_IP>/health` — `-k` because
+the certificate is self-signed.
+
+### The catch with a bare IP
+
+Telegram is happy; **browsers are not**. Anyone opening `/health` or
+`/privacy` gets a full-page security warning, because nothing vouches for a
+self-signed certificate. That is fine for a bot nobody visits in a browser,
+and bad for a link you put in a portfolio.
+
+If you own any domain, pointing one A record at the VM and re-running the
+installer in domain mode costs about five minutes and removes the warning
+everywhere:
+
+```bash
+BOT_DOMAIN=bot.example.ru \
+BOT_REPO=https://github.com/r0meo-1/turbot-arhangelsk.git \
+bash deploy/install.sh
+```
+
+Certbot renews on its own, and the webhook then needs no certificate upload.
+
+### What the installer sets up beyond the bot
+
+- `DEMO_MODE=false` in the generated `.env` — a VM in Russia is the real
+  deployment, so the showcase banner and phone masking stay off.
+- `/etc/cron.d/turbot-backup` — nightly SQLite backup at 03:00, keeping seven
+  copies. The script always documented this cron line but nothing installed it.
+- An nginx route for the VK bot (`/vk/` → `127.0.0.1:5100`). Add
+  `INSTALL_VK=1` to also install and enable that service.
+
+---
+
 ## 0. Why not Render.com?
 
 The included `render.yaml` deploys to **Render.com (USA)**. That's fine for a
@@ -54,8 +130,11 @@ ephemeral unless you add a persistent disk.
    - **Specs**: 1 vCPU, 1 GB RAM, 10 GB SSD — more than enough
    - **Region**: any Russian data center (Москва / Санкт-Петербург)
 3. Note the **public IP** of the VM.
-4. Point your domain's **A record** to that IP. You'll need a domain for the
-   HTTPS webhook — a `.ru` domain costs ~200 ₽/year.
+4. Optionally point a domain's **A record** at that IP. A domain is *not*
+   required — the installer falls back to a self-signed certificate, which
+   Telegram accepts (see the quick-start section above). It is still worth
+   having: a real certificate removes the browser warning on `/health` and
+   `/privacy`, and a `.ru` domain costs ~200 ₽/year.
 
 ---
 
