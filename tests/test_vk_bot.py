@@ -216,7 +216,10 @@ def test_keyboard_format():
     data = json.loads(kb) if isinstance(kb, str) else kb
     assert "buttons" in data
     assert len(data["buttons"]) > 0
-    assert data["inline"] is False
+    # Раньше здесь стояло inline is False — утверждение закрепляло клавиатуру,
+    # которая сворачивается от касания поля ввода. Тип проверяется целиком в
+    # test_keyboards_are_inline_and_fit_the_limit.
+    assert data["inline"] is True
 
 
 def _vk_consent(client, uid):
@@ -375,3 +378,53 @@ def test_max_rejects_an_at_handle_with_a_reason(client, monkeypatch):
     with bot._db_cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM leads WHERE chat_id = ?", (909,))
         assert cur.fetchone()[0] == 0, "заявка не должна уйти с ненаходимым контактом"
+
+
+def test_keyboards_are_inline_and_fit_the_limit():
+    """Обычная клавиатура живёт под полем ввода и сворачивается от касания.
+
+    Клиент решил, что бот потерял кнопки. Inline прикреплена к сообщению и
+    остаётся — но у неё жёсткий лимит: 10 кнопок, до 6 рядов по 5. Тест
+    сторожит и то и другое: новая кнопка в любой клавиатуре не должна молча
+    вернуть нас к исчезающим.
+    """
+    builders = [n for n in dir(bot) if n.endswith("_keyboard") and n != "_keyboard"]
+    assert builders, "клавиатуры не найдены — тест перестал что-либо проверять"
+    for name in builders:
+        raw = getattr(bot, name)()
+        k = json.loads(raw)
+        rows = k["buttons"]
+        total = sum(len(r) for r in rows)
+        if name == "_hide_keyboard":
+            # Единственная не-inline: очищает клавиатуру под полем ввода,
+            # оставшуюся у тех, кто общался с прежней версией.
+            assert k["inline"] is False and total == 0
+            continue
+        assert k["inline"] is True, f"{name} не inline — кнопки будут пропадать"
+        assert total <= 10, f"{name}: {total} кнопок, лимит inline — 10"
+        assert len(rows) <= 6, f"{name}: {len(rows)} рядов, лимит — 6"
+        assert all(len(r) <= 5 for r in rows), f"{name}: больше 5 кнопок в ряду"
+
+
+def test_old_client_gets_a_plain_keyboard_instead_of_none():
+    """VK сам сообщает, умеет ли клиент inline. Лучше сворачивающиеся кнопки,
+    чем сообщение вообще без кнопок."""
+    bot._NO_INLINE.discard(555)
+    kb = bot._kids_keyboard()
+    assert json.loads(bot._downgrade_if_needed(555, kb))["inline"] is True
+
+    bot._remember_client_capabilities(555, {"object": {"client_info": {"inline_keyboard": False}}})
+    assert json.loads(bot._downgrade_if_needed(555, kb))["inline"] is False
+    # Кнопки на месте — понижен только тип клавиатуры.
+    assert json.loads(bot._downgrade_if_needed(555, kb))["buttons"]
+
+    bot._remember_client_capabilities(555, {"object": {"client_info": {"inline_keyboard": True}}})
+    assert json.loads(bot._downgrade_if_needed(555, kb))["inline"] is True
+
+
+def test_missing_client_info_is_treated_as_modern():
+    """Неизвестный клиент — современный. Иначе одно пропущенное поле в событии
+    лишило бы кнопок вообще всех."""
+    bot._NO_INLINE.discard(556)
+    bot._remember_client_capabilities(556, {"object": {"message": {"text": "hi"}}})
+    assert 556 not in bot._NO_INLINE

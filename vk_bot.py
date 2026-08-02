@@ -641,6 +641,31 @@ def _vk_api(method: str, **params: Any) -> Optional[Dict[str, Any]]:
         return None
 
 
+# Клиенты, которые сами сообщили, что inline-клавиатуру не показывают. VK
+# присылает client_info с каждым message_new (с версии API 5.103), и его
+# документация прямо просит слать то, что собеседник способен отобразить.
+# Множество, а не «список поддерживающих»: неизвестный клиент считается
+# современным, иначе одно пропущенное поле лишит кнопок всех.
+_NO_INLINE: set = set()
+
+
+def _downgrade_if_needed(user_id: int, keyboard: str) -> str:
+    """Старому клиенту отдать обычную клавиатуру вместо inline.
+
+    Лучше кнопки, которые сворачиваются, чем сообщение вообще без кнопок.
+    """
+    if user_id not in _NO_INLINE:
+        return keyboard
+    try:
+        data = json.loads(keyboard)
+    except (TypeError, ValueError):
+        return keyboard
+    if not data.get("inline"):
+        return keyboard
+    data["inline"] = False
+    return json.dumps(data)
+
+
 def send_message(
     user_id: int,
     text: str,
@@ -656,7 +681,7 @@ def send_message(
         "random_id": random.randint(0, 2**31),
     }
     if keyboard:
-        params["keyboard"] = keyboard
+        params["keyboard"] = _downgrade_if_needed(user_id, keyboard)
     return _vk_api("messages.send", **params)
 
 
@@ -685,11 +710,25 @@ def get_user_name(user_id: int) -> str:
 # VK keyboards
 # ---------------------------------------------------------------------------
 
-def _keyboard(rows: List[List[Dict[str, Any]]], one_time: bool = False) -> str:
-    """Build a VK Keyboard JSON string."""
+def _keyboard(
+    rows: List[List[Dict[str, Any]]],
+    one_time: bool = False,
+    inline: bool = True,
+) -> str:
+    """Собрать JSON клавиатуры VK.
+
+    inline по умолчанию, потому что обычная клавиатура живёт ПОД полем ввода и
+    сворачивается, стоит пользователю коснуться поля, чтобы что-то напечатать.
+    Возвращается она кнопкой с четырьмя точками, о которой никто не догадывается
+    — со стороны выглядит так, будто бот потерял кнопки.
+
+    Inline-клавиатура прикреплена к самому сообщению и остаётся в истории. Цена
+    — жёсткий лимит: 10 кнопок, до 6 рядов по 5. Все клавиатуры этого бота в
+    него укладываются (максимум 9), и тест это стережёт.
+    """
     return json.dumps({
         "one_time": one_time,
-        "inline": False,
+        "inline": inline,
         "buttons": rows,
     })
 
@@ -782,7 +821,10 @@ def _soft_start_keyboard() -> str:
 
 
 def _hide_keyboard() -> str:
-    return _keyboard([], one_time=True)
+    # Намеренно НЕ inline: скрывать в сообщении нечего, а вот убрать клавиатуру
+    # под полем ввода надо — у клиентов, общавшихся с прежней версией, она там
+    # осталась висеть.
+    return _keyboard([], one_time=True, inline=False)
 
 
 def generate_ai_selection(destination: str, dates: str, people: str, budget: str) -> str:
@@ -1697,6 +1739,17 @@ _COMMAND_ALIASES = {
 }
 
 
+def _remember_client_capabilities(user_id: int, event: Dict[str, Any]) -> None:
+    """Прочитать client_info из message_new: умеет ли клиент inline-кнопки."""
+    info = event.get("object", {}).get("client_info")
+    if not isinstance(info, dict) or "inline_keyboard" not in info:
+        return
+    if info.get("inline_keyboard"):
+        _NO_INLINE.discard(user_id)
+    else:
+        _NO_INLINE.add(user_id)
+
+
 def _process_message(message: Dict[str, Any]) -> None:
     """Process one VK message_new event."""
     msg = message.get("object", {}).get("message", message.get("message", {}))
@@ -1704,6 +1757,7 @@ def _process_message(message: Dict[str, Any]) -> None:
     if not user_id:
         return
     text = (msg.get("text") or "").strip()
+    _remember_client_capabilities(user_id, message)
 
     # Fetch user name (cached in all_users)
     with _lock:
