@@ -5,8 +5,12 @@ STATE_DESTINATION = "destination"
 STATE_ORIGIN = "origin"  # departure city — needed for a real transport search
 STATE_DATES = "dates"
 STATE_PEOPLE = "people"          # adults, 12+ (airlines price them as adults)
-STATE_KIDS = "kids"              # children 2–11
-STATE_INFANTS = "infants"        # under 2, fly without a seat
+STATE_KIDS = "kids"              # how many children under 12
+STATE_KIDS_AGES = "kids_ages"    # their exact ages — the fare depends on them
+# Retired in favour of the ages step, which derives infants precisely instead of
+# asking a second question the first one could contradict. Kept so a session
+# saved mid-dialog before that change still routes somewhere on the next reply.
+STATE_INFANTS = "infants"
 STATE_BUDGET = "budget"
 STATE_CONTACT = "contact"  # choose how to be reached
 STATE_PHONE = "phone"
@@ -16,11 +20,10 @@ PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
 
 # Airlines price three age bands completely differently, and the funnel used to
 # collapse them into one number — so a family of four with two kids was quoted
-# four adult fares. These map straight onto Tutu's adults / children / infants.
+# four adult fares. The count is picked with a button; the ages are typed, and
+# it is the ages that decide which band each child falls into.
 KIDS_NONE_LABEL = "Без детей"
 KIDS_OPTIONS = [KIDS_NONE_LABEL, "1", "2", "3+"]
-INFANTS_NONE_LABEL = "Нет"
-INFANTS_OPTIONS = [INFANTS_NONE_LABEL, "1", "2"]
 
 BACK_BUTTON_TEXT = "◀️ Назад"
 CANCEL_BUTTON_TEXT = "❌ Отменить"

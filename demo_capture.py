@@ -107,7 +107,7 @@ say(callback={"data": f"{bot.CB_ORIGIN_PREFIX}1", "label": bot.ORIGIN_OPTIONS[1]
 say("15-22 сентября 2026")
 say(callback={"data": f"{bot.CB_PEOPLE_PREFIX}2", "label": "2"})
 say(callback={"data": f"{bot.CB_KIDS_PREFIX}2", "label": "2"})
-say(callback={"data": f"{bot.CB_INFANTS_PREFIX}1", "label": "1"})
+say("до года, 7")
 say(callback={"data": f"{bot.CB_BUDGET_PREFIX}3", "label": bot.BUDGET_PRESETS[3][0]})
 say(callback={"data": bot.CB_CONTACT_PHONE, "label": "📱 Телефон"})
 say(contact="+79211234567")

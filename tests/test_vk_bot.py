@@ -280,3 +280,35 @@ def test_vk_tutu_switch_is_independent(monkeypatch):
     finally:
         monkeypatch.delenv("VK_TUTU_ENABLED", raising=False)
         importlib.reload(bot)
+
+
+def test_vk_asks_for_child_ages(client):
+    """Parity with Telegram — and VK is the side the agency actually uses.
+
+    The manager's complaint came in through VK: "дети 2 человека, а возрасты
+    какие?". A step that exists only in the Telegram bot would not have
+    answered her.
+    """
+    _post(client, 905, "Начать")
+    _post(client, 905, bot.CONSENT_YES_TEXT)
+    for text in ["Египет", "Москва", "15-22 сентября", "2", "2"]:
+        _post(client, 905, text)
+    assert bot.user_data[905]["state"] == bot.STATE_KIDS_AGES
+
+    _post(client, 905, "до года, 7")
+    assert bot.user_data[905]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[905]["kids_ages"] == [0, 7]
+    # Bands are derived, never asked twice.
+    assert bot.user_data[905]["infants"] == 1
+    assert bot.user_data[905]["kids"] == 1
+
+
+def test_vk_stores_child_ages_with_the_lead(client):
+    _post(client, 906, "Начать")
+    _post(client, 906, bot.CONSENT_YES_TEXT)
+    for text in ["Египет", "Москва", "15-22 сентября", "2", "1", "6", "70000"]:
+        _post(client, 906, text)
+    _post(client, 906, "+79161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT kids_ages FROM leads WHERE chat_id = ?", (906,))
+        assert cur.fetchone()[0] == "6"

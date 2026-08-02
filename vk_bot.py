@@ -39,13 +39,12 @@ from shared.constants import (
     STATE_ORIGIN,
     STATE_PEOPLE,
     STATE_KIDS,
+    STATE_KIDS_AGES,
     STATE_INFANTS,
     STATE_PHONE,
     PEOPLE_OPTIONS,
     KIDS_OPTIONS,
     KIDS_NONE_LABEL,
-    INFANTS_OPTIONS,
-    INFANTS_NONE_LABEL,
     BACK_BUTTON_TEXT,
     CANCEL_BUTTON_TEXT,
     CONSENT_YES_TEXT,
@@ -58,7 +57,11 @@ from shared.constants import (
     ORIGIN_OPTIONS_PLAIN,
 )
 from shared import tutu as _tutu
-from shared.validation import validate_phone, validate_people, validate_budget
+from shared.validation import (
+    validate_phone, validate_people, validate_budget,
+    parse_kids_ages, party_bands, party_text as _party_text,
+    ages_to_db as _ages_to_db, ages_from_db as _ages_from_db,
+)
 from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
 from shared.ai import generate_ai_selection as _shared_generate_ai
@@ -168,7 +171,7 @@ PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip() or (
 )
 DATA_OPERATOR_NAME = os.getenv(
     "DATA_OPERATOR_NAME",
-    "ИП Замятина Мария Андреевна (ТА «АПРЕЛЬ тур», ОГРНИП 290211659807)",
+    "ТА «АПРЕЛЬ тур»",
 )
 DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
 # soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
@@ -256,8 +259,7 @@ USER_HELP = (
     "  Удалить — стереть мои данные\n"
     "  Помощь — эта справка\n\n"
     "Связь: VK / телефон / Telegram — на выбор.\n\n"
-    "📋 ИП Замятина Мария Андреевна\n"
-    "ТА «АПРЕЛЬ тур» · ОГРНИП 290211659807"
+    "ТА «АПРЕЛЬ тур»"
 )
 
 WELCOME_BODY = (
@@ -382,6 +384,8 @@ def init_db() -> None:
             _cols = {r[1] for r in cur.fetchall()}
             if "origin" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN origin TEXT")
+            if "kids_ages" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN kids_ages TEXT")
             for _c in ("kids", "infants"):
                 if _c not in _cols:
                     cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} INTEGER")
@@ -397,19 +401,21 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("""
             INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
-                                  kids, infants, budget, phone, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  kids, kids_ages, infants, budget, phone, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
                 dates=excluded.dates, people=excluded.people,
-                kids=excluded.kids, infants=excluded.infants,
+                kids=excluded.kids, kids_ages=excluded.kids_ages,
+                infants=excluded.infants,
                 budget=excluded.budget, phone=excluded.phone,
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
               data.get("origin"),
               data.get("dates"), data.get("people"),
-              data.get("kids"), data.get("infants"), data.get("budget"),
+              data.get("kids"), _ages_to_db(data.get("kids_ages")),
+              data.get("infants"), data.get("budget"),
               data.get("phone"), data.get("updated_at", now)))
 
 
@@ -455,8 +461,8 @@ def save_lead(
             """
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates,
-                people, kids, infants, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                people, kids, kids_ages, infants, budget, phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -467,6 +473,7 @@ def save_lead(
                 info.get("dates"),
                 info.get("people"),
                 info.get("kids"),
+                _ages_to_db(info.get("kids_ages")),
                 info.get("infants"),
                 info.get("budget"),
                 phone,
@@ -741,13 +748,6 @@ def _kids_keyboard() -> str:
     return _keyboard(rows)
 
 
-def _infants_keyboard() -> str:
-    rows = _chunk_buttons(list(INFANTS_OPTIONS), "primary", 3)
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
-    return _keyboard(rows)
-
-
 def _budget_keyboard() -> str:
     labels = [label for label, _ in BUDGET_PRESETS] + [BUDGET_CUSTOM_LABEL]
     rows = _chunk_buttons(labels, "primary", 2)
@@ -998,12 +998,14 @@ def _ask_kids(user_id: int) -> None:
     )
 
 
-def _ask_infants(user_id: int) -> None:
+def _ask_kids_ages(user_id: int, count: int) -> None:
+    """Точный возраст, а не диапазон: по нему считается тариф."""
+    example = ", ".join(("5", "9", "12")[:max(count, 1)])
     send_message(
         user_id,
-        "👶 Есть малыши до 2 лет?\n\n"
-        "Они летят без отдельного места и по особому тарифу.",
-        keyboard=_infants_keyboard(),
+        "🎂 Сколько лет детям?\n\n"
+        f"Напишите через запятую — например: {example}\n"
+        "Малышам до года так и напишите: «до года».",
     )
 
 
@@ -1127,18 +1129,6 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
     _ask_people(user_id)
 
 
-def _party_text(info) -> str:
-    """«2 взр. + 1 реб. + 1 млад.» — the manager prices these separately."""
-    parts = [f"{info.get('people', '?')} взр."]
-    kids = info.get("kids") or 0
-    infants = info.get("infants") or 0
-    if kids:
-        parts.append(f"{kids} реб. (2–11)")
-    if infants:
-        parts.append(f"{infants} млад. (до 2)")
-    return " + ".join(parts)
-
-
 def _human_dates(depart: str, ret: Optional[str] = None) -> str:
     """ISO → «15 сентября» / «15–22 сентября», for reading back to the client."""
     months = ("января", "февраля", "марта", "апреля", "мая", "июня",
@@ -1192,23 +1182,26 @@ def _step_kids(user_id: int, text: str, message: Dict[str, Any], info: Dict[str,
         return
     info["kids"] = count
     if count == 0:
-        # Skip the infant question entirely rather than making every childless
-        # client tap "Нет".
+        # Skip the ages question entirely rather than making every childless
+        # client answer it.
+        info["kids_ages"] = []
         info["infants"] = 0
         info["state"] = STATE_BUDGET
         _ask_budget(user_id)
         return
-    info["state"] = STATE_INFANTS
-    _ask_infants(user_id)
+    info["state"] = STATE_KIDS_AGES
+    _ask_kids_ages(user_id, count)
 
 
-def _step_infants(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    count = _parse_choice(text, INFANTS_OPTIONS, INFANTS_NONE_LABEL)
-    if count is None:
-        send_message(user_id, "Выберите вариант кнопкой ниже.", keyboard=_infants_keyboard())
+def _step_kids_ages(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    ok, ages, problem = parse_kids_ages(text or "")
+    if not ok:
+        send_message(user_id, problem)
         return
-    info["infants"] = count
+    info["kids_ages"] = ages
+    _, info["kids"], info["infants"] = party_bands(info)
     info["state"] = STATE_BUDGET
+    send_message(user_id, f"🎂 Записал: {_party_text(info)}")
     _ask_budget(user_id)
 
 
@@ -1317,7 +1310,10 @@ STATE_HANDLERS: Dict[str, Callable] = {
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
     STATE_KIDS:        _step_kids,
-    STATE_INFANTS:     _step_infants,
+    STATE_KIDS_AGES:   _step_kids_ages,
+    # Sessions parked on the retired infants question land here on their next
+    # reply; asking for ages is the right next thing either way.
+    STATE_INFANTS:     _step_kids_ages,
     STATE_BUDGET:      _step_budget,
     STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
@@ -1329,8 +1325,9 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_DATES:       STATE_ORIGIN,
     STATE_PEOPLE:      STATE_DATES,
     STATE_KIDS:        STATE_PEOPLE,
+    STATE_KIDS_AGES:   STATE_KIDS,
     STATE_INFANTS:     STATE_KIDS,
-    STATE_BUDGET:      STATE_INFANTS,
+    STATE_BUDGET:      STATE_KIDS_AGES,
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
     "telegram_handle": STATE_CONTACT,
@@ -1352,8 +1349,8 @@ def _prompt_for_state(user_id: int, state: str) -> None:
         _ask_people(user_id)
     elif state == STATE_KIDS:
         _ask_kids(user_id)
-    elif state == STATE_INFANTS:
-        _ask_infants(user_id)
+    elif state in (STATE_KIDS_AGES, STATE_INFANTS):
+        _ask_kids_ages(user_id, int(user_data.get(user_id, {}).get("kids") or 1))
     elif state == STATE_BUDGET:
         _ask_budget(user_id)
     elif state == STATE_CONTACT:
@@ -1409,8 +1406,7 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
         f"👥 Состав: {_party_text(info)}\n"
         f"💰 Бюджет: {info.get('budget', '?')}₽\n"
         f"📞 Связь: {phone}\n\n"
-        "Спасибо, что выбрали нас 🌺\n\n"
-        "📋 ИП Замятина Мария Андреевна\nОГРНИП 290211659807",
+        "Спасибо, что выбрали нас 🌺",
         keyboard=_hide_keyboard(),
     )
 
@@ -1485,15 +1481,18 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
     """Live transport search for a completed lead. Never raises."""
     if not TUTU_ENABLED:
         return None
+    # Bands come from the exact ages, so a 14-year-old is searched as an adult
+    # and a one-year-old as an infant — which is what the airline will charge.
+    _adults, _children, _infants = party_bands(info)
     try:
         return _tutu.search_offers(
             _tutu_settings(), http_session,
             destination=info.get("destination", ""),
             dates_raw=info.get("dates", ""),
             origin=info.get("origin", ""),
-            people=info.get("people", 1),
-            kids=info.get("kids", 0),
-            infants=info.get("infants", 0),
+            people=_adults,
+            kids=_children,
+            infants=_infants,
             budget=info.get("budget"),
             log=logger,
         )
@@ -1835,6 +1834,7 @@ def load_state() -> None:
         for row in cur.fetchall():
             d = dict(row)
             chat_id = d.pop("chat_id")
+            d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():

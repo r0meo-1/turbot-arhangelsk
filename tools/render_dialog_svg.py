@@ -68,8 +68,6 @@ def main():
                 started = True
             else:
                 continue
-        # Truncate the long legal footer; it is not what the picture is about.
-        text = text.split("📋 ИП")[0].strip()
         if not text:
             continue
         items.append((ev["to"], wrap(text, 52), text))

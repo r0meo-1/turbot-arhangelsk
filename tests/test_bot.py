@@ -1176,19 +1176,53 @@ def test_family_with_children_is_priced_by_age_band(client, monkeypatch):
     for text in ["Турция", "Москва", "15-22 сентября", "2"]:
         _post(client, 6001, text)
     assert bot.user_data[6001]["state"] == bot.STATE_KIDS
-    _post(client, 6001, "2")                      # двое детей
-    assert bot.user_data[6001]["state"] == bot.STATE_INFANTS
-    _post(client, 6001, "1")                      # один малыш
+    _post(client, 6001, "3+")                     # трое детей
+    assert bot.user_data[6001]["state"] == bot.STATE_KIDS_AGES
+    _post(client, 6001, "1, 5, 9")                # один малыш и двое постарше
     assert bot.user_data[6001]["state"] == bot.STATE_BUDGET
     _post(client, 6001, "70000")
     _post(client, 6001, "+79161234567")
 
-    assert seen.get("people") == "2", "adults"
+    assert seen.get("people") == 2, "adults"
     assert seen.get("kids") == 2, "children 2–11 must reach the search"
-    assert seen.get("infants") == 1, "infants under 2 must reach the search"
+    assert seen.get("infants") == 1, "the one-year-old must be searched as an infant"
 
 
-def test_no_children_skips_the_infant_question(client):
+def test_a_twelve_year_old_is_searched_as_an_adult(client, monkeypatch):
+    """Twelve is where the adult fare starts, whatever the client calls them.
+
+    Nothing in the old flow could express this: the client picked "1 child" and
+    the search asked for a child fare that does not exist for that age.
+    """
+    seen = {}
+    monkeypatch.setattr(bot, "TUTU_ENABLED", True)
+    monkeypatch.setattr(bot._tutu, "search_offers",
+                        lambda *a, **kw: seen.update(kw) or None)
+    _consent(client, 6005)
+    for text in ["Турция", "Москва", "15-22 сентября", "2", "1", "14"]:
+        _post(client, 6005, text)
+    _post(client, 6005, "70000")
+    _post(client, 6005, "+79161234567")
+
+    assert seen.get("people") == 3, "the 14-year-old counts toward adults"
+    assert seen.get("kids") == 0
+    assert seen.get("infants") == 0
+
+
+def test_nonsense_ages_are_rejected_without_losing_the_step(client):
+    """A typo must re-ask, not silently book a 59-year-old child."""
+    _consent(client, 6006)
+    for text in ["Турция", "Москва", "15-22 сентября", "2", "2"]:
+        _post(client, 6006, text)
+    assert bot.user_data[6006]["state"] == bot.STATE_KIDS_AGES
+    _post(client, 6006, "59")
+    assert bot.user_data[6006]["state"] == bot.STATE_KIDS_AGES, "must stay on the step"
+    _post(client, 6006, "5 и 9")
+    assert bot.user_data[6006]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[6006]["kids_ages"] == [5, 9]
+
+
+def test_no_children_skips_the_ages_question(client):
     """Childless clients must not pay for the extra step with a tap."""
     _consent(client, 6002)
     for text in ["Турция", "Москва", "15-22 сентября", "2"]:
@@ -1200,14 +1234,24 @@ def test_no_children_skips_the_infant_question(client):
 
 
 def test_age_bands_persisted_with_lead(client):
+    """The exact ages reach SQLite, not just the derived bands.
+
+    The manager asked for ages because a band is not enough to quote from —
+    storing only "1 child" would answer the counting question and lose the
+    one she actually asked.
+    """
     _consent(client, 6003)
-    for text in ["Турция", "Москва", "15-22 сентября", "2", "1", "Нет", "70000"]:
+    for text in ["Турция", "Москва", "15-22 сентября", "2", "1", "9", "70000"]:
         _post(client, 6003, text)
     _post(client, 6003, "+79161234567")
     with bot._db_cursor() as cur:
-        cur.execute("SELECT people, kids, infants FROM leads WHERE chat_id = ?", (6003,))
+        cur.execute(
+            "SELECT people, kids, kids_ages, infants FROM leads WHERE chat_id = ?",
+            (6003,),
+        )
         row = cur.fetchone()
         assert (row["people"], row["kids"], row["infants"]) == ("2", 1, 0)
+        assert row["kids_ages"] == "9"
 
 
 def test_unparseable_dates_are_rejected_not_swallowed(client, monkeypatch):
