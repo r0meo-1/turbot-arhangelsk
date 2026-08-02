@@ -168,10 +168,10 @@ POLL_TIMEOUT = _env_int("POLL_TIMEOUT", 25)
 # degrades silently to the template blurb when unavailable.
 TUTU_ENABLED = os.getenv("TUTU_ENABLED", "true").lower().strip() in ("1", "true", "yes")
 TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
-TUTU_TIMEOUT = int(os.getenv("TUTU_TIMEOUT", "12"))
+TUTU_TIMEOUT = _env_int("TUTU_TIMEOUT", 12)
 TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
-TUTU_MAX_OFFERS = int(os.getenv("TUTU_MAX_OFFERS", "3"))
-TUTU_CACHE_TTL = int(os.getenv("TUTU_CACHE_TTL", "900"))
+TUTU_MAX_OFFERS = _env_int("TUTU_MAX_OFFERS", 3)
+TUTU_CACHE_TTL = _env_int("TUTU_CACHE_TTL", 900)
 # Who sees the result. Client gets orientation pricing only (no checkout link —
 # handing the client a "buy" button routes the sale around the agency);
 # the manager gets the price anchor plus checkout links.
@@ -236,7 +236,7 @@ DATA_OPERATOR_NAME = os.getenv(
 )
 # Days after which a client's personal data is auto-deleted (data minimisation,
 # 152-ФЗ ст. 5). Set to 0 to disable automatic retention cleanup.
-DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
+DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
 # soft (default): no hard «Согласен» gate — short notice + flexible contact.
 # strict: classic consent buttons before any questions (old behaviour).
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -246,7 +246,7 @@ BROADCAST_DELAY      = 0.05  # ~20 msg/s — stays under Telegram's ~30 msg/s li
 # Alert admin on critical errors (sent via Telegram message).
 ADMIN_ERROR_ALERTS = os.getenv("ADMIN_ERROR_ALERTS", "true").lower().strip() in ("1", "true", "yes")
 # How often to send the same error alert (seconds, to avoid spam).
-ERROR_ALERT_COOLDOWN = int(os.getenv("ERROR_ALERT_COOLDOWN", "300"))
+ERROR_ALERT_COOLDOWN = _env_int("ERROR_ALERT_COOLDOWN", 300)
 
 # MoiDokumenti-Turism (MDT) CRM integration
 MDT_ENABLED    = os.getenv("MDT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
@@ -259,7 +259,7 @@ MDT_NOTIFY_MANAGERS = os.getenv("MDT_NOTIFY_MANAGERS", "false").lower().strip() 
 MDT_MANAGER_IDS = [int(x.strip()) for x in os.getenv("MDT_MANAGER_IDS", "").split(",") if x.strip()]
 MDT_REMINDER_ENABLED = os.getenv("MDT_REMINDER_ENABLED", "true").lower().strip() in ("1", "true", "yes")
 try:
-    MDT_REMINDER_DAYS = int(os.getenv("MDT_REMINDER_DAYS", "1"))
+    MDT_REMINDER_DAYS = _env_int("MDT_REMINDER_DAYS", 1)
 except (ValueError, TypeError):
     MDT_REMINDER_DAYS = 1
 MDT_REMINDER_TEXT = os.getenv("MDT_REMINDER_TEXT", "Позвонить по заявке с Telegram-бота")
@@ -891,7 +891,7 @@ def cleanup_expired_data() -> int:
 # Follow-up for incomplete dialogs
 # ---------------------------------------------------------------------------
 
-FOLLOWUP_DELAY_HOURS = int(os.getenv("FOLLOWUP_DELAY_HOURS", "3"))
+FOLLOWUP_DELAY_HOURS = _env_int("FOLLOWUP_DELAY_HOURS", 3)
 
 
 def _send_followups() -> int:
