@@ -60,6 +60,7 @@ from shared.constants import (
     ORIGIN_OPTIONS_PLAIN,
 )
 from shared import tutu as _tutu
+from shared import version as _version
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -1900,6 +1901,9 @@ def health() -> Any:
     return jsonify({
         "status": "ok",
         "platform": "vk",
+        # Отвечает на «я задеплоил, а изменений нет» без ssh.
+        "revision": _version.REVISION,
+        "uptime_seconds": _version.uptime_seconds(),
         "vk_token_configured": bool(VK_ACCESS_TOKEN),
         "vk_group_id": VK_GROUP_ID,
         "admin_id_configured": bool(ADMIN_ID),

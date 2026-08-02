@@ -56,6 +56,7 @@ from shared.validation import (
 from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
 from shared import tutu as _tutu
+from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
 
@@ -2982,6 +2983,9 @@ def health() -> Any:
 
     payload = jsonify({
         "status": "degraded" if stale else "ok",
+        # Отвечает на «я задеплоил, а изменений нет» без ssh.
+        "revision": _version.REVISION,
+        "uptime_seconds": _version.uptime_seconds(),
         "seconds_since_poll_ok": poll_age,
         "poll_stale_after": POLL_STALE_AFTER if BOT_MODE == "polling" else None,
         "seconds_since_update": (

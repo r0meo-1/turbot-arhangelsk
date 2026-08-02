@@ -1328,3 +1328,20 @@ def test_polling_starts_before_profile_setup(monkeypatch):
     monkeypatch.setattr(bot.threading, "Thread", FakeThread)
     bot._deferred_network_startup()
     assert order == ["polling", "profile"], f"wrong order: {order}"
+
+
+def test_health_reports_the_running_revision(client):
+    """«Задеплоил, а изменений нет» — вопрос к процессу, а не к git на диске.
+
+    Значение читается при импорте, поэтому описывает выполняющийся код, а не
+    то, что успели выложить к моменту запроса.
+    """
+    data = client.get("/health").get_json()
+    assert data["revision"], "revision must never be empty"
+    assert data["uptime_seconds"] >= 0
+
+
+def test_git_revision_never_raises(tmp_path):
+    """Диагностика не имеет права ронять health-check."""
+    from shared import version
+    assert version.git_revision(str(tmp_path)) == "unknown"
