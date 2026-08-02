@@ -16,6 +16,7 @@ import sqlite3
 import logging
 import threading
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -37,8 +38,14 @@ from shared.constants import (
     STATE_DESTINATION,
     STATE_ORIGIN,
     STATE_PEOPLE,
+    STATE_KIDS,
+    STATE_INFANTS,
     STATE_PHONE,
     PEOPLE_OPTIONS,
+    KIDS_OPTIONS,
+    KIDS_NONE_LABEL,
+    INFANTS_OPTIONS,
+    INFANTS_NONE_LABEL,
     BACK_BUTTON_TEXT,
     CANCEL_BUTTON_TEXT,
     CONSENT_YES_TEXT,
@@ -185,7 +192,7 @@ DEMO_NOTICE = (
 # --- Tutu.ru MCP ------------------------------------------------------------
 TUTU_ENABLED = os.getenv("TUTU_ENABLED", "true").lower().strip() in ("1", "true", "yes")
 TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
-TUTU_TIMEOUT = _env_int("TUTU_TIMEOUT", 12)
+TUTU_TIMEOUT = _env_int("TUTU_TIMEOUT", 30)
 TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
 TUTU_MAX_OFFERS = _env_int("TUTU_MAX_OFFERS", 3)
 TUTU_CACHE_TTL = _env_int("TUTU_CACHE_TTL", 900)
@@ -336,6 +343,8 @@ def init_db() -> None:
                 origin TEXT,
                 dates TEXT,
                 people TEXT,
+                kids INTEGER,
+                infants INTEGER,
                 budget INTEGER,
                 phone TEXT,
                 updated_at INTEGER NOT NULL
@@ -351,6 +360,8 @@ def init_db() -> None:
                 origin TEXT,
                 dates TEXT,
                 people TEXT,
+                kids INTEGER,
+                infants INTEGER,
                 budget INTEGER,
                 phone TEXT NOT NULL,
                 created_at INTEGER NOT NULL
@@ -359,8 +370,12 @@ def init_db() -> None:
         # Additive migration for databases created before the origin step.
         for _t in ("sessions", "leads"):
             cur.execute(f"PRAGMA table_info({_t})")
-            if "origin" not in {r[1] for r in cur.fetchall()}:
+            _cols = {r[1] for r in cur.fetchall()}
+            if "origin" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN origin TEXT")
+            for _c in ("kids", "infants"):
+                if _c not in _cols:
+                    cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} INTEGER")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("PRAGMA journal_mode=WAL")
@@ -372,17 +387,20 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     now = int(time.time())
     with _db_cursor(commit=True) as cur:
         cur.execute("""
-            INSERT INTO sessions (chat_id, state, destination, origin, dates, people, budget, phone, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
+                                  kids, infants, budget, phone, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
                 dates=excluded.dates, people=excluded.people,
+                kids=excluded.kids, infants=excluded.infants,
                 budget=excluded.budget, phone=excluded.phone,
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
               data.get("origin"),
-              data.get("dates"), data.get("people"), data.get("budget"),
+              data.get("dates"), data.get("people"),
+              data.get("kids"), data.get("infants"), data.get("budget"),
               data.get("phone"), data.get("updated_at", now)))
 
 
@@ -428,8 +446,8 @@ def save_lead(
             """
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates,
-                people, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                people, kids, infants, budget, phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -439,6 +457,8 @@ def save_lead(
                 info.get("origin"),
                 info.get("dates"),
                 info.get("people"),
+                info.get("kids"),
+                info.get("infants"),
                 info.get("budget"),
                 phone,
                 now,
@@ -705,6 +725,20 @@ def _people_keyboard() -> str:
     return _keyboard(rows)
 
 
+def _kids_keyboard() -> str:
+    rows = _chunk_buttons(list(KIDS_OPTIONS), "primary", 4)
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
+    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    return _keyboard(rows)
+
+
+def _infants_keyboard() -> str:
+    rows = _chunk_buttons(list(INFANTS_OPTIONS), "primary", 3)
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
+    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    return _keyboard(rows)
+
+
 def _budget_keyboard() -> str:
     labels = [label for label, _ in BUDGET_PRESETS] + [BUDGET_CUSTOM_LABEL]
     rows = _chunk_buttons(labels, "primary", 2)
@@ -944,6 +978,24 @@ def _ask_people(user_id: int) -> None:
     )
 
 
+def _ask_kids(user_id: int) -> None:
+    send_message(
+        user_id,
+        "🧒 Дети до 12 лет едут?\n\n"
+        "У них свой тариф — без этого расчёт будет завышен.",
+        keyboard=_kids_keyboard(),
+    )
+
+
+def _ask_infants(user_id: int) -> None:
+    send_message(
+        user_id,
+        "👶 Есть малыши до 2 лет?\n\n"
+        "Они летят без отдельного места и по особому тарифу.",
+        keyboard=_infants_keyboard(),
+    )
+
+
 def _ask_budget(user_id: int) -> None:
     send_message(
         user_id,
@@ -1021,7 +1073,9 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
     if raw in (DATE_CUSTOM_LABEL, "свои даты"):
         send_message(
             user_id,
-            "✍️ Напишите даты текстом (например: 15-22 июня):",
+            "✍️ Напишите даты обычным сообщением\n\n"
+            "Например: 15-22 сентября или с 3 по 10 октября.\n"
+            "Просто отправьте текст в чат ↓",
             keyboard=_nav_keyboard(),
         )
         return
@@ -1031,9 +1085,58 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
     if not raw:
         _ask_dates(user_id)
         return
+
+    # Read back what was understood. Unparseable text is also unusable for the
+    # flight search, and silence after the keyboard shrinks to Back/Cancel is
+    # exactly what made this step feel broken to the first real user.
+    depart, ret = _tutu.resolve_dates(raw)
+    if not depart:
+        send_message(
+            user_id,
+            "🤔 Не разобрал эти даты.\n\n"
+            "Напишите так: 15-22 сентября\n"
+            "или выберите примерный период кнопкой.",
+            keyboard=_dates_keyboard(),
+        )
+        return
+
     info["dates"] = raw
     info["state"] = STATE_PEOPLE
+    send_message(user_id, f"📅 Понял: {_human_dates(depart, ret)}")
     _ask_people(user_id)
+
+
+def _party_text(info) -> str:
+    """«2 взр. + 1 реб. + 1 млад.» — the manager prices these separately."""
+    parts = [f"{info.get('people', '?')} взр."]
+    kids = info.get("kids") or 0
+    infants = info.get("infants") or 0
+    if kids:
+        parts.append(f"{kids} реб. (2–11)")
+    if infants:
+        parts.append(f"{infants} млад. (до 2)")
+    return " + ".join(parts)
+
+
+def _human_dates(depart: str, ret: Optional[str] = None) -> str:
+    """ISO → «15 сентября» / «15–22 сентября», for reading back to the client."""
+    months = ("января", "февраля", "марта", "апреля", "мая", "июня",
+              "июля", "августа", "сентября", "октября", "ноября", "декабря")
+    try:
+        d = datetime.strptime(depart, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return depart or ""
+    out = f"{d.day} {months[d.month - 1]}"
+    if ret:
+        try:
+            r = datetime.strptime(ret, "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return out
+        if r.month == d.month:
+            out = f"{d.day}–{r.day} {months[d.month - 1]}"
+        else:
+            out = f"{d.day} {months[d.month - 1]} – {r.day} {months[r.month - 1]}"
+    return out
 
 
 def _step_people(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -1046,6 +1149,44 @@ def _step_people(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["people"] = value
+    info["state"] = STATE_KIDS
+    _ask_kids(user_id)
+
+
+def _parse_choice(raw: str, options: List[str], none_label: str) -> Optional[int]:
+    """Read a count from a button label. None means unrecognised."""
+    value = (raw or "").strip()
+    if value == none_label or value.lower() in ("нет", "без детей"):
+        return 0
+    if value not in options:
+        return None
+    digits = "".join(c for c in value if c.isdigit())
+    return int(digits) if digits else 0
+
+
+def _step_kids(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    count = _parse_choice(text, KIDS_OPTIONS, KIDS_NONE_LABEL)
+    if count is None:
+        send_message(user_id, "Выберите вариант кнопкой ниже.", keyboard=_kids_keyboard())
+        return
+    info["kids"] = count
+    if count == 0:
+        # Skip the infant question entirely rather than making every childless
+        # client tap "Нет".
+        info["infants"] = 0
+        info["state"] = STATE_BUDGET
+        _ask_budget(user_id)
+        return
+    info["state"] = STATE_INFANTS
+    _ask_infants(user_id)
+
+
+def _step_infants(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    count = _parse_choice(text, INFANTS_OPTIONS, INFANTS_NONE_LABEL)
+    if count is None:
+        send_message(user_id, "Выберите вариант кнопкой ниже.", keyboard=_infants_keyboard())
+        return
+    info["infants"] = count
     info["state"] = STATE_BUDGET
     _ask_budget(user_id)
 
@@ -1154,6 +1295,8 @@ STATE_HANDLERS: Dict[str, Callable] = {
     STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
+    STATE_KIDS:        _step_kids,
+    STATE_INFANTS:     _step_infants,
     STATE_BUDGET:      _step_budget,
     STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
@@ -1164,7 +1307,9 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_ORIGIN:      STATE_DESTINATION,
     STATE_DATES:       STATE_ORIGIN,
     STATE_PEOPLE:      STATE_DATES,
-    STATE_BUDGET:      STATE_PEOPLE,
+    STATE_KIDS:        STATE_PEOPLE,
+    STATE_INFANTS:     STATE_KIDS,
+    STATE_BUDGET:      STATE_INFANTS,
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
     "telegram_handle": STATE_CONTACT,
@@ -1184,6 +1329,10 @@ def _prompt_for_state(user_id: int, state: str) -> None:
         _ask_dates(user_id)
     elif state == STATE_PEOPLE:
         _ask_people(user_id)
+    elif state == STATE_KIDS:
+        _ask_kids(user_id)
+    elif state == STATE_INFANTS:
+        _ask_infants(user_id)
     elif state == STATE_BUDGET:
         _ask_budget(user_id)
     elif state == STATE_CONTACT:
@@ -1235,7 +1384,7 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
         "✅ Заявка принята! Менеджер «АПРЕЛЬ тур» свяжется с вами.\n\n"
         f"📍 Направление: {info.get('destination', '?')}\n"
         f"📅 Даты: {info.get('dates', '?')}\n"
-        f"👥 Человек: {info.get('people', '?')}\n"
+        f"👥 Состав: {_party_text(info)}\n"
         f"💰 Бюджет: {info.get('budget', '?')}₽\n"
         f"📞 Связь: {phone}\n\n"
         "Спасибо, что выбрали нас 🌺\n\n"
@@ -1260,7 +1409,7 @@ def _notify_admin_telegram(
         f"VK ID: {user_id}\n"
         f"📍 {info.get('destination', '?')}\n"
         f"📅 {info.get('dates', '?')}\n"
-        f"👥 {info.get('people', '?')} чел\n"
+        f"👥 {_party_text(info)}\n"
         f"💰 {info.get('budget', '?')}₽\n"
         f"📞 Связь: {phone}"
     )
@@ -1293,7 +1442,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             f"От: {client_name or 'без имени'} (ID: {user_id})\n"
             f"📍 {info.get('destination', '?')}\n"
             f"📅 {info.get('dates', '?')}\n"
-            f"👥 {info.get('people', '?')} чел\n"
+            f"👥 {_party_text(info)}\n"
             f"💰 {info.get('budget', '?')}₽\n"
             f"📞 Связь: {phone}",
         )
@@ -1319,6 +1468,8 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
             dates_raw=info.get("dates", ""),
             origin=info.get("origin", ""),
             people=info.get("people", 1),
+            kids=info.get("kids", 0),
+            infants=info.get("infants", 0),
             budget=info.get("budget"),
             log=logger,
         )

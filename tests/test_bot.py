@@ -232,7 +232,7 @@ def test_delete_command_erases_data(client):
 def test_delete_command_erases_leads(client):
     """152-ФЗ: /delete must remove completed leads for that user too."""
     _consent(client, 115)
-    for text in ["🏖 Египет", "Москва", "15-22 июня", "2", "60000"]:
+    for text in ["🏖 Египет", "Москва", "15-22 июня", "2", "Без детей", "60000"]:
         _post(client, 115, text)
     _post(client, 115, contact={"phone_number": "79161234567", "user_id": 115})
     assert bot.count_leads() == 1
@@ -243,7 +243,7 @@ def test_delete_command_erases_leads(client):
 def test_dialog_completion_with_contact(client):
     # Walk through the whole flow.
     _consent(client, 222)
-    for text in ["🏖 Египет", "Москва", "15-22 июня", "2", "60000"]:
+    for text in ["🏖 Египет", "Москва", "15-22 июня", "2", "Без детей", "60000"]:
         _post(client, 222, text)
 
     info = bot.user_data.get(222)
@@ -281,8 +281,11 @@ def test_dialog_completion_via_inline_buttons(client):
     assert bot.user_data[223]["state"] == bot.STATE_PEOPLE
 
     _callback(client, 223, f"{bot.CB_PEOPLE_PREFIX}2")
-    assert bot.user_data[223]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[223]["state"] == bot.STATE_KIDS
     assert bot.user_data[223]["people"] == "2"
+
+    _callback(client, 223, f"{bot.CB_KIDS_PREFIX}{bot.KIDS_NONE_LABEL}")
+    assert bot.user_data[223]["state"] == bot.STATE_BUDGET
 
     _post(client, 223, "80000")
     assert bot.user_data[223]["state"] == bot.STATE_CONTACT
@@ -304,7 +307,7 @@ def test_soft_mode_start_and_telegram_contact(client, monkeypatch):
     assert bot.has_consent(901)
     assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
 
-    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 901, text)
     assert bot.user_data[901]["state"] == bot.STATE_CONTACT
 
@@ -378,6 +381,8 @@ def test_full_flow_all_buttons(client):
     assert bot.user_data[910]["state"] == bot.STATE_PEOPLE
     assert "выходные" in bot.user_data[910]["dates"]
     _callback(client, 910, f"{bot.CB_PEOPLE_PREFIX}2")
+    assert bot.user_data[910]["state"] == bot.STATE_KIDS
+    _callback(client, 910, f"{bot.CB_KIDS_PREFIX}{bot.KIDS_NONE_LABEL}")
     assert bot.user_data[910]["state"] == bot.STATE_BUDGET
     _callback(client, 910, f"{bot.CB_BUDGET_PREFIX}1")
     assert bot.user_data[910]["state"] == bot.STATE_CONTACT
@@ -748,6 +753,7 @@ def test_html_escape_in_notify(client):
     _post(client, 802, "Москва")
     _post(client, 802, "1-10 июля")
     _post(client, 802, "2")
+    _post(client, 802, "Без детей")
     _post(client, 802, "50000")
     # send phone to complete
     _post(client, 802, "+79161234567")
@@ -772,7 +778,7 @@ def test_lead_is_sent_to_admin_telegram(client, monkeypatch):
     monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
 
     _consent(client, 903)
-    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 903, text)
     _post(client, 903, "+79161234567")
 
@@ -818,7 +824,7 @@ def test_demo_mode_stores_masked_phone(client, monkeypatch):
     """A public showcase must not persist a real subscriber number."""
     monkeypatch.setattr(bot, "DEMO_MODE", True)
     _consent(client, 5001)
-    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 5001, text)
     _post(client, 5001, "+79161234567")
     with bot._db_cursor() as cur:
@@ -831,7 +837,7 @@ def test_demo_mode_stores_masked_phone(client, monkeypatch):
 def test_real_mode_stores_real_phone(client, monkeypatch):
     monkeypatch.setattr(bot, "DEMO_MODE", False)
     _consent(client, 5002)
-    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 5002, text)
     _post(client, 5002, "+79161234567")
     with bot._db_cursor() as cur:
@@ -869,6 +875,8 @@ def test_concurrent_completion_creates_one_lead(client, monkeypatch):
         "origin": "Москва",
         "dates": "1-7 августа",
         "people": "2",
+        "kids": 0,
+        "infants": 0,
         "budget": 70000,
         "updated_at": int(time.time()),
     }
@@ -1094,3 +1102,85 @@ def test_no_raw_int_env_parsing_remains():
             code = "".join(l for l in fh if not l.lstrip().startswith(("#", "*")))
         bad = _re.findall(r'^\s*[A-Z_]+\s*=\s*int\(os\.getenv', code, _re.M)
         assert not bad, f"{path}: use _env_int() instead of raw int(os.getenv): {bad}"
+
+
+# ---------------------------------------------------------------------------
+# Age bands and date confirmation — from live manager feedback
+
+
+def test_family_with_children_is_priced_by_age_band(client, monkeypatch):
+    """A family of four with two kids used to be quoted four adult fares."""
+    seen = {}
+    monkeypatch.setattr(bot, "TUTU_ENABLED", True)
+    monkeypatch.setattr(bot._tutu, "search_offers",
+                        lambda *a, **kw: seen.update(kw) or None)
+    _consent(client, 6001)
+    for text in ["Турция", "Москва", "15-22 сентября", "2"]:
+        _post(client, 6001, text)
+    assert bot.user_data[6001]["state"] == bot.STATE_KIDS
+    _post(client, 6001, "2")                      # двое детей
+    assert bot.user_data[6001]["state"] == bot.STATE_INFANTS
+    _post(client, 6001, "1")                      # один малыш
+    assert bot.user_data[6001]["state"] == bot.STATE_BUDGET
+    _post(client, 6001, "70000")
+    _post(client, 6001, "+79161234567")
+
+    assert seen.get("people") == "2", "adults"
+    assert seen.get("kids") == 2, "children 2–11 must reach the search"
+    assert seen.get("infants") == 1, "infants under 2 must reach the search"
+
+
+def test_no_children_skips_the_infant_question(client):
+    """Childless clients must not pay for the extra step with a tap."""
+    _consent(client, 6002)
+    for text in ["Турция", "Москва", "15-22 сентября", "2"]:
+        _post(client, 6002, text)
+    _post(client, 6002, bot.KIDS_NONE_LABEL)
+    assert bot.user_data[6002]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[6002]["kids"] == 0
+    assert bot.user_data[6002]["infants"] == 0
+
+
+def test_age_bands_persisted_with_lead(client):
+    _consent(client, 6003)
+    for text in ["Турция", "Москва", "15-22 сентября", "2", "1", "Нет", "70000"]:
+        _post(client, 6003, text)
+    _post(client, 6003, "+79161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT people, kids, infants FROM leads WHERE chat_id = ?", (6003,))
+        row = cur.fetchone()
+        assert (row["people"], row["kids"], row["infants"]) == ("2", 1, 0)
+
+
+def test_unparseable_dates_are_rejected_not_swallowed(client, monkeypatch):
+    """Storing dates nobody can read means quoting a price for nothing."""
+    sent = []
+    monkeypatch.setattr(bot, "send_message",
+                        lambda cid, text, **k: sent.append(text) or _OkResp())
+    _consent(client, 6004)
+    _post(client, 6004, "Турция")
+    _post(client, 6004, "Москва")
+    _post(client, 6004, "когда-нибудь потом")
+    assert bot.user_data[6004]["state"] == bot.STATE_DATES, "must stay on the step"
+    assert "dates" not in bot.user_data[6004]
+    assert any("Не разобрал" in t for t in sent)
+
+
+def test_understood_dates_are_read_back(client, monkeypatch):
+    """The step felt dead to the first real user; now it answers."""
+    sent = []
+    monkeypatch.setattr(bot, "send_message",
+                        lambda cid, text, **k: sent.append(text) or _OkResp())
+    _consent(client, 6005)
+    _post(client, 6005, "Турция")
+    _post(client, 6005, "Москва")
+    _post(client, 6005, "15-22 сентября")
+    assert bot.user_data[6005]["state"] == bot.STATE_PEOPLE
+    assert any("Понял" in t and "сентября" in t for t in sent)
+
+
+def test_party_text_shows_composition():
+    assert bot._party_text({"people": "2"}) == "2 взр."
+    assert bot._party_text({"people": "2", "kids": 2}) == "2 взр. + 2 реб. (2–11)"
+    assert bot._party_text({"people": "1", "kids": 1, "infants": 1}) == \
+        "1 взр. + 1 реб. (2–11) + 1 млад. (до 2)"

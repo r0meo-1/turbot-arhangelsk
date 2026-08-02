@@ -29,9 +29,15 @@ from shared.constants import (
     STATE_DESTINATION,
     STATE_ORIGIN,
     STATE_PEOPLE,
+    STATE_KIDS,
+    STATE_INFANTS,
     STATE_PHONE,
     STATE_VK,
     PEOPLE_OPTIONS,
+    KIDS_OPTIONS,
+    KIDS_NONE_LABEL,
+    INFANTS_OPTIONS,
+    INFANTS_NONE_LABEL,
     BACK_BUTTON_TEXT,
     CANCEL_BUTTON_TEXT,
     CONSENT_YES_TEXT,
@@ -168,7 +174,7 @@ POLL_TIMEOUT = _env_int("POLL_TIMEOUT", 25)
 # degrades silently to the template blurb when unavailable.
 TUTU_ENABLED = os.getenv("TUTU_ENABLED", "true").lower().strip() in ("1", "true", "yes")
 TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
-TUTU_TIMEOUT = _env_int("TUTU_TIMEOUT", 12)
+TUTU_TIMEOUT = _env_int("TUTU_TIMEOUT", 30)
 TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
 TUTU_MAX_OFFERS = _env_int("TUTU_MAX_OFFERS", 3)
 TUTU_CACHE_TTL = _env_int("TUTU_CACHE_TTL", 900)
@@ -368,6 +374,8 @@ CB_DEST_PREFIX = "d:"
 CB_ORIGIN_PREFIX = "or:"
 CB_DATE_PREFIX = "dt:"
 CB_PEOPLE_PREFIX = "p:"
+CB_KIDS_PREFIX = "kd:"
+CB_INFANTS_PREFIX = "inf:"
 CB_BUDGET_PREFIX = "bd:"
 CB_CONTACT_TG = "ct:tg"
 CB_CONTACT_PHONE = "ct:phone"
@@ -556,6 +564,8 @@ def init_db() -> None:
                 origin TEXT,
                 dates TEXT,
                 people TEXT,
+                kids INTEGER,
+                infants INTEGER,
                 budget INTEGER,
                 phone TEXT,
                 updated_at INTEGER NOT NULL
@@ -574,6 +584,8 @@ def init_db() -> None:
                 origin TEXT,
                 dates TEXT,
                 people TEXT,
+                kids INTEGER,
+                infants INTEGER,
                 budget INTEGER,
                 phone TEXT NOT NULL,
                 created_at INTEGER NOT NULL
@@ -583,8 +595,14 @@ def init_db() -> None:
         # Additive migration for databases created before the origin step.
         for _table in ("sessions", "leads"):
             cur.execute(f"PRAGMA table_info({_table})")
-            if "origin" not in {row[1] for row in cur.fetchall()}:
+            _cols = {row[1] for row in cur.fetchall()}
+            if "origin" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN origin TEXT")
+            # Age bands: existing rows predate the question, so NULL there
+            # honestly means "not asked", not "zero children".
+            for _c in ("kids", "infants"):
+                if _c not in _cols:
+                    cur.execute(f"ALTER TABLE {_table} ADD COLUMN {_c} INTEGER")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)"
         )
@@ -628,14 +646,17 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
-            INSERT INTO sessions (chat_id, state, destination, origin, dates, people, budget, phone, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
+                                  kids, infants, budget, phone, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
                 origin=excluded.origin,
                 dates=excluded.dates,
                 people=excluded.people,
+                kids=excluded.kids,
+                infants=excluded.infants,
                 budget=excluded.budget,
                 phone=excluded.phone,
                 updated_at=excluded.updated_at
@@ -647,6 +668,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("origin"),
                 data.get("dates"),
                 data.get("people"),
+                data.get("kids"),
+                data.get("infants"),
                 data.get("budget"),
                 data.get("phone"),
                 data.get("updated_at", now),
@@ -656,7 +679,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
 
 def update_session(chat_id: int, **kwargs) -> None:
     """Update specific fields of an existing session."""
-    allowed = {"state", "destination", "origin", "dates", "people", "budget", "phone", "updated_at"}
+    allowed = {"state", "destination", "origin", "dates", "people", "kids",
+               "infants", "budget", "phone", "updated_at"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -733,8 +757,8 @@ def save_lead(
             """
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates,
-                people, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                people, kids, infants, budget, phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -744,6 +768,8 @@ def save_lead(
                 info.get("origin"),
                 info.get("dates"),
                 info.get("people"),
+                info.get("kids"),
+                info.get("infants"),
                 info.get("budget"),
                 phone,
                 now,
@@ -1445,6 +1471,24 @@ def kb_people() -> str:
     return inline_keyboard(rows)
 
 
+def _kb_choices(options: List[str], prefix: str) -> str:
+    """Inline row of short choices + nav. Used for the two age-band steps."""
+    rows = [[_inline_btn(o, f"{prefix}{o}") for o in options]]
+    rows.append([
+        _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+        _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+    ])
+    return inline_keyboard(rows)
+
+
+def kb_kids() -> str:
+    return _kb_choices(KIDS_OPTIONS, CB_KIDS_PREFIX)
+
+
+def kb_infants() -> str:
+    return _kb_choices(INFANTS_OPTIONS, CB_INFANTS_PREFIX)
+
+
 def kb_budget() -> str:
     """Inline: budget presets + free-text + nav."""
     rows: List[List[Dict[str, str]]] = []
@@ -2073,6 +2117,26 @@ def _ask_people(chat_id: int) -> None:
     )
 
 
+def _ask_kids(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "🧒 <b>Дети до 12 лет едут?</b>\n\n"
+        "У них свой тариф — без этого расчёт будет завышен.",
+        reply_markup=kb_kids(),
+        parse_mode="HTML",
+    )
+
+
+def _ask_infants(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "👶 <b>Есть малыши до 2 лет?</b>\n\n"
+        "Они летят без отдельного места и по особому тарифу.",
+        reply_markup=kb_infants(),
+        parse_mode="HTML",
+    )
+
+
 def _ask_budget(chat_id: int) -> None:
     send_message(
         chat_id,
@@ -2143,9 +2207,11 @@ def _step_dates(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
     if raw in (f"{CB_DATE_PREFIX}custom", "✏️ Свои даты", "свои даты"):
         send_message(
             chat_id,
-            "✍️ Напишите даты текстом\n"
-            "(например: 15-22 июня или 1–10 августа):",
+            "✍️ <b>Напишите даты обычным сообщением</b>\n\n"
+            "Например: <code>15-22 сентября</code> или <code>с 3 по 10 октября</code>.\n"
+            "Просто отправьте текст в чат ↓",
             reply_markup=kb_nav(include_back=True),
+            parse_mode="HTML",
         )
         return
     # Preset callback: dt:0 … dt:N
@@ -2166,9 +2232,61 @@ def _step_dates(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
     if not raw:
         _ask_dates(chat_id)
         return
+
+    # Confirm what was understood. Anything unparseable is also unusable for
+    # the flight search, so catching it here beats quoting the client a price
+    # for dates nobody could read — and it tells them the step is alive,
+    # which is the complaint that prompted this: after the keyboard collapsed
+    # to Back/Cancel, typing felt like it went nowhere.
+    depart, ret = _tutu.resolve_dates(raw)
+    if not depart:
+        send_message(
+            chat_id,
+            "🤔 Не разобрал эти даты.\n\n"
+            "Напишите так: <code>15-22 сентября</code>\n"
+            "или выберите примерный период кнопкой.",
+            reply_markup=kb_dates(),
+            parse_mode="HTML",
+        )
+        return
+
     info["dates"] = raw
     info["state"] = STATE_PEOPLE
+    send_message(chat_id, f"📅 Понял: {_esc(_human_dates(depart, ret))}")
     _ask_people(chat_id)
+
+
+def _party_text(info) -> str:
+    """«2 взр. + 1 реб. + 1 млад.» — the manager prices these separately."""
+    parts = [f"{info.get('people', '?')} взр."]
+    kids = info.get("kids") or 0
+    infants = info.get("infants") or 0
+    if kids:
+        parts.append(f"{kids} реб. (2–11)")
+    if infants:
+        parts.append(f"{infants} млад. (до 2)")
+    return " + ".join(parts)
+
+
+def _human_dates(depart: str, ret: Optional[str] = None) -> str:
+    """ISO → «15 сентября» / «15–22 сентября», for reading back to the client."""
+    months = ("января", "февраля", "марта", "апреля", "мая", "июня",
+              "июля", "августа", "сентября", "октября", "ноября", "декабря")
+    try:
+        d = datetime.strptime(depart, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return depart or ""
+    out = f"{d.day} {months[d.month - 1]}"
+    if ret:
+        try:
+            r = datetime.strptime(ret, "%Y-%m-%d")
+        except (TypeError, ValueError):
+            return out
+        if r.month == d.month:
+            out = f"{d.day}–{r.day} {months[d.month - 1]}"
+        else:
+            out = f"{d.day} {months[d.month - 1]} – {r.day} {months[r.month - 1]}"
+    return out
 
 
 def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -2181,6 +2299,45 @@ def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["people"] = value
+    info["state"] = STATE_KIDS
+    _ask_kids(chat_id)
+
+
+def _parse_choice(raw: str, prefix: str, options: List[str], none_label: str) -> Optional[int]:
+    """Read a count from a callback or its plain label. None = unrecognised."""
+    value = raw[len(prefix):] if raw.startswith(prefix) else raw
+    value = value.strip()
+    if value == none_label or value.lower() in ("нет", "без детей"):
+        return 0
+    if value not in options:
+        return None
+    digits = "".join(c for c in value if c.isdigit())
+    return int(digits) if digits else 0
+
+
+def _step_kids(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    count = _parse_choice((text or "").strip(), CB_KIDS_PREFIX, KIDS_OPTIONS, KIDS_NONE_LABEL)
+    if count is None:
+        send_message(chat_id, "Выберите вариант кнопкой ниже.", reply_markup=kb_kids())
+        return
+    info["kids"] = count
+    if count == 0:
+        # No children at all, so the infant question cannot apply — skip it
+        # rather than making every childless client tap "Нет".
+        info["infants"] = 0
+        info["state"] = STATE_BUDGET
+        _ask_budget(chat_id)
+        return
+    info["state"] = STATE_INFANTS
+    _ask_infants(chat_id)
+
+
+def _step_infants(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    count = _parse_choice((text or "").strip(), CB_INFANTS_PREFIX, INFANTS_OPTIONS, INFANTS_NONE_LABEL)
+    if count is None:
+        send_message(chat_id, "Выберите вариант кнопкой ниже.", reply_markup=kb_infants())
+        return
+    info["infants"] = count
     info["state"] = STATE_BUDGET
     _ask_budget(chat_id)
 
@@ -2313,6 +2470,8 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
     STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
+    STATE_KIDS:        _step_kids,
+    STATE_INFANTS:     _step_infants,
     STATE_BUDGET:      _step_budget,
     STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
@@ -2323,7 +2482,9 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_ORIGIN:      STATE_DESTINATION,
     STATE_DATES:       STATE_ORIGIN,
     STATE_PEOPLE:      STATE_DATES,
-    STATE_BUDGET:      STATE_PEOPLE,
+    STATE_KIDS:        STATE_PEOPLE,
+    STATE_INFANTS:     STATE_KIDS,
+    STATE_BUDGET:      STATE_INFANTS,
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
     STATE_VK:          STATE_CONTACT,
@@ -2346,6 +2507,10 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
         _ask_dates(chat_id)
     elif state == STATE_PEOPLE:
         _ask_people(chat_id)
+    elif state == STATE_KIDS:
+        _ask_kids(chat_id)
+    elif state == STATE_INFANTS:
+        _ask_infants(chat_id)
     elif state == STATE_BUDGET:
         _ask_budget(chat_id)
     elif state == STATE_CONTACT:
@@ -2415,7 +2580,7 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         "✅ <b>Заявка принята!</b> Менеджер «АПРЕЛЬ тур» свяжется с вами в ближайшее время.\n\n"
         f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
         f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
-        f"👥 Человек: {_esc(info.get('people', '?'))}\n"
+        f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: {_esc(info.get('budget', '?'))}₽\n"
         f"📞 Связь: {_esc(phone)}\n\n"
         "Спасибо, что выбрали нас 🌺\n\n"
@@ -2447,7 +2612,7 @@ def _format_lead_notify_text(
         f"ID: <code>{chat_id}</code>\n"
         f"📍 {_esc(info.get('destination', '?'))}\n"
         f"📅 {_esc(info.get('dates', '?'))}\n"
-        f"👥 {_esc(info.get('people', '?'))} чел\n"
+        f"👥 {_esc(_party_text(info))}\n"
         f"💰 {_esc(info.get('budget', '?'))}₽\n"
         f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
         f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}"
@@ -2500,7 +2665,7 @@ def _notify_admin(
                 f"ID: {chat_id}\n"
                 f"📍 {info.get('destination', '?')}\n"
                 f"📅 {info.get('dates', '?')}\n"
-                f"👥 {info.get('people', '?')} чел\n"
+                f"👥 {_party_text(info)}\n"
                 f"💰 {info.get('budget', '?')}₽\n"
                 f"📞 {phone}\n\n"
                 f"Ответить: /send {chat_id}"
@@ -2545,6 +2710,8 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
             dates_raw=info.get("dates", ""),
             origin=info.get("origin", ""),
             people=info.get("people", 1),
+            kids=info.get("kids", 0),
+            infants=info.get("infants", 0),
             budget=info.get("budget"),
             log=logger,
         )
@@ -2912,6 +3079,22 @@ def _process_callback(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
             return
         _step_people(chat_id, people, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_KIDS_PREFIX):
+        if info.get("state") != STATE_KIDS:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_kids(chat_id, cb_data, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_INFANTS_PREFIX):
+        if info.get("state") != STATE_INFANTS:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_infants(chat_id, cb_data, synthetic, info)
         _mark_dirty(chat_id, user=False)
         return
 

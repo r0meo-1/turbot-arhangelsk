@@ -128,7 +128,7 @@ def test_returning_user_skips_consent(client):
 def test_dialog_completion(client):
     _post(client, 222, "Начать")
     _post(client, 222, bot.CONSENT_YES_TEXT)
-    for text in ["Египет", "Москва", "15-22 июня", "2", "60000"]:
+    for text in ["Египет", "Москва", "15-22 июня", "2", "Без детей", "60000"]:
         _post(client, 222, text)
     assert bot.user_data[222]["state"] == bot.STATE_CONTACT
     _post(client, 222, "+79161234567")
@@ -148,7 +148,7 @@ def test_soft_mode_and_vk_contact(client, monkeypatch):
     _post(client, 901, bot.START_BUTTON_TEXT)
     assert bot.has_consent(901)
     assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
-    for text in ["Турция", "Москва", bot.DATE_PRESETS[0][0], "2", bot.BUDGET_PRESETS[1][0]]:
+    for text in ["Турция", "Москва", bot.DATE_PRESETS[0][0], "2", "Без детей", bot.BUDGET_PRESETS[1][0]]:
         _post(client, 901, text)
     assert bot.user_data[901]["state"] == bot.STATE_CONTACT
     assert bot.user_data[901]["budget"] == bot.BUDGET_PRESETS[1][1]
@@ -233,7 +233,7 @@ def test_vk_funnel_asks_for_origin(client):
 
 def test_vk_origin_persisted_with_lead(client):
     _vk_consent(client, 902)
-    for text in ["Турция", "Санкт-Петербург", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Санкт-Петербург", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 902, text)
     _post(client, 902, "+79161234567")
     with bot._db_cursor() as cur:
@@ -246,7 +246,7 @@ def test_vk_demo_mode_masks_phone(client, monkeypatch):
     while the other takes real enquiries for the agency."""
     monkeypatch.setattr(bot, "DEMO_MODE", True)
     _vk_consent(client, 903)
-    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 903, text)
     _post(client, 903, "+79161234567")
     with bot._db_cursor() as cur:
@@ -259,7 +259,7 @@ def test_vk_demo_mode_masks_phone(client, monkeypatch):
 def test_vk_real_mode_keeps_phone(client, monkeypatch):
     monkeypatch.setattr(bot, "DEMO_MODE", False)
     _vk_consent(client, 904)
-    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+    for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 904, text)
     _post(client, 904, "+79161234567")
     with bot._db_cursor() as cur:
