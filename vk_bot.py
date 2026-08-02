@@ -149,7 +149,16 @@ if MDT_MODE not in ("lead", "preorder", "both"):
     MDT_MODE = "lead"
 
 # 152-ФЗ compliance
-PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip()
+# The Telegram bot serves the policy at /privacy on the same host, so VK can
+# link to it. Without this the consent text has no policy link at all while the
+# bot collects phone numbers — the gap only showed up once VK went live.
+PUBLIC_BASE_URL = (
+    os.getenv("PUBLIC_BASE_URL", "").strip()
+    or os.getenv("RENDER_EXTERNAL_URL", "").strip()
+).rstrip("/")
+PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip() or (
+    f"{PUBLIC_BASE_URL}/privacy" if PUBLIC_BASE_URL else ""
+)
 DATA_OPERATOR_NAME = os.getenv(
     "DATA_OPERATOR_NAME",
     "ИП Замятина Мария Андреевна (ТА «АПРЕЛЬ тур», ОГРНИП 290211659807)",
