@@ -194,23 +194,33 @@ fi
 
 cat <<DONE
 
-3. Register the Telegram webhook. Source .env so the token never lands in
-   your shell history:
+3. Register the Telegram webhook.
 
-     set -a; . $APP_DIR/.env; set +a
+   Note: TELEGRAM_SECRET_TOKEN is a random string YOU generate — it is not
+   the bot token. Passing the bot token as secret_token leaks it.
+
+   Read the two values straight out of .env so neither is typed by hand:
+DONE
+
+# Quoted heredoc: these lines are instructions to print verbatim, not code to
+# run. Unquoted, the command substitution below would execute here and print
+# the real token into the installer's own output.
+cat <<'DONE'
+     BOT_TOKEN=$(sed -n 's/^BOT_TOKEN=//p' /opt/turbot/.env | tr -d '"')
+     SECRET=$(sed -n 's/^TELEGRAM_SECRET_TOKEN=//p' /opt/turbot/.env | tr -d '"')
 DONE
 
 if [ "$MODE" = "domain" ]; then
     cat <<DONE
      curl -sS "https://api.telegram.org/bot\$BOT_TOKEN/setWebhook" \\
        -d "url=$WEBHOOK_URL" \\
-       -d "secret_token=\$TELEGRAM_SECRET_TOKEN"
+       -d "secret_token=\$SECRET"
 DONE
 else
     cat <<DONE
      curl -sS "https://api.telegram.org/bot\$BOT_TOKEN/setWebhook" \\
        -F "url=$WEBHOOK_URL" \\
-       -F "secret_token=\$TELEGRAM_SECRET_TOKEN" \\
+       -F "secret_token=\$SECRET" \\
        -F "certificate=@$CERT_PATH"
 
    Uploading the certificate is what makes a self-signed setup work: Telegram
