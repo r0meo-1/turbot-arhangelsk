@@ -40,10 +40,14 @@ Register the webhook — note `-F` and the certificate upload, both required in
 self-signed mode:
 
 ```bash
-set -a; . /opt/turbot/.env; set +a
+# Pull out just the two values you need. Sourcing the whole file drags every
+# secret into your shell environment and breaks on any value with a space.
+BOT_TOKEN=$(sed -n 's/^BOT_TOKEN=//p' /opt/turbot/.env | tr -d '"'"'"'"'"'"')
+SECRET=$(sed -n 's/^TELEGRAM_SECRET_TOKEN=//p' /opt/turbot/.env | tr -d '"'"'"'"'"'"')
+
 curl -sS "https://api.telegram.org/bot$BOT_TOKEN/setWebhook" \
   -F "url=https://<VM_IP>/webhook" \
-  -F "secret_token=$TELEGRAM_SECRET_TOKEN" \
+  -F "secret_token=$SECRET" \
   -F "certificate=@/etc/ssl/turbot/fullchain.pem"
 
 curl -sS "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo"
