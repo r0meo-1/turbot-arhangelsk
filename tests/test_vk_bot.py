@@ -28,6 +28,11 @@ import vk_bot as bot
 
 import pytest
 
+# Фикстура ниже глушит send_message во всех тестах. Тестам про клавиатуру нужна
+# настоящая: проверяется как раз то, что она подставляет клавиатуру по
+# состоянию. Ссылка берётся до подмены.
+_REAL_SEND_MESSAGE = bot.send_message
+
 
 @pytest.fixture(autouse=True)
 def clean_state(monkeypatch):
@@ -428,3 +433,63 @@ def test_missing_client_info_is_treated_as_modern():
     bot._NO_INLINE.discard(556)
     bot._remember_client_capabilities(556, {"object": {"message": {"text": "hi"}}})
     assert 556 not in bot._NO_INLINE
+
+
+def _kb_of(sent):
+    """Клавиатура последнего отправленного сообщения."""
+    return sent[-1][1]
+
+
+def test_every_reply_carries_a_way_forward(client, monkeypatch):
+    """Кнопки то были, то нет: клавиатуру передавали руками, и два десятка
+    сообщений уходили без неё. Теперь она берётся из состояния."""
+    captured = []
+    monkeypatch.setattr(bot, "send_message", _REAL_SEND_MESSAGE)
+    monkeypatch.setattr(bot, "_vk_api",
+                        lambda method, **p: captured.append(p) or {"response": 1})
+
+    for text in ["Начать", bot.CONSENT_YES_TEXT, "Египет", "Москва",
+                 "15-22 сентября", "непонятный текст"]:
+        _post(client, 950, text)
+
+    assert captured, "ни одного вызова messages.send"
+    without = [p["message"][:45] for p in captured if not p.get("keyboard")]
+    assert not without, f"сообщения без кнопок: {without}"
+
+
+def test_cancel_shows_the_button_it_names(client, monkeypatch):
+    """Сообщение говорило «Когда будете готовы — Начать» и тем же вызовом
+    прятало клавиатуру."""
+    captured = []
+    monkeypatch.setattr(bot, "send_message", _REAL_SEND_MESSAGE)
+    monkeypatch.setattr(bot, "_vk_api",
+                        lambda method, **p: captured.append(p) or {"response": 1})
+    _post(client, 951, "Начать")
+    _post(client, 951, bot.CONSENT_YES_TEXT)
+    captured.clear()
+    _post(client, 951, "Отмена")
+
+    final = captured[-1]
+    assert "Начать" in final["message"]
+    # json.dumps экранирует кириллицу, поэтому сверяем разобранные подписи.
+    labels = [
+        b["action"]["label"]
+        for row in json.loads(final["keyboard"])["buttons"] for b in row
+    ]
+    assert bot.START_BUTTON_TEXT in labels, "кнопка названа, но не показана"
+
+
+def test_the_word_buttons_brings_the_step_back(client, monkeypatch):
+    """Человек, у которого «пропали кнопки», ищет команду, а не догадку."""
+    captured = []
+    monkeypatch.setattr(bot, "send_message", _REAL_SEND_MESSAGE)
+    monkeypatch.setattr(bot, "_vk_api",
+                        lambda method, **p: captured.append(p) or {"response": 1})
+    for text in ["Начать", bot.CONSENT_YES_TEXT, "Египет"]:
+        _post(client, 952, text)
+    state_before = bot.user_data[952]["state"]
+    captured.clear()
+
+    _post(client, 952, "кнопки")
+    assert bot.user_data[952]["state"] == state_before, "шаг не должен меняться"
+    assert captured[-1].get("keyboard"), "кнопки не вернулись"

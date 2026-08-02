@@ -259,6 +259,7 @@ USER_HELP = (
     "  Отмена — отменить заявку\n"
     "  Политика — персональные данные\n"
     "  Удалить — стереть мои данные\n"
+    "  Кнопки — вернуть кнопки, если они пропали\n"
     "  Помощь — эта справка\n\n"
     "Связь: VK / телефон / MAX — на выбор.\n\n"
     "ТА «АПРЕЛЬ тур»"
@@ -664,6 +665,23 @@ def _downgrade_if_needed(user_id: int, keyboard: str) -> str:
     return json.dumps(data)
 
 
+def _keyboard_for_state(user_id: int) -> Optional[str]:
+    """Клавиатура текущего шага — чтобы любое сообщение вело дальше.
+
+    Клиент жаловался, что кнопки то есть, то нет. Так и было: клавиатуру
+    передавали руками, и два десятка сообщений уходили вообще без неё —
+    человек оставался в диалоге без единого способа продолжить, кроме как
+    угадать нужное слово. Строится по состоянию, а не по месту вызова:
+    забыть аргумент можно, забыть состояние — нет.
+    """
+    state = (user_data.get(user_id) or {}).get("state")
+    if state is None:
+        # Диалога нет: единственный осмысленный следующий шаг — начать.
+        return _soft_start_keyboard()
+    builder = _STATE_KEYBOARDS.get(state)
+    return builder() if builder else _nav_keyboard()
+
+
 def send_message(
     user_id: int,
     text: str,
@@ -673,6 +691,10 @@ def send_message(
     if not VK_ACCESS_TOKEN:
         logger.error("VK_ACCESS_TOKEN not set — cannot send message")
         return None
+    if keyboard is None and user_id != ADMIN_ID:
+        # Админу кнопки клиента ни к чему: он получает уведомления и ответы на
+        # команды, а не проходит воронку.
+        keyboard = _keyboard_for_state(user_id)
     params: Dict[str, Any] = {
         "user_id": user_id,
         "message": text,
@@ -985,7 +1007,9 @@ def handle_cancel(user_id: int) -> None:
         send_message(
             user_id,
             "❌ Заявка отменена.\n\nКогда будете готовы — «Начать».",
-            keyboard=_hide_keyboard(),
+            # Раньше здесь пряталась клавиатура — сообщение называло кнопку и
+            # тут же её убирало.
+            keyboard=_soft_start_keyboard(),
         )
     else:
         send_message(user_id, f"Сейчас нет активной заявки.\n\n{HINT_START}")
@@ -1020,7 +1044,7 @@ def _ask_people(user_id: int) -> None:
     send_message(
         user_id,
         "👥 Сколько взрослых поедет?\n\n"
-        "Только взрослые, от 12 лет — про детей спрошу следующим вопросом.\n"
+        "Взрослый тариф — с 12 лет. Возрасты детей спрошу следующим вопросом.\n"
         "Кнопка или число 1–50:",
         keyboard=_people_keyboard(),
     )
@@ -1350,6 +1374,23 @@ def _step_max(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, 
         keyboard=_nav_keyboard(),
     )
 
+
+# Клавиатура на каждое состояние. Рядом со STATE_HANDLERS намеренно: новый шаг
+# добавляют сюда же, и «шаг без кнопок» становится заметным при чтении.
+_STATE_KEYBOARDS: Dict[str, Callable[[], str]] = {
+    STATE_CONSENT:     _consent_keyboard,
+    STATE_DESTINATION: _dest_keyboard,
+    STATE_ORIGIN:      _origin_keyboard,
+    STATE_DATES:       _dates_keyboard,
+    STATE_PEOPLE:      _people_keyboard,
+    STATE_KIDS:        _nav_keyboard,
+    STATE_KIDS_AGES:   _nav_keyboard,
+    STATE_INFANTS:     _nav_keyboard,
+    STATE_BUDGET:      _budget_keyboard,
+    STATE_CONTACT:     _contact_keyboard,
+    STATE_PHONE:       _nav_keyboard,
+    STATE_MAX:         _nav_keyboard,
+}
 
 STATE_HANDLERS: Dict[str, Callable] = {
     STATE_CONSENT:     _step_consent,
@@ -1698,6 +1739,10 @@ def _start_followup_worker() -> None:
 _COMMAND_ALIASES = {
     "начать": "start", "старт": "start", "привет": "start",
     "отмена": "cancel", "назад": "back",
+    # Явный способ вернуть кнопки словом. Клавиатура теперь приходит с каждым
+    # сообщением, но человек, у которого кнопки «пропали», ищет команду, а не
+    # догадывается написать что угодно.
+    "кнопки": "menu", "меню": "menu", "продолжить": "menu", "где кнопки": "menu",
     "помощь": "help", "справка": "help",
     "политика": "privacy",
     "удалить": "delete",
@@ -1840,6 +1885,16 @@ def _process_message(message: Dict[str, Any]) -> None:
     if command == "cancel":
         handle_cancel(user_id)
         return
+    if command == "menu":
+        # Повторить текущий вопрос вместе с его кнопками. Ничего не меняет в
+        # состоянии: человек застрял на шаге, а не хочет его пройти заново.
+        state = (user_data.get(user_id) or {}).get("state")
+        if state:
+            _prompt_for_state(user_id, state)
+        else:
+            send_message(user_id, HINT_START, keyboard=_soft_start_keyboard())
+        return
+
     if command == "back":
         if user_id in user_data:
             _go_back(user_id)
