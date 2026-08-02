@@ -507,20 +507,38 @@ def _esc(value: Any) -> str:
     return html.escape(str(value or ""), quote=False)
 
 
-def format_client_message(result: SearchResult, *, max_len: int = 3500) -> str:
-    """Telegram HTML for the client. Orientation pricing, no checkout links."""
+def _markup(kind: str):
+    """Return (escape, bold, link) helpers for the target platform.
+
+    Telegram renders HTML; VK has no markup at all and would show the tags
+    verbatim, so the same offer has to be renderable both ways.
+    """
+    if kind == "plain":
+        return (lambda v: str(v or ""),
+                lambda t: str(t),
+                lambda url, text: f"{text}: {url}")
+    return (_esc,
+            lambda t: f"<b>{t}</b>",
+            lambda url, text: f'<a href="{_esc(url)}">{text}</a>')
+
+
+def format_client_message(result: SearchResult, *, max_len: int = 3500,
+                          markup: str = "html") -> str:
+    """Orientation pricing for the client. No checkout links, by design."""
     if not result or not result.offers:
         return ""
 
     # Nothing fit the stated budget. Dumping a price several times higher than
     # the client asked for reads as tone-deaf; say so plainly instead, and let
     # the manager work the alternatives.
+    esc, bold, link = _markup(markup)
+
     if result.over_budget:
         cheapest = result.offers[0]
         return (
-            "✈️ <b>По вашему бюджету билетов на эти даты не нашлось</b>\n"
-            f"{_esc(result.from_city)} → {_esc(result.to_city)}: "
-            f"рынок начинается от {_esc(_fmt_price(cheapest.price, cheapest.currency))} "
+            "✈️ " + bold("По вашему бюджету билетов на эти даты не нашлось") + "\n"
+            f"{esc(result.from_city)} → {esc(result.to_city)}: "
+            f"рынок начинается от {esc(_fmt_price(cheapest.price, cheapest.currency))} "
             "за перелёт.\n\n"
             "Это нормально: на такие направления выгодные места ловятся "
             "на соседних датах и в чартерах, которых нет в обычном поиске. "
@@ -528,21 +546,21 @@ def format_client_message(result: SearchResult, *, max_len: int = 3500) -> str:
         )
 
     lines = [
-        "✈️ <b>Ориентир по перелёту</b>",
-        f"{_esc(result.from_city)} → {_esc(result.to_city)}",
+        "✈️ " + bold("Ориентир по перелёту"),
+        f"{esc(result.from_city)} → {esc(result.to_city)}",
         "",
     ]
     for offer in result.offers:
-        bits = [f"<b>{_esc(_fmt_price(offer.price, offer.currency))}</b>"]
+        bits = [bold(esc(_fmt_price(offer.price, offer.currency)))]
         carriers = ", ".join(offer.carriers)
         if carriers:
-            bits.append(_esc(carriers))
+            bits.append(esc(carriers))
         when = _fmt_departure(offer.departure_at)
         if when:
-            bits.append(_esc(when))
+            bits.append(esc(when))
         duration = _fmt_duration(offer.duration_min)
         if duration:
-            bits.append(_esc(duration))
+            bits.append(esc(duration))
         lines.append("• " + " · ".join(bits))
 
     lines.append("")
@@ -554,7 +572,7 @@ def format_client_message(result: SearchResult, *, max_len: int = 3500) -> str:
         "чем собирать по частям."
     )
     if result.search_url:
-        lines.append(f'\n🔗 <a href="{_esc(result.search_url)}">Посмотреть все варианты</a>')
+        lines.append("\n🔗 " + link(result.search_url, "Посмотреть все варианты"))
 
     text = "\n".join(lines)
     return text[:max_len]

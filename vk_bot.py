@@ -35,6 +35,7 @@ from shared.constants import (
     STATE_CONTACT,
     STATE_DATES,
     STATE_DESTINATION,
+    STATE_ORIGIN,
     STATE_PEOPLE,
     STATE_PHONE,
     PEOPLE_OPTIONS,
@@ -47,7 +48,9 @@ from shared.constants import (
     CONTACT_PHONE_TEXT,
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
+    ORIGIN_OPTIONS_PLAIN,
 )
+from shared import tutu as _tutu
 from shared.validation import validate_phone, validate_people, validate_budget
 from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
@@ -136,6 +139,39 @@ DATA_RETENTION_DAYS = int(os.getenv("DATA_RETENTION_DAYS", "180"))
 # soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
 # strict: classic «Согласен / Отказаться».
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
+
+# --- Demo mode --------------------------------------------------------------
+# VK_DEMO_MODE overrides DEMO_MODE for this bot alone. The two bots share one
+# .env, and they are not always used the same way: the Telegram instance can be
+# a portfolio showcase while VK takes real enquiries for the agency.
+_demo_default = os.getenv("DEMO_MODE", "false")
+DEMO_MODE = os.getenv("VK_DEMO_MODE", _demo_default).lower().strip() in ("1", "true", "yes")
+
+DEMO_NOTICE = (
+    "⚠️ Это демонстрационная версия.\n"
+    "Заявка не попадёт в турагентство, телефон не сохраняется — "
+    "вводите любой номер вида +79001234567.\n"
+    "Цены на перелёт при этом настоящие: они приходят из Tutu.ru."
+)
+
+# --- Tutu.ru MCP ------------------------------------------------------------
+TUTU_ENABLED = os.getenv("TUTU_ENABLED", "true").lower().strip() in ("1", "true", "yes")
+TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
+TUTU_TIMEOUT = int(os.getenv("TUTU_TIMEOUT", "12"))
+TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
+TUTU_MAX_OFFERS = int(os.getenv("TUTU_MAX_OFFERS", "3"))
+TUTU_CACHE_TTL = int(os.getenv("TUTU_CACHE_TTL", "900"))
+TUTU_SHOW_CLIENT = os.getenv("TUTU_SHOW_CLIENT", "true").lower().strip() in ("1", "true", "yes")
+TUTU_SHOW_ADMIN = os.getenv("TUTU_SHOW_ADMIN", "true").lower().strip() in ("1", "true", "yes")
+
+
+def _tutu_settings() -> "_tutu.TutuSettings":
+    return _tutu.TutuSettings(
+        enabled=TUTU_ENABLED, endpoint=TUTU_ENDPOINT, timeout=TUTU_TIMEOUT,
+        default_origin=TUTU_DEFAULT_ORIGIN, max_offers=TUTU_MAX_OFFERS,
+        cache_ttl=TUTU_CACHE_TTL, show_client=TUTU_SHOW_CLIENT,
+        show_admin=TUTU_SHOW_ADMIN,
+    )
 if CONSENT_MODE not in ("soft", "strict"):
     CONSENT_MODE = "soft"
 
@@ -269,6 +305,7 @@ def init_db() -> None:
                 chat_id INTEGER PRIMARY KEY,
                 state TEXT NOT NULL,
                 destination TEXT,
+                origin TEXT,
                 dates TEXT,
                 people TEXT,
                 budget INTEGER,
@@ -283,6 +320,7 @@ def init_db() -> None:
                 first_name TEXT,
                 username TEXT,
                 destination TEXT,
+                origin TEXT,
                 dates TEXT,
                 people TEXT,
                 budget INTEGER,
@@ -290,6 +328,11 @@ def init_db() -> None:
                 created_at INTEGER NOT NULL
             )
         """)
+        # Additive migration for databases created before the origin step.
+        for _t in ("sessions", "leads"):
+            cur.execute(f"PRAGMA table_info({_t})")
+            if "origin" not in {r[1] for r in cur.fetchall()}:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN origin TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("PRAGMA journal_mode=WAL")
@@ -301,14 +344,16 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     now = int(time.time())
     with _db_cursor(commit=True) as cur:
         cur.execute("""
-            INSERT INTO sessions (chat_id, state, destination, dates, people, budget, phone, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (chat_id, state, destination, origin, dates, people, budget, phone, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
+                origin=excluded.origin,
                 dates=excluded.dates, people=excluded.people,
                 budget=excluded.budget, phone=excluded.phone,
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
+              data.get("origin"),
               data.get("dates"), data.get("people"), data.get("budget"),
               data.get("phone"), data.get("updated_at", now)))
 
@@ -331,6 +376,14 @@ def list_stale_sessions(cutoff: int) -> List[int]:
         return [row[0] for row in cur.fetchall()]
 
 
+def _tutu_mask_phone(phone: str) -> str:
+    """Keep the shape of a number without keeping the number."""
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if len(digits) < 8:
+        return "+7***"
+    return f"+{digits[:4]}***{digits[-4:]}"
+
+
 def save_lead(
     chat_id: int,
     info: Dict[str, Any],
@@ -340,19 +393,22 @@ def save_lead(
 ) -> None:
     """Persist a completed tour request for retention-aware export/history."""
     now = int(time.time())
+    if DEMO_MODE:
+        phone = _tutu_mask_phone(phone)
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
             INSERT INTO leads (
-                chat_id, first_name, username, destination, dates,
+                chat_id, first_name, username, destination, origin, dates,
                 people, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
                 first_name or None,
                 username or None,
                 info.get("destination"),
+                info.get("origin"),
                 info.get("dates"),
                 info.get("people"),
                 info.get("budget"),
@@ -770,6 +826,8 @@ def _welcome_text(first_name: str = "") -> str:
         head = f"🌴 Добро пожаловать, {first_name}!"
     else:
         head = "🌴 Добро пожаловать в «АПРЕЛЬ тур»!"
+    if DEMO_MODE:
+        return f"{head}\n\n{DEMO_NOTICE}\n\n{WELCOME_BODY}"
     return f"{head}\n\n{WELCOME_BODY}"
 
 
@@ -823,6 +881,22 @@ def handle_cancel(user_id: int) -> None:
         )
     else:
         send_message(user_id, f"Сейчас нет активной заявки.\n\n{HINT_START}")
+
+
+def _origin_keyboard() -> str:
+    rows = _chunk_buttons(list(ORIGIN_OPTIONS_PLAIN), "primary", 2)
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"),
+                 _btn(CANCEL_BUTTON_TEXT, "negative")])
+    return _keyboard(rows)
+
+
+def _ask_origin(user_id: int) -> None:
+    send_message(
+        user_id,
+        "🛫 Откуда вылетаете?\n\n"
+        "Нужно, чтобы посчитать перелёт — цена сильно зависит от города.",
+        keyboard=_origin_keyboard(),
+    )
 
 
 def _ask_dates(user_id: int) -> None:
@@ -897,6 +971,19 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         send_message(user_id, "✍️ Напишите ваше направление:", keyboard=_nav_keyboard())
         return
     info["destination"] = dest
+    info["state"] = STATE_ORIGIN
+    _ask_origin(user_id)
+
+
+def _step_origin(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    city = (text or "").strip()
+    if city.lower() in ("другой город", "другое"):
+        send_message(user_id, "✍️ Напишите город вылета:", keyboard=_nav_keyboard())
+        return
+    if not city:
+        _ask_origin(user_id)
+        return
+    info["origin"] = city
     info["state"] = STATE_DATES
     _ask_dates(user_id)
 
@@ -1036,6 +1123,7 @@ def _step_telegram_handle(user_id: int, text: str, message: Dict[str, Any], info
 STATE_HANDLERS: Dict[str, Callable] = {
     STATE_CONSENT:     _step_consent,
     STATE_DESTINATION: _step_destination,
+    STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
     STATE_BUDGET:      _step_budget,
@@ -1045,7 +1133,8 @@ STATE_HANDLERS: Dict[str, Callable] = {
 }
 
 PREVIOUS_STATE: Dict[str, str] = {
-    STATE_DATES:       STATE_DESTINATION,
+    STATE_ORIGIN:      STATE_DESTINATION,
+    STATE_DATES:       STATE_ORIGIN,
     STATE_PEOPLE:      STATE_DATES,
     STATE_BUDGET:      STATE_PEOPLE,
     STATE_CONTACT:     STATE_BUDGET,
@@ -1061,6 +1150,8 @@ def _prompt_for_state(user_id: int, state: str) -> None:
             "📍 Куда хотите поехать?\nКнопка или своё направление:",
             keyboard=_dest_keyboard(),
         )
+    elif state == STATE_ORIGIN:
+        _ask_origin(user_id)
     elif state == STATE_DATES:
         _ask_dates(user_id)
     elif state == STATE_PEOPLE:
@@ -1189,23 +1280,75 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
 SYNC_COMPLETION = os.getenv("SYNC_COMPLETION", "").lower().strip() in ("1", "true", "yes")
 
 
+def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
+    """Live transport search for a completed lead. Never raises."""
+    if not TUTU_ENABLED:
+        return None
+    try:
+        return _tutu.search_offers(
+            _tutu_settings(), http_session,
+            destination=info.get("destination", ""),
+            dates_raw=info.get("dates", ""),
+            origin=info.get("origin", ""),
+            people=info.get("people", 1),
+            budget=info.get("budget"),
+            log=logger,
+        )
+    except Exception as exc:
+        logger.error("VK Tutu search failed: %s", exc)
+        return None
+
+
+def _send_tutu_to_admin(user_id: int, result: Any, client_name: Optional[str]) -> None:
+    """Price anchor + checkout links to the manager, in Telegram.
+
+    Sent separately: the lead notification itself goes out on the critical
+    path and must not wait for a search.
+    """
+    block = _tutu.format_admin_block(result)
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
+    if not block or not bot_token or not LEAD_NOTIFY_IDS:
+        return
+    text = f"💼 <b>По заявке из VK от {client_name or user_id}</b>{block}"
+    for recipient in LEAD_NOTIFY_IDS:
+        try:
+            http_session.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": recipient, "text": text, "parse_mode": "HTML"},
+                timeout=HTTP_TIMEOUT,
+            )
+        except Exception as exc:
+            logger.error("VK Tutu admin notify failed: %s", exc)
+
+
 def _post_completion_side_effects(
     user_id: int,
     info: Dict[str, Any],
     phone: str,
     client_name: Optional[str],
 ) -> None:
-    """MDT push + AI blurb — off the VK Callback hot path."""
+    """MDT push + live offers + AI blurb — off the VK Callback hot path."""
     try:
         send_lead_to_mdt(user_id, info, phone, client_name)
+
+        result = _tutu_search(info)
+        client_text = ""
+        if result and TUTU_SHOW_CLIENT:
+            # VK renders no markup at all, so the HTML variant would show tags.
+            client_text = _tutu.format_client_message(result, markup="plain")
+
         send_typing(user_id)
-        ai = generate_ai_selection(
-            info.get("destination", ""),
-            info.get("dates", ""),
-            info.get("people", ""),
-            info.get("budget", ""),
-        )
-        send_message(user_id, ai)
+        if client_text:
+            send_message(user_id, client_text)
+        else:
+            # Tutu off or unavailable — the client still gets a suggestion.
+            send_message(user_id, generate_ai_selection(
+                info.get("destination", ""), info.get("dates", ""),
+                info.get("people", ""), info.get("budget", ""),
+            ))
+
+        if result and TUTU_SHOW_ADMIN:
+            _send_tutu_to_admin(user_id, result, client_name)
     except Exception as exc:
         logger.error("VK post-completion side effects failed for %s: %s", user_id, exc)
 
@@ -1529,6 +1672,8 @@ def health() -> Any:
         "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
         "data_retention_days": DATA_RETENTION_DAYS,
         "consent_mode": CONSENT_MODE,
+        "demo_mode": DEMO_MODE,
+        "tutu_enabled": TUTU_ENABLED,
     })
 
 
@@ -1577,8 +1722,23 @@ _start_timeout_worker()
 _start_followup_worker()
 _start_retention_worker()
 
+def _deferred_network_startup() -> None:
+    """Keep slow network calls off module import.
+
+    Doing this inline delayed the port bind long enough for a platform health
+    check to fail the deploy — the exact bug already fixed in bot.py and never
+    ported here.
+    """
+    try:
+        _mdt_load_countries()
+    except Exception as exc:
+        logger.warning("VK MDT country load failed: %s", exc)
+
+
 if MDT_ENABLED:
-    _mdt_load_countries()
+    threading.Thread(
+        target=_deferred_network_startup, name="vk-startup-network", daemon=True
+    ).start()
 
 logger.info(
     "TurBot VK started (port=%s, group=%s, admin_set=%s, groq_set=%s)",
