@@ -9,6 +9,8 @@ import tempfile
 os.environ.setdefault("VK_ACCESS_TOKEN", "dummy-token")
 os.environ.setdefault("VK_GROUP_ID", "999")
 os.environ.setdefault("VK_CONFIRMATION", "confirm123")
+os.environ.setdefault("TUTU_ENABLED", "false")
+os.environ.setdefault("VK_DEMO_MODE", "false")
 os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
@@ -126,7 +128,7 @@ def test_returning_user_skips_consent(client):
 def test_dialog_completion(client):
     _post(client, 222, "Начать")
     _post(client, 222, bot.CONSENT_YES_TEXT)
-    for text in ["Египет", "15-22 июня", "2", "60000"]:
+    for text in ["Египет", "Москва", "15-22 июня", "2", "60000"]:
         _post(client, 222, text)
     assert bot.user_data[222]["state"] == bot.STATE_CONTACT
     _post(client, 222, "+79161234567")
@@ -146,7 +148,7 @@ def test_soft_mode_and_vk_contact(client, monkeypatch):
     _post(client, 901, bot.START_BUTTON_TEXT)
     assert bot.has_consent(901)
     assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
-    for text in ["Турция", bot.DATE_PRESETS[0][0], "2", bot.BUDGET_PRESETS[1][0]]:
+    for text in ["Турция", "Москва", bot.DATE_PRESETS[0][0], "2", bot.BUDGET_PRESETS[1][0]]:
         _post(client, 901, text)
     assert bot.user_data[901]["state"] == bot.STATE_CONTACT
     assert bot.user_data[901]["budget"] == bot.BUDGET_PRESETS[1][1]
@@ -173,7 +175,7 @@ def test_back_button(client):
     _post(client, 333, "Начать")
     _post(client, 333, bot.CONSENT_YES_TEXT)
     _post(client, 333, "Египет")
-    assert bot.user_data[333]["state"] == bot.STATE_DATES
+    assert bot.user_data[333]["state"] == bot.STATE_ORIGIN
     _post(client, 333, bot.BACK_BUTTON_TEXT)
     assert bot.user_data[333]["state"] == bot.STATE_DESTINATION
 
@@ -212,3 +214,54 @@ def test_keyboard_format():
     assert "buttons" in data
     assert len(data["buttons"]) > 0
     assert data["inline"] is False
+
+
+def _vk_consent(client, uid):
+    _post(client, uid, "Начать")
+    _post(client, uid, bot.CONSENT_YES_TEXT)
+
+
+def test_vk_funnel_asks_for_origin(client):
+    """VK must collect the departure city too, or Tutu cannot price a flight."""
+    _vk_consent(client, 901)
+    _post(client, 901, "Египет")
+    assert bot.user_data[901]["state"] == bot.STATE_ORIGIN
+    _post(client, 901, "Москва")
+    assert bot.user_data[901]["state"] == bot.STATE_DATES
+    assert bot.user_data[901]["origin"] == "Москва"
+
+
+def test_vk_origin_persisted_with_lead(client):
+    _vk_consent(client, 902)
+    for text in ["Турция", "Санкт-Петербург", "1-7 августа", "2", "70000"]:
+        _post(client, 902, text)
+    _post(client, 902, "+79161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT origin FROM leads WHERE chat_id = ?", (902,))
+        assert cur.fetchone()[0] == "Санкт-Петербург"
+
+
+def test_vk_demo_mode_masks_phone(client, monkeypatch):
+    """VK_DEMO_MODE is independent of DEMO_MODE: one bot can be a showcase
+    while the other takes real enquiries for the agency."""
+    monkeypatch.setattr(bot, "DEMO_MODE", True)
+    _vk_consent(client, 903)
+    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+        _post(client, 903, text)
+    _post(client, 903, "+79161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (903,))
+        stored = cur.fetchone()[0]
+    assert stored == "+7916***4567"
+    assert "1234567" not in stored
+
+
+def test_vk_real_mode_keeps_phone(client, monkeypatch):
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    _vk_consent(client, 904)
+    for text in ["Турция", "Москва", "1-7 августа", "2", "70000"]:
+        _post(client, 904, text)
+    _post(client, 904, "+79161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (904,))
+        assert cur.fetchone()[0] == "+79161234567"

@@ -412,3 +412,24 @@ def test_empty_result_renders_nothing():
     empty = tutu.SearchResult()
     assert tutu.format_client_message(empty) == ""
     assert tutu.format_admin_block(empty) == ""
+
+
+def test_plain_markup_has_no_html():
+    """VK renders no markup — HTML tags would be shown to the client verbatim."""
+    text = tutu.format_client_message(_result(), markup="plain")
+    assert "<b>" not in text and "</a>" not in text and "&" not in text
+    assert "24 539 ₽" in text
+    assert "avia.tutu.ru" in text          # link still reachable, just bare
+    assert "checkout" not in text          # same rule as Telegram
+
+
+def test_html_markup_still_used_by_default():
+    text = tutu.format_client_message(_result())
+    assert "<b>" in text and "<a href=" in text
+
+
+def test_plain_markup_over_budget_message():
+    res = _result(); res.over_budget = True
+    text = tutu.format_client_message(res, markup="plain")
+    assert "<b>" not in text
+    assert "не нашлось" in text
