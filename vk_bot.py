@@ -190,14 +190,23 @@ DEMO_NOTICE = (
 )
 
 # --- Tutu.ru MCP ------------------------------------------------------------
-TUTU_ENABLED = os.getenv("TUTU_ENABLED", "true").lower().strip() in ("1", "true", "yes")
+# VK_TUTU_* override the shared TUTU_* for this bot alone. Both bots read one
+# .env, but they serve different audiences: the Telegram instance is a
+# portfolio showcase where live prices are the point, while VK takes real
+# enquiries and the agency may not want ticket prices quoted there at all.
+_tutu_default = os.getenv("TUTU_ENABLED", "true")
+TUTU_ENABLED = os.getenv("VK_TUTU_ENABLED", _tutu_default).lower().strip() in ("1", "true", "yes")
 TUTU_ENDPOINT = os.getenv("TUTU_ENDPOINT", "https://mcp.tutu.ru/mcp").strip()
 TUTU_TIMEOUT = _env_int("TUTU_TIMEOUT", 30)
 TUTU_DEFAULT_ORIGIN = os.getenv("TUTU_DEFAULT_ORIGIN", "Архангельск").strip()
 TUTU_MAX_OFFERS = _env_int("TUTU_MAX_OFFERS", 3)
 TUTU_CACHE_TTL = _env_int("TUTU_CACHE_TTL", 900)
-TUTU_SHOW_CLIENT = os.getenv("TUTU_SHOW_CLIENT", "true").lower().strip() in ("1", "true", "yes")
-TUTU_SHOW_ADMIN = os.getenv("TUTU_SHOW_ADMIN", "true").lower().strip() in ("1", "true", "yes")
+TUTU_SHOW_CLIENT = os.getenv(
+    "VK_TUTU_SHOW_CLIENT", os.getenv("TUTU_SHOW_CLIENT", "true")
+).lower().strip() in ("1", "true", "yes")
+TUTU_SHOW_ADMIN = os.getenv(
+    "VK_TUTU_SHOW_ADMIN", os.getenv("TUTU_SHOW_ADMIN", "true")
+).lower().strip() in ("1", "true", "yes")
 
 
 def _tutu_settings() -> "_tutu.TutuSettings":

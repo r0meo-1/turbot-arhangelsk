@@ -265,3 +265,18 @@ def test_vk_real_mode_keeps_phone(client, monkeypatch):
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (904,))
         assert cur.fetchone()[0] == "+79161234567"
+
+
+def test_vk_tutu_switch_is_independent(monkeypatch):
+    """One .env, two audiences: VK can drop live prices while Telegram keeps
+    them. Without a separate flag, turning Tutu off for the agency's real
+    enquiries would also blank the portfolio showcase."""
+    import importlib
+    monkeypatch.setenv("TUTU_ENABLED", "true")
+    monkeypatch.setenv("VK_TUTU_ENABLED", "false")
+    reloaded = importlib.reload(bot)
+    try:
+        assert reloaded.TUTU_ENABLED is False
+    finally:
+        monkeypatch.delenv("VK_TUTU_ENABLED", raising=False)
+        importlib.reload(bot)
