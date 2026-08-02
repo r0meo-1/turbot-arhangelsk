@@ -899,3 +899,172 @@ def test_concurrent_completion_creates_one_lead(client, monkeypatch):
 
     assert bot.count_leads() == 1, "concurrent completion produced duplicate leads"
     bot.delete_user_data(chat)
+
+
+# ---------------------------------------------------------------------------
+# Token redaction and polling mode
+
+
+def test_log_filter_redacts_bot_token():
+    """urllib3 logs the full URL on a broken connection, and the Telegram API
+    keeps the token in the path — so one network blip writes it to journald."""
+    import logging as _logging
+    f = bot._TokenRedactingFilter()
+    leaked = ("Retrying after connection broken by NewConnectionError: "
+              "/bot8886586430:AAHzxHyH5hx_ay_Iqgjw1ZciQvAyKe_nz5Q/setChatMenuButton")
+    rec = _logging.LogRecord("urllib3", _logging.WARNING, __file__, 1, leaked, None, None)
+    f.filter(rec)
+    out = rec.getMessage()
+    assert "AAHzxHyH5hx_ay_Iqgjw1ZciQvAyKe_nz5Q" not in out
+    assert "<redacted>" in out
+    assert "bot8886586430" in out          # id kept: still useful for debugging
+    assert "setChatMenuButton" in out      # the rest of the message survives
+
+
+def test_log_filter_leaves_ordinary_messages_alone():
+    import logging as _logging
+    f = bot._TokenRedactingFilter()
+    rec = _logging.LogRecord("turbot", _logging.INFO, __file__, 1,
+                             "Lead from %s delivered", ("chat 42",), None)
+    f.filter(rec)
+    assert rec.getMessage() == "Lead from chat 42 delivered"
+
+
+class _PollResp:
+    def __init__(self, payload, status=200):
+        self._payload, self.status_code = payload, status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+def _run_poller(monkeypatch, batches, extra_get=None):
+    """Drive _polling_worker over a scripted sequence of getUpdates replies."""
+    seen_params, dispatched = [], []
+    monkeypatch.setattr(bot, "dispatch_update", lambda u: dispatched.append(u))
+    monkeypatch.setattr(bot, "BOT_TOKEN", "123456:test-token")
+    monkeypatch.setattr(bot, "POLL_TIMEOUT", 0)
+
+    queue = list(batches)
+
+    class FakeSession:
+        def __init__(self):
+            self.posts = []
+
+        def post(self, url, **kw):
+            self.posts.append(url)
+            return _PollResp({"ok": True})
+
+        def get(self, url, params=None, **kw):
+            seen_params.append(params)
+            if queue:
+                item = queue.pop(0)
+                if isinstance(item, Exception):
+                    raise item
+                return item
+            bot._shutdown_event.set()
+            return _PollResp({"ok": True, "result": []})
+
+    session = FakeSession()
+    monkeypatch.setattr(bot, "telegram_session", session)
+    bot._shutdown_event.clear()
+    try:
+        bot._polling_worker()
+    finally:
+        bot._shutdown_event.clear()
+    return dispatched, seen_params, session
+
+
+def test_polling_dispatches_and_advances_offset(monkeypatch):
+    batches = [
+        _PollResp({"ok": True, "result": [
+            {"update_id": 10, "message": {"chat": {"id": 1}, "text": "a"}},
+            {"update_id": 11, "message": {"chat": {"id": 1}, "text": "b"}},
+        ]}),
+        _PollResp({"ok": True, "result": []}),
+    ]
+    dispatched, params, session = _run_poller(monkeypatch, batches)
+
+    assert [u["update_id"] for u in dispatched] == [10, 11]
+    assert params[0]["offset"] == 0
+    assert params[1]["offset"] == 12, "offset must be highest update_id + 1"
+    assert "callback_query" in params[0]["allowed_updates"]
+    assert any("deleteWebhook" in u for u in session.posts), \
+        "Telegram refuses getUpdates while a webhook is registered"
+
+
+def test_polling_survives_network_error(monkeypatch):
+    """A filtered network drops connections; the poller must not die."""
+    batches = [
+        RuntimeError("Network is unreachable"),
+        _PollResp({"ok": True, "result": [
+            {"update_id": 5, "message": {"chat": {"id": 1}, "text": "после сбоя"}},
+        ]}),
+    ]
+    dispatched, _params, _s = _run_poller(monkeypatch, batches)
+    assert [u["update_id"] for u in dispatched] == [5]
+
+
+def test_polling_recovers_from_conflict(monkeypatch):
+    """409 means a webhook reappeared — drop it and carry on."""
+    batches = [
+        _PollResp({}, status=409),
+        _PollResp({"ok": True, "result": [
+            {"update_id": 7, "message": {"chat": {"id": 1}, "text": "ok"}},
+        ]}),
+    ]
+    dispatched, _p, session = _run_poller(monkeypatch, batches)
+    assert [u["update_id"] for u in dispatched] == [7]
+    assert sum("deleteWebhook" in u for u in session.posts) >= 2
+
+
+def test_polling_advances_past_a_poison_update(monkeypatch):
+    """A handler that always raises must not wedge the offset forever."""
+    def boom(_update):
+        raise ValueError("handler exploded")
+
+    monkeypatch.setattr(bot, "BOT_TOKEN", "123456:test-token")
+    monkeypatch.setattr(bot, "POLL_TIMEOUT", 0)
+    monkeypatch.setattr(bot, "dispatch_update", boom)
+
+    queue = [_PollResp({"ok": True, "result": [
+        {"update_id": 99, "message": {"chat": {"id": 1}, "text": "яд"}}]})]
+    seen = []
+
+    class FakeSession:
+        def post(self, url, **kw):
+            return _PollResp({"ok": True})
+
+        def get(self, url, params=None, **kw):
+            seen.append(params)
+            if queue:
+                return queue.pop(0)
+            bot._shutdown_event.set()
+            return _PollResp({"ok": True, "result": []})
+
+    monkeypatch.setattr(bot, "telegram_session", FakeSession())
+    bot._shutdown_event.clear()
+    try:
+        bot._polling_worker()   # must not propagate the handler's exception
+    finally:
+        bot._shutdown_event.clear()
+    assert seen[-1]["offset"] == 100
+
+
+def test_dispatch_update_routes_and_survives_bad_payload(monkeypatch):
+    seen = []
+    monkeypatch.setattr(bot, "_process_update", lambda d: seen.append("message"))
+    monkeypatch.setattr(bot, "_process_callback", lambda d: seen.append("callback"))
+    monkeypatch.setattr(bot, "save_state", lambda: seen.append("saved"))
+
+    bot.dispatch_update({"message": {"chat": {"id": 1}}})
+    bot.dispatch_update({"callback_query": {"id": "1"}})
+    bot.dispatch_update(None)          # must not raise
+
+    assert seen.count("message") == 1
+    assert seen.count("callback") == 1
+    assert seen.count("saved") == 3, "state must be flushed on every path"
