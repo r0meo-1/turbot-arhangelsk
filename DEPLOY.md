@@ -288,7 +288,8 @@ Send `/start` to the bot in Telegram — you should see a consent prompt.
 | View logs           | `journalctl -u turbot -f`              |
 | Restart bot         | `sudo systemctl restart turbot`        |
 | Stop bot            | `sudo systemctl stop turbot`           |
-| Update from repo    | `cd /opt/turbot && git pull && sudo systemctl restart turbot` |
+| Update from repo    | `cd /opt/turbot && bash scripts/deploy.sh` |
+| Dry-run an update   | `cd /opt/turbot && bash scripts/deploy.sh --check` |
 | Backup database     | `cp /opt/turbot/bot_state.sqlite /backup/` |
 
 ---
