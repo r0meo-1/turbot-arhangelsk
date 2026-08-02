@@ -882,6 +882,17 @@ def test_health_fails_when_poller_went_quiet(client, monkeypatch):
     assert data["seconds_since_poll_ok"] > 180
 
 
+def test_freshly_booted_bot_is_not_reported_dead(monkeypatch):
+    """The heartbeat starts warm, or the watchdog restarts a healthy boot.
+
+    A zero here would mean "last heard from Telegram in 1970": /health would
+    answer 503 for the instant between import and the poller's first call, and
+    the watchdog would take that at face value.
+    """
+    assert bot._last_poll_ok > 0, "_last_poll_ok must be seeded at import"
+    assert time.time() - bot._last_poll_ok < bot.POLL_STALE_AFTER
+
+
 def test_health_stays_ok_while_the_poller_answers(client, monkeypatch):
     monkeypatch.setattr(bot, "BOT_MODE", "polling")
     monkeypatch.setattr(bot, "_last_poll_ok", time.time() - 5)

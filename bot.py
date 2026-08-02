@@ -518,7 +518,12 @@ _SEEN_UPDATE_MAX = 1000
 # "when did Telegram last answer us" is the right one. Written by the poller,
 # read by /health. No lock: rebinding a float is atomic under the GIL, and a
 # reader that catches the previous value is one poll cycle stale at worst.
-_last_poll_ok: float = 0.0
+# Seeded at import rather than left at zero: a process that has only just
+# booted has genuinely not missed anything yet, and a zero would make /health
+# call the bot dead for the first instants of its life — long enough for the
+# watchdog to restart it into a loop. If the poller never starts at all, this
+# ages out on its own and the check fires for the right reason.
+_last_poll_ok: float = time.time()
 _last_update_at: float = 0.0
 
 

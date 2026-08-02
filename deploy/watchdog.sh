@@ -86,7 +86,10 @@ if [ $(( now - last )) -lt "$COOLDOWN" ]; then
 fi
 
 echo "$now" > "$STAMP"
-notify "Watchdog: ${UNIT} is not answering (${reason}). Restarting."
+# One message per cycle, not two. During a real Telegram outage this fires
+# every cooldown for as long as it lasts, and the outcome line already carries
+# the reason — a separate "restarting now" note would only double the noise at
+# the worst possible moment.
 systemctl restart "$UNIT"
 sleep 15
 
@@ -94,8 +97,8 @@ code_after="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$URL" 2>/de
 code_after="${code_after:-000}"
 if [ "$code_after" = "200" ]; then
   echo "restart recovered ${UNIT}"
-  notify "Watchdog: ${UNIT} recovered after restart."
+  notify "Watchdog: ${UNIT} had stopped answering (${reason}) and a restart fixed it."
 else
   echo "restart did NOT recover ${UNIT} (HTTP ${code_after})"
-  notify "Watchdog: ${UNIT} still down after restart (HTTP ${code_after}). Needs a look."
+  notify "Watchdog: ${UNIT} is down (${reason}) and a restart did not help. Needs a look."
 fi
