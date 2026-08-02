@@ -9,6 +9,9 @@ from typing import Dict, List, Optional, Tuple
 # проверяются раньше, иначе младенец превратится в восьмилетнего.
 _UNDER_ONE = re.compile(r"(до\s*год|меньше\s*год|полгод|месяц|мес\b|грудн|младен)", re.I)
 _SPLIT_AGES = re.compile(r"[,;/]|\s+и\s+|\n")
+_NO_KIDS = re.compile(
+    r"\s*(0+|нет(\s+детей)?|нету|неа|без\s+детей|детей\s+нет|не\s+едут|[-—])\s*", re.I
+)
 _MAX_KIDS = 10
 ADULT_FARE_FROM = 12   # с этого возраста тариф взрослый
 INFANT_UNDER = 2       # младше — летит без места
@@ -24,6 +27,13 @@ def parse_kids_ages(text: str) -> Tuple[bool, List[int], str]:
     raw = (text or "").strip()
     if not raw:
         return False, [], "Напишите возрасты детей через запятую — например: 5, 9"
+
+    # Отдельного вопроса «дети едут?» больше нет, поэтому «нет детей» — один из
+    # допустимых ответов здесь. Одинокий 0 значит именно это: возраст младенца
+    # выражается словами («до года», «8 месяцев»), а в списке вида «0, 5» ноль
+    # снова читается как младенец.
+    if _NO_KIDS.fullmatch(raw):
+        return True, [], ""
 
     ages: List[int] = []
     for chunk in _SPLIT_AGES.split(raw):

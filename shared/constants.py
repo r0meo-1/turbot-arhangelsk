@@ -21,10 +21,8 @@ PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
 
 # Airlines price three age bands completely differently, and the funnel used to
 # collapse them into one number — so a family of four with two kids was quoted
-# four adult fares. The count is picked with a button; the ages are typed, and
-# it is the ages that decide which band each child falls into.
-KIDS_NONE_LABEL = "Без детей"
-KIDS_OPTIONS = [KIDS_NONE_LABEL, "1", "2", "3+"]
+# four adult fares. There is no "how many children" button any more: it asked
+# what the ages already say, and the ages decide the band.
 
 BACK_BUTTON_TEXT = "◀️ Назад"
 CANCEL_BUTTON_TEXT = "❌ Отменить"

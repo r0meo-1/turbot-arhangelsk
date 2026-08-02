@@ -35,8 +35,6 @@ from shared.constants import (
     STATE_PHONE,
     STATE_VK,
     PEOPLE_OPTIONS,
-    KIDS_OPTIONS,
-    KIDS_NONE_LABEL,
     BACK_BUTTON_TEXT,
     CANCEL_BUTTON_TEXT,
     CONSENT_YES_TEXT,
@@ -382,7 +380,6 @@ CB_DEST_PREFIX = "d:"
 CB_ORIGIN_PREFIX = "or:"
 CB_DATE_PREFIX = "dt:"
 CB_PEOPLE_PREFIX = "p:"
-CB_KIDS_PREFIX = "kd:"
 CB_BUDGET_PREFIX = "bd:"
 CB_CONTACT_TG = "ct:tg"
 CB_CONTACT_PHONE = "ct:phone"
@@ -1508,10 +1505,6 @@ def _kb_choices(options: List[str], prefix: str) -> str:
     return inline_keyboard(rows)
 
 
-def kb_kids() -> str:
-    return _kb_choices(KIDS_OPTIONS, CB_KIDS_PREFIX)
-
-
 def kb_budget() -> str:
     """Inline: budget presets + free-text + nav."""
     rows: List[List[Dict[str, str]]] = []
@@ -2134,36 +2127,26 @@ def _ask_people(chat_id: int) -> None:
     send_message(
         chat_id,
         "👥 <b>Сколько взрослых поедет?</b>\n\n"
-        "Только взрослые, от 12 лет — про детей спрошу следующим вопросом.\n"
+        "Взрослый тариф — с 12 лет. Возрасты детей спрошу следующим вопросом.\n"
         "Кнопка или число от 1 до 50.",
         reply_markup=kb_people(),
         parse_mode="HTML",
     )
 
 
-def _ask_kids(chat_id: int) -> None:
-    send_message(
-        chat_id,
-        "🧒 <b>Дети до 12 лет едут?</b>\n\n"
-        "У них свой тариф — без этого расчёт будет завышен.",
-        reply_markup=kb_kids(),
-        parse_mode="HTML",
-    )
+def _ask_kids_ages(chat_id: int) -> None:
+    """Возрасты детей одним числовым ответом.
 
-
-def _ask_kids_ages(chat_id: int, count: int) -> None:
-    """Точный возраст, а не диапазон: по нему считается тариф.
-
-    Менеджер попросила об этом прямым текстом — «дети 2 человека, а возрасты
-    какие?». Кнопками тут не обойтись: вариантов восемнадцать на ребёнка.
+    Отдельный вопрос «дети до 12 едут?» убран: он спрашивал то, что и так
+    видно из возрастов, и добавлял шаг ради ответа «да». Кнопками возраст не
+    задать — вариантов восемнадцать на ребёнка, поэтому шаг числовой.
     """
-    example = ", ".join(("5", "9", "12")[:max(count, 1)])
     send_message(
         chat_id,
         "🎂 <b>Сколько лет детям?</b>\n\n"
-        "Напишите через запятую — например: "
-        f"<code>{example}</code>\n"
-        "Малышам до года так и напишите: «до года».",
+        "Напишите возрасты числами через запятую — например: <code>5, 9</code>\n"
+        "Малышам до года так и напишите: «до года».\n"
+        "Если детей нет — отправьте <code>0</code>.",
         parse_mode="HTML",
     )
 
@@ -2329,8 +2312,8 @@ def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["people"] = value
-    info["state"] = STATE_KIDS
-    _ask_kids(chat_id)
+    info["state"] = STATE_KIDS_AGES
+    _ask_kids_ages(chat_id)
 
 
 def _parse_choice(raw: str, prefix: str, options: List[str], none_label: str) -> Optional[int]:
@@ -2345,24 +2328,6 @@ def _parse_choice(raw: str, prefix: str, options: List[str], none_label: str) ->
     return int(digits) if digits else 0
 
 
-def _step_kids(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    count = _parse_choice((text or "").strip(), CB_KIDS_PREFIX, KIDS_OPTIONS, KIDS_NONE_LABEL)
-    if count is None:
-        send_message(chat_id, "Выберите вариант кнопкой ниже.", reply_markup=kb_kids())
-        return
-    info["kids"] = count
-    if count == 0:
-        # No children at all, so the ages question cannot apply — skip it
-        # rather than making every childless client answer it.
-        info["kids_ages"] = []
-        info["infants"] = 0
-        info["state"] = STATE_BUDGET
-        _ask_budget(chat_id)
-        return
-    info["state"] = STATE_KIDS_AGES
-    _ask_kids_ages(chat_id, count)
-
-
 def _step_kids_ages(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     ok, ages, problem = parse_kids_ages(text or "")
     if not ok:
@@ -2373,7 +2338,7 @@ def _step_kids_ages(chat_id: int, text: str, message: Dict[str, Any], info: Dict
     # disagree with each other, one list of ages cannot.
     _, info["kids"], info["infants"] = party_bands(info)
     info["state"] = STATE_BUDGET
-    send_message(chat_id, f"🎂 Записал: {_esc(_party_text(info))}", parse_mode="HTML")
+    send_message(chat_id, f"👥 Записал: {_esc(_party_text(info))}", parse_mode="HTML")
     _ask_budget(chat_id)
 
 
@@ -2505,7 +2470,9 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
     STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
-    STATE_KIDS:        _step_kids,
+    # Вопрос про количество детей убран; сессии, стоящие на нём, отвечают на
+    # следующий вопрос — про возрасты.
+    STATE_KIDS:        _step_kids_ages,
     STATE_KIDS_AGES:   _step_kids_ages,
     # A session parked on the retired infants question lands here on its next
     # reply. Asking for ages is the right next thing either way, so the client
@@ -2522,8 +2489,8 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_DATES:       STATE_ORIGIN,
     STATE_PEOPLE:      STATE_DATES,
     STATE_KIDS:        STATE_PEOPLE,
-    STATE_KIDS_AGES:   STATE_KIDS,
-    STATE_INFANTS:     STATE_KIDS,
+    STATE_KIDS_AGES:   STATE_PEOPLE,
+    STATE_INFANTS:     STATE_PEOPLE,
     STATE_BUDGET:      STATE_KIDS_AGES,
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
@@ -2547,12 +2514,8 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
         _ask_dates(chat_id)
     elif state == STATE_PEOPLE:
         _ask_people(chat_id)
-    elif state == STATE_KIDS:
-        _ask_kids(chat_id)
-    elif state in (STATE_KIDS_AGES, STATE_INFANTS):
-        # The count only shapes the example in the prompt, so a session that is
-        # not in memory is not worth failing over — one age is fine to show.
-        _ask_kids_ages(chat_id, int(user_data.get(chat_id, {}).get("kids") or 1))
+    elif state in (STATE_KIDS, STATE_KIDS_AGES, STATE_INFANTS):
+        _ask_kids_ages(chat_id)
     elif state == STATE_BUDGET:
         _ask_budget(chat_id)
     elif state == STATE_CONTACT:
@@ -3153,14 +3116,6 @@ def _process_callback(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
             return
         _step_people(chat_id, people, synthetic, info)
-        _mark_dirty(chat_id, user=False)
-        return
-
-    if cb_data.startswith(CB_KIDS_PREFIX):
-        if info.get("state") != STATE_KIDS:
-            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
-            return
-        _step_kids(chat_id, cb_data, synthetic, info)
         _mark_dirty(chat_id, user=False)
         return
 

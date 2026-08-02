@@ -45,8 +45,6 @@ from shared.constants import (
     STATE_PHONE,
     STATE_MAX,
     PEOPLE_OPTIONS,
-    KIDS_OPTIONS,
-    KIDS_NONE_LABEL,
     BACK_BUTTON_TEXT,
     CANCEL_BUTTON_TEXT,
     CONSENT_YES_TEXT,
@@ -784,13 +782,6 @@ def _people_keyboard() -> str:
     return _keyboard(rows)
 
 
-def _kids_keyboard() -> str:
-    rows = _chunk_buttons(list(KIDS_OPTIONS), "primary", 4)
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
-    return _keyboard(rows)
-
-
 def _budget_keyboard() -> str:
     labels = [label for label, _ in BUDGET_PRESETS] + [BUDGET_CUSTOM_LABEL]
     rows = _chunk_buttons(labels, "primary", 2)
@@ -1035,23 +1026,19 @@ def _ask_people(user_id: int) -> None:
     )
 
 
-def _ask_kids(user_id: int) -> None:
-    send_message(
-        user_id,
-        "🧒 Дети до 12 лет едут?\n\n"
-        "У них свой тариф — без этого расчёт будет завышен.",
-        keyboard=_kids_keyboard(),
-    )
+def _ask_kids_ages(user_id: int) -> None:
+    """Возрасты детей одним числовым ответом.
 
-
-def _ask_kids_ages(user_id: int, count: int) -> None:
-    """Точный возраст, а не диапазон: по нему считается тариф."""
-    example = ", ".join(("5", "9", "12")[:max(count, 1)])
+    Отдельный вопрос «дети до 12 едут?» убран: он спрашивал то, что и так
+    видно из возрастов.
+    """
     send_message(
         user_id,
         "🎂 Сколько лет детям?\n\n"
-        f"Напишите через запятую — например: {example}\n"
-        "Малышам до года так и напишите: «до года».",
+        "Напишите возрасты числами через запятую — например: 5, 9\n"
+        "Малышам до года так и напишите: «до года».\n"
+        "Если детей нет — отправьте 0.",
+        keyboard=_nav_keyboard(),
     )
 
 
@@ -1220,8 +1207,8 @@ def _step_people(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["people"] = value
-    info["state"] = STATE_KIDS
-    _ask_kids(user_id)
+    info["state"] = STATE_KIDS_AGES
+    _ask_kids_ages(user_id)
 
 
 def _parse_choice(raw: str, options: List[str], none_label: str) -> Optional[int]:
@@ -1235,24 +1222,6 @@ def _parse_choice(raw: str, options: List[str], none_label: str) -> Optional[int
     return int(digits) if digits else 0
 
 
-def _step_kids(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    count = _parse_choice(text, KIDS_OPTIONS, KIDS_NONE_LABEL)
-    if count is None:
-        send_message(user_id, "Выберите вариант кнопкой ниже.", keyboard=_kids_keyboard())
-        return
-    info["kids"] = count
-    if count == 0:
-        # Skip the ages question entirely rather than making every childless
-        # client answer it.
-        info["kids_ages"] = []
-        info["infants"] = 0
-        info["state"] = STATE_BUDGET
-        _ask_budget(user_id)
-        return
-    info["state"] = STATE_KIDS_AGES
-    _ask_kids_ages(user_id, count)
-
-
 def _step_kids_ages(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     ok, ages, problem = parse_kids_ages(text or "")
     if not ok:
@@ -1261,7 +1230,7 @@ def _step_kids_ages(user_id: int, text: str, message: Dict[str, Any], info: Dict
     info["kids_ages"] = ages
     _, info["kids"], info["infants"] = party_bands(info)
     info["state"] = STATE_BUDGET
-    send_message(user_id, f"🎂 Записал: {_party_text(info)}")
+    send_message(user_id, f"👥 Записал: {_party_text(info)}")
     _ask_budget(user_id)
 
 
@@ -1388,7 +1357,9 @@ STATE_HANDLERS: Dict[str, Callable] = {
     STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
     STATE_PEOPLE:      _step_people,
-    STATE_KIDS:        _step_kids,
+    # Вопрос про количество детей убран; сессии на нём отвечают уже на
+    # следующий вопрос — про возрасты.
+    STATE_KIDS:        _step_kids_ages,
     STATE_KIDS_AGES:   _step_kids_ages,
     # Sessions parked on the retired infants question land here on their next
     # reply; asking for ages is the right next thing either way.
@@ -1407,8 +1378,8 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_DATES:       STATE_ORIGIN,
     STATE_PEOPLE:      STATE_DATES,
     STATE_KIDS:        STATE_PEOPLE,
-    STATE_KIDS_AGES:   STATE_KIDS,
-    STATE_INFANTS:     STATE_KIDS,
+    STATE_KIDS_AGES:   STATE_PEOPLE,
+    STATE_INFANTS:     STATE_PEOPLE,
     STATE_BUDGET:      STATE_KIDS_AGES,
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
@@ -1430,10 +1401,8 @@ def _prompt_for_state(user_id: int, state: str) -> None:
         _ask_dates(user_id)
     elif state == STATE_PEOPLE:
         _ask_people(user_id)
-    elif state == STATE_KIDS:
-        _ask_kids(user_id)
-    elif state in (STATE_KIDS_AGES, STATE_INFANTS):
-        _ask_kids_ages(user_id, int(user_data.get(user_id, {}).get("kids") or 1))
+    elif state in (STATE_KIDS, STATE_KIDS_AGES, STATE_INFANTS):
+        _ask_kids_ages(user_id)
     elif state == STATE_BUDGET:
         _ask_budget(user_id)
     elif state == STATE_CONTACT:

@@ -281,10 +281,10 @@ def test_dialog_completion_via_inline_buttons(client):
     assert bot.user_data[223]["state"] == bot.STATE_PEOPLE
 
     _callback(client, 223, f"{bot.CB_PEOPLE_PREFIX}2")
-    assert bot.user_data[223]["state"] == bot.STATE_KIDS
+    assert bot.user_data[223]["state"] == bot.STATE_KIDS_AGES
     assert bot.user_data[223]["people"] == "2"
 
-    _callback(client, 223, f"{bot.CB_KIDS_PREFIX}{bot.KIDS_NONE_LABEL}")
+    _post(client, 223, "0")            # детей нет
     assert bot.user_data[223]["state"] == bot.STATE_BUDGET
 
     _post(client, 223, "80000")
@@ -381,8 +381,8 @@ def test_full_flow_all_buttons(client):
     assert bot.user_data[910]["state"] == bot.STATE_PEOPLE
     assert "выходные" in bot.user_data[910]["dates"]
     _callback(client, 910, f"{bot.CB_PEOPLE_PREFIX}2")
-    assert bot.user_data[910]["state"] == bot.STATE_KIDS
-    _callback(client, 910, f"{bot.CB_KIDS_PREFIX}{bot.KIDS_NONE_LABEL}")
+    assert bot.user_data[910]["state"] == bot.STATE_KIDS_AGES
+    _post(client, 910, "0")            # детей нет
     assert bot.user_data[910]["state"] == bot.STATE_BUDGET
     _callback(client, 910, f"{bot.CB_BUDGET_PREFIX}1")
     assert bot.user_data[910]["state"] == bot.STATE_CONTACT
@@ -471,8 +471,8 @@ def test_template_selection_uses_known_destination():
     """A destination note is kept only where there is something real to say."""
     text = bot._template_selection("Турция", "15-22 июня", "2", "60000")
     assert "Турция" in text
-    assert "all inclusive" in text.lower() or "пляжного отдыха" in text
     assert "Заявка у менеджера" in text
+    assert "всё включено" in text, "заготовка для Турции должна попасть в текст"
 
 
 
@@ -1175,8 +1175,6 @@ def test_family_with_children_is_priced_by_age_band(client, monkeypatch):
     _consent(client, 6001)
     for text in ["Турция", "Москва", "15-22 сентября", "2"]:
         _post(client, 6001, text)
-    assert bot.user_data[6001]["state"] == bot.STATE_KIDS
-    _post(client, 6001, "3+")                     # трое детей
     assert bot.user_data[6001]["state"] == bot.STATE_KIDS_AGES
     _post(client, 6001, "1, 5, 9")                # один малыш и двое постарше
     assert bot.user_data[6001]["state"] == bot.STATE_BUDGET
@@ -1199,7 +1197,7 @@ def test_a_twelve_year_old_is_searched_as_an_adult(client, monkeypatch):
     monkeypatch.setattr(bot._tutu, "search_offers",
                         lambda *a, **kw: seen.update(kw) or None)
     _consent(client, 6005)
-    for text in ["Турция", "Москва", "15-22 сентября", "2", "1", "14"]:
+    for text in ["Турция", "Москва", "15-22 сентября", "2", "14"]:
         _post(client, 6005, text)
     _post(client, 6005, "70000")
     _post(client, 6005, "+79161234567")
@@ -1212,7 +1210,7 @@ def test_a_twelve_year_old_is_searched_as_an_adult(client, monkeypatch):
 def test_nonsense_ages_are_rejected_without_losing_the_step(client):
     """A typo must re-ask, not silently book a 59-year-old child."""
     _consent(client, 6006)
-    for text in ["Турция", "Москва", "15-22 сентября", "2", "2"]:
+    for text in ["Турция", "Москва", "15-22 сентября", "2"]:
         _post(client, 6006, text)
     assert bot.user_data[6006]["state"] == bot.STATE_KIDS_AGES
     _post(client, 6006, "59")
@@ -1227,7 +1225,7 @@ def test_no_children_skips_the_ages_question(client):
     _consent(client, 6002)
     for text in ["Турция", "Москва", "15-22 сентября", "2"]:
         _post(client, 6002, text)
-    _post(client, 6002, bot.KIDS_NONE_LABEL)
+    _post(client, 6002, "0")
     assert bot.user_data[6002]["state"] == bot.STATE_BUDGET
     assert bot.user_data[6002]["kids"] == 0
     assert bot.user_data[6002]["infants"] == 0
@@ -1241,7 +1239,7 @@ def test_age_bands_persisted_with_lead(client):
     one she actually asked.
     """
     _consent(client, 6003)
-    for text in ["Турция", "Москва", "15-22 сентября", "2", "1", "9", "70000"]:
+    for text in ["Турция", "Москва", "15-22 сентября", "2", "9", "70000"]:
         _post(client, 6003, text)
     _post(client, 6003, "+79161234567")
     with bot._db_cursor() as cur:

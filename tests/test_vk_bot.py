@@ -297,7 +297,7 @@ def test_vk_asks_for_child_ages(client):
     """
     _post(client, 905, "Начать")
     _post(client, 905, bot.CONSENT_YES_TEXT)
-    for text in ["Египет", "Москва", "15-22 сентября", "2", "2"]:
+    for text in ["Египет", "Москва", "15-22 сентября", "2"]:
         _post(client, 905, text)
     assert bot.user_data[905]["state"] == bot.STATE_KIDS_AGES
 
@@ -312,7 +312,7 @@ def test_vk_asks_for_child_ages(client):
 def test_vk_stores_child_ages_with_the_lead(client):
     _post(client, 906, "Начать")
     _post(client, 906, bot.CONSENT_YES_TEXT)
-    for text in ["Египет", "Москва", "15-22 сентября", "2", "1", "6", "70000"]:
+    for text in ["Египет", "Москва", "15-22 сентября", "2", "6", "70000"]:
         _post(client, 906, text)
     _post(client, 906, "+79161234567")
     with bot._db_cursor() as cur:
@@ -325,7 +325,7 @@ def _reach_contact(client, uid):
     _post(client, uid, "Начать")
     _post(client, uid, bot.CONSENT_YES_TEXT)
     for text in ["Египет", "Москва", "15-22 сентября", "2",
-                 bot.KIDS_NONE_LABEL, "70000"]:
+                 "0", "70000"]:
         _post(client, uid, text)
     assert bot.user_data[uid]["state"] == bot.STATE_CONTACT
 
@@ -410,7 +410,7 @@ def test_old_client_gets_a_plain_keyboard_instead_of_none():
     """VK сам сообщает, умеет ли клиент inline. Лучше сворачивающиеся кнопки,
     чем сообщение вообще без кнопок."""
     bot._NO_INLINE.discard(555)
-    kb = bot._kids_keyboard()
+    kb = bot._contact_keyboard()
     assert json.loads(bot._downgrade_if_needed(555, kb))["inline"] is True
 
     bot._remember_client_capabilities(555, {"object": {"client_info": {"inline_keyboard": False}}})
