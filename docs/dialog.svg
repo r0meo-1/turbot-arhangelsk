@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1773"
+     viewBox="0 0 720 1773" font-family="-apple-system,Segoe UI,Roboto,Helvetica,sans-serif">
+  <rect width="720" height="1773" fill="#d6e0ea"/>
+  <rect x="0" y="0" width="720" height="42" fill="#ffffff"/>
+  <circle cx="26" cy="21" r="13" fill="#2b7fd4"/>
+  <text x="21" y="26" font-size="14" fill="#ffffff">🌴</text>
+  <text x="48" y="18" font-size="13.5" font-weight="600" fill="#16181d">АПРЕЛЬ тур</text>
+  <text x="48" y="33" font-size="11" fill="#7b8794">живой прогон · цены из Tutu.ru по MCP</text>
+  <rect x="18" y="58" width="395" height="92" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="78" font-size="13.2" fill="#16181d">🛫 Откуда вылетаете?</text>
+  <text x="31" y="97" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="116" font-size="13.2" fill="#16181d">Нужно, чтобы посчитать перелёт — цена сильно зависит</text>
+  <text x="31" y="135" font-size="13.2" fill="#16181d">от города.</text>
+  <rect x="582" y="159" width="120" height="35" rx="11" fill="#e7f6d5" stroke="#cfe7b4"/>
+  <text x="595" y="179" font-size="13.2" fill="#16181d">🏙 Москва</text>
+  <rect x="18" y="203" width="359" height="92" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="223" font-size="13.2" fill="#16181d">📅 Когда планируете поездку?</text>
+  <text x="31" y="242" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="261" font-size="13.2" fill="#16181d">Выберите вариант кнопкой или напишите свои даты</text>
+  <text x="31" y="280" font-size="13.2" fill="#16181d">(например: 15-22 июня).</text>
+  <rect x="542" y="304" width="160" height="35" rx="11" fill="#e7f6d5" stroke="#cfe7b4"/>
+  <text x="555" y="324" font-size="13.2" fill="#16181d">15-22 сентября 2026</text>
+  <rect x="18" y="348" width="189" height="35" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="368" font-size="13.2" fill="#16181d">📅 Понял: 15–22 сентября</text>
+  <rect x="18" y="392" width="224" height="73" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="412" font-size="13.2" fill="#16181d">👥 Сколько человек поедет?</text>
+  <text x="31" y="431" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="450" font-size="13.2" fill="#16181d">Кнопка или число от 1 до 50.</text>
+  <rect x="582" y="474" width="120" height="35" rx="11" fill="#e7f6d5" stroke="#cfe7b4"/>
+  <text x="595" y="494" font-size="13.2" fill="#16181d">2</text>
+  <rect x="18" y="518" width="381" height="73" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="538" font-size="13.2" fill="#16181d">🧒 Дети до 12 лет едут?</text>
+  <text x="31" y="557" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="576" font-size="13.2" fill="#16181d">У них свой тариф — без этого расчёт будет завышен.</text>
+  <rect x="582" y="600" width="120" height="35" rx="11" fill="#e7f6d5" stroke="#cfe7b4"/>
+  <text x="595" y="620" font-size="13.2" fill="#16181d">2</text>
+  <rect x="18" y="644" width="388" height="73" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="664" font-size="13.2" fill="#16181d">👶 Есть малыши до 2 лет?</text>
+  <text x="31" y="683" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="702" font-size="13.2" fill="#16181d">Они летят без отдельного места и по особому тарифу.</text>
+  <rect x="582" y="726" width="120" height="35" rx="11" fill="#e7f6d5" stroke="#cfe7b4"/>
+  <text x="595" y="746" font-size="13.2" fill="#16181d">1</text>
+  <text x="360" y="786" font-size="11.5" fill="#6b7783" text-anchor="middle">⋯ бюджет, способ связи и телефон — ещё три шага ⋯</text>
+  <rect x="18" y="800" width="381" height="225" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="820" font-size="13.2" fill="#16181d">✅ Заявка принята! Менеджер «АПРЕЛЬ тур» свяжется с</text>
+  <text x="31" y="839" font-size="13.2" fill="#16181d">вами в ближайшее время.</text>
+  <text x="31" y="858" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="877" font-size="13.2" fill="#16181d">📍 Направление: Египет</text>
+  <text x="31" y="896" font-size="13.2" fill="#16181d">🛫 Откуда: Москва</text>
+  <text x="31" y="915" font-size="13.2" fill="#16181d">📅 Даты: 15-22 сентября 2026</text>
+  <text x="31" y="934" font-size="13.2" fill="#16181d">👥 Состав: 2 взр. + 2 реб. (2–11) + 1 млад. (до 2)</text>
+  <text x="31" y="953" font-size="13.2" fill="#16181d">💰 Бюджет: 100000₽</text>
+  <text x="31" y="972" font-size="13.2" fill="#16181d">📞 Связь: +79211234567</text>
+  <text x="31" y="991" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="1010" font-size="13.2" fill="#16181d">Спасибо, что выбрали нас 🌺</text>
+  <rect x="18" y="1034" width="345" height="263" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="1054" font-size="13.2" fill="#16181d">🔔 Новая заявка (Telegram)</text>
+  <text x="31" y="1073" font-size="13.2" fill="#16181d">Личное уведомление администратору</text>
+  <text x="31" y="1092" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="1111" font-size="13.2" fill="#16181d">От: Роман (@roman)</text>
+  <text x="31" y="1130" font-size="13.2" fill="#16181d">ID: 424242</text>
+  <text x="31" y="1149" font-size="13.2" fill="#16181d">📍 Египет</text>
+  <text x="31" y="1168" font-size="13.2" fill="#16181d">🛫 Откуда: Москва</text>
+  <text x="31" y="1187" font-size="13.2" fill="#16181d">📅 15-22 сентября 2026</text>
+  <text x="31" y="1206" font-size="13.2" fill="#16181d">👥 2 взр. + 2 реб. (2–11) + 1 млад. (до 2)</text>
+  <text x="31" y="1225" font-size="13.2" fill="#16181d">💰 100000₽</text>
+  <text x="31" y="1244" font-size="13.2" fill="#16181d">📞 Связь: +79211234567</text>
+  <text x="31" y="1263" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="1282" font-size="13.2" fill="#16181d">Нажмите «✍️ Ответить» ниже — или /send 424242</text>
+  <rect x="18" y="1306" width="395" height="320" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="1326" font-size="13.2" fill="#16181d">✈️ Ориентир по перелёту</text>
+  <text x="31" y="1345" font-size="13.2" fill="#16181d">Москва → Хургада</text>
+  <text x="31" y="1364" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="1383" font-size="13.2" fill="#16181d">• 181 910 ₽ · Pegasus Airlines · 15 сен, 15:05 · 13</text>
+  <text x="31" y="1402" font-size="13.2" fill="#16181d">ч 45 мин</text>
+  <text x="31" y="1421" font-size="13.2" fill="#16181d">• 188 778 ₽ · Pegasus Airlines, AJet · 15 сен, 15:05</text>
+  <text x="31" y="1440" font-size="13.2" fill="#16181d">· 13 ч 55 мин</text>
+  <text x="31" y="1459" font-size="13.2" fill="#16181d">• 191 950 ₽ · Pegasus Airlines · 15 сен, 06:10 · 13</text>
+  <text x="31" y="1478" font-size="13.2" fill="#16181d">ч 45 мин</text>
+  <text x="31" y="1497" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="1516" font-size="13.2" fill="#16181d">Это цены на билеты по данным Tutu.ru — ориентир,</text>
+  <text x="31" y="1535" font-size="13.2" fill="#16181d">чтобы вы понимали порядок сумм.</text>
+  <text x="31" y="1554" font-size="13.2" fill="#16181d">Менеджер посчитает пакет с отелем и трансфером —</text>
+  <text x="31" y="1573" font-size="13.2" fill="#16181d">обычно выходит выгоднее, чем собирать по частям.</text>
+  <text x="31" y="1592" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="1611" font-size="13.2" fill="#16181d">🔗 Посмотреть все варианты</text>
+  <rect x="18" y="1635" width="373" height="111" rx="11" fill="#ffffff" stroke="#e0e5ea"/>
+  <text x="31" y="1655" font-size="13.2" fill="#16181d">💼 По заявке от Роман</text>
+  <text x="31" y="1674" font-size="13.2" fill="#16181d"></text>
+  <text x="31" y="1693" font-size="13.2" fill="#16181d">📊 Рынок сейчас: от 181 910 ₽ · Москва → Хургада ·</text>
+  <text x="31" y="1712" font-size="13.2" fill="#16181d">2026-09-15 · Pegasus Airlines</text>
+  <text x="31" y="1731" font-size="13.2" fill="#16181d">🔗 Все варианты</text>
+</svg>
