@@ -16,9 +16,12 @@ os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 os.environ.setdefault("AI_MODE", "template")
 os.environ.setdefault("CONSENT_MODE", "strict")  # classic consent in unit tests
-os.environ.setdefault(
-    "DATABASE_PATH",
-    os.path.join(tempfile.gettempdir(), f"vk_turbot_test_{os.getpid()}.sqlite"),
+# Присваивание, а не setdefault: test_bot.py импортируется раньше и уже задал
+# DATABASE_PATH, из-за чего обе сюиты работали в одном файле. Миграция VK-бота
+# при этом никогда не выполнялась целиком — таблицы успевал создать Telegram-бот,
+# и опечатка в ALTER TABLE прожила до первого одиночного запуска этого файла.
+os.environ["DATABASE_PATH"] = os.path.join(
+    tempfile.gettempdir(), f"vk_turbot_test_{os.getpid()}.sqlite"
 )
 
 import vk_bot as bot
@@ -312,3 +315,63 @@ def test_vk_stores_child_ages_with_the_lead(client):
     with bot._db_cursor() as cur:
         cur.execute("SELECT kids_ages FROM leads WHERE chat_id = ?", (906,))
         assert cur.fetchone()[0] == "6"
+
+
+def _reach_contact(client, uid):
+    """Пройти воронку до шага «как связаться»."""
+    _post(client, uid, "Начать")
+    _post(client, uid, bot.CONSENT_YES_TEXT)
+    for text in ["Египет", "Москва", "15-22 сентября", "2",
+                 bot.KIDS_NONE_LABEL, "70000"]:
+        _post(client, uid, text)
+    assert bot.user_data[uid]["state"] == bot.STATE_CONTACT
+
+
+def test_vk_offers_max_instead_of_telegram(client):
+    """Клиент пришёл из VK — Telegram ему предлагать незачем."""
+    labels = [
+        btn["action"]["label"]
+        for row in json.loads(bot._contact_keyboard())["buttons"]
+        for btn in row
+    ]
+    assert bot.CONTACT_MAX_TEXT in labels
+    assert not any("Telegram" in l for l in labels)
+
+
+def test_max_accepts_a_profile_link(client):
+    _reach_contact(client, 907)
+    _post(client, 907, bot.CONTACT_MAX_TEXT)
+    assert bot.user_data[907]["state"] == bot.STATE_MAX
+    _post(client, 907, "вот я: max.ru/u/AbC-123")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (907,))
+        assert cur.fetchone()[0] == "MAX https://max.ru/u/AbC-123"
+
+
+def test_max_accepts_a_phone(client):
+    """Номер — основной способ найти человека в MAX, а не запасной."""
+    _reach_contact(client, 908)
+    _post(client, 908, bot.CONTACT_MAX_TEXT)
+    _post(client, 908, "89161234567")
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (908,))
+        assert cur.fetchone()[0] == "MAX +79161234567"
+
+
+def test_max_rejects_an_at_handle_with_a_reason(client, monkeypatch):
+    """У личных профилей MAX нет @никнеймов — принять его значит потерять клиента.
+
+    Скопированный с Telegram шаг молча сохранил бы «@ivan», и менеджер не
+    смогла бы никого найти.
+    """
+    sent = []
+    monkeypatch.setattr(bot, "send_message",
+                        lambda uid, text, **k: sent.append(text))
+    _reach_contact(client, 909)
+    _post(client, 909, bot.CONTACT_MAX_TEXT)
+    _post(client, 909, "@ivanov")
+    assert bot.user_data[909]["state"] == bot.STATE_MAX, "шаг не должен закрываться"
+    assert "никнеймов" in sent[-1]
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM leads WHERE chat_id = ?", (909,))
+        assert cur.fetchone()[0] == 0, "заявка не должна уйти с ненаходимым контактом"

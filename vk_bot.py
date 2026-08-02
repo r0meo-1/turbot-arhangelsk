@@ -2,13 +2,14 @@
 
 Самодостаточный Flask-webhook для группы ВКонтакте. Паритет с bot.py:
 soft/strict согласие, кнопки на всех шагах (даты, бюджет, люди),
-связь VK / телефон / Telegram, лиды в Telegram админу, MDT CRM.
+связь VK / телефон / MAX, лиды в Telegram админу, MDT CRM.
 
 Деплой: отдельный процесс (см. deploy/vk-turbot.service).
 """
 from __future__ import annotations
 
 import os
+import re
 import json
 import time
 import random
@@ -42,6 +43,7 @@ from shared.constants import (
     STATE_KIDS_AGES,
     STATE_INFANTS,
     STATE_PHONE,
+    STATE_MAX,
     PEOPLE_OPTIONS,
     KIDS_OPTIONS,
     KIDS_NONE_LABEL,
@@ -50,7 +52,8 @@ from shared.constants import (
     CONSENT_YES_TEXT,
     CONSENT_NO_TEXT,
     START_BUTTON_TEXT,
-    CONTACT_TG_TEXT,
+    CONTACT_MAX_TEXT,
+    MAX_PROFILE_HINT,
     CONTACT_PHONE_TEXT,
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
@@ -258,7 +261,7 @@ USER_HELP = (
     "  Политика — персональные данные\n"
     "  Удалить — стереть мои данные\n"
     "  Помощь — эта справка\n\n"
-    "Связь: VK / телефон / Telegram — на выбор.\n\n"
+    "Связь: VK / телефон / MAX — на выбор.\n\n"
     "ТА «АПРЕЛЬ тур»"
 )
 
@@ -266,7 +269,7 @@ WELCOME_BODY = (
     "Подберём тур под даты и бюджет — заявка уйдёт менеджеру.\n\n"
     "Как это работает:\n"
     "1) несколько вопросов (можно кнопками)\n"
-    "2) удобный способ связи: VK, телефон или Telegram\n"
+    "2) удобный способ связи: VK, телефон или MAX\n"
     "3) менеджер напишет или позвонит\n\n"
     "Около минуты. Данные — только чтобы связаться (Политика).\n"
     "Жмите кнопку ниже 👇"
@@ -385,7 +388,7 @@ def init_db() -> None:
             if "origin" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN origin TEXT")
             if "kids_ages" not in _cols:
-                cur.execute(f"ALTER TABLE {_table} ADD COLUMN kids_ages TEXT")
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN kids_ages TEXT")
             for _c in ("kids", "infants"):
                 if _c not in _cols:
                     cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} INTEGER")
@@ -760,7 +763,7 @@ def _contact_keyboard() -> str:
     return _keyboard([
         [_btn(CONTACT_VK_CHAT_LABEL, "positive")],
         [_btn(CONTACT_PHONE_TEXT, "primary")],
-        [_btn(CONTACT_TG_TEXT, "primary")],
+        [_btn(CONTACT_MAX_TEXT, "primary")],
         [_btn(BACK_BUTTON_TEXT, "secondary")],
         [_btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
@@ -1022,8 +1025,22 @@ def _ask_contact(user_id: int) -> None:
         user_id,
         "📞 Как удобнее связаться?\n\n"
         "Можно просто VK (этот чат) — телефон не обязателен.\n"
-        "Или телефон / Telegram.",
+        "Или телефон / MAX.",
         keyboard=_contact_keyboard(),
+    )
+
+
+# Персональная ссылка MAX — единственный надёжный идентификатор помимо номера:
+# @никнеймов у личных профилей нет.
+_MAX_LINK = re.compile(r"(?:https?://)?(?:www\.)?max\.ru/u/[\w-]+", re.I)
+
+
+def _ask_max_contact(user_id: int) -> None:
+    send_message(
+        user_id,
+        "🟣 Напишите номер телефона (+7…) или ссылку на ваш профиль MAX.\n\n"
+        f"Ссылку можно взять так: {MAX_PROFILE_HINT}.",
+        keyboard=_nav_keyboard(),
     )
 
 
@@ -1252,14 +1269,10 @@ def _step_contact(user_id: int, text: str, message: Dict[str, Any], info: Dict[s
         )
         return
 
-    if t in (CONTACT_TG_TEXT, "telegram", "tg", "телеграм"):
-        info["contact_method"] = "telegram"
-        info["state"] = "telegram_handle"
-        send_message(
-            user_id,
-            "✈️ Напишите Telegram: @username или номер, привязанный к TG:",
-            keyboard=_nav_keyboard(),
-        )
+    if t in (CONTACT_MAX_TEXT, "max", "макс", "мах"):
+        info["contact_method"] = "max"
+        info["state"] = STATE_MAX
+        _ask_max_contact(user_id)
         return
 
     ok, phone = validate_phone(t)
@@ -1288,19 +1301,42 @@ def _step_phone(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
     handle_completion(user_id, phone, message)
 
 
-def _step_telegram_handle(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+def _step_max(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    """Принять номер или ссылку на профиль MAX — @ника у личных профилей нет."""
     raw = (text or "").strip()
-    if not raw or len(raw) < 2:
+
+    link = _MAX_LINK.search(raw)
+    if link:
+        url = link.group(0)
+        if not url.lower().startswith("http"):
+            url = "https://" + url
+        info["contact_method"] = "max"
+        handle_completion(user_id, f"MAX {url}", message)
+        return
+
+    ok, phone = validate_phone(raw)
+    if ok and phone:
+        # Номер и есть основной способ найти человека в MAX. Префикс оставлен
+        # намеренно: менеджер видит и номер, и то, где клиент ждёт сообщение.
+        info["contact_method"] = "max"
+        handle_completion(user_id, f"MAX {phone}", message)
+        return
+
+    if raw.startswith("@"):
         send_message(
             user_id,
-            "Нужен @username или контакт Telegram.",
+            "В MAX у личных профилей нет @никнеймов — по ним человека не найти.\n"
+            "Пришлите номер телефона (+7…) или ссылку вида max.ru/u/…",
             keyboard=_nav_keyboard(),
         )
         return
-    if not raw.startswith("@") and not raw.startswith("+") and not raw.isdigit():
-        raw = f"@{raw}" if " " not in raw else raw
-    info["contact_method"] = "telegram"
-    handle_completion(user_id, f"Telegram {raw}", message)
+
+    send_message(
+        user_id,
+        "Нужен номер телефона (+7…) или ссылка на профиль MAX (max.ru/u/…).\n"
+        f"Ссылка берётся так: {MAX_PROFILE_HINT}.",
+        keyboard=_nav_keyboard(),
+    )
 
 
 STATE_HANDLERS: Dict[str, Callable] = {
@@ -1317,7 +1353,10 @@ STATE_HANDLERS: Dict[str, Callable] = {
     STATE_BUDGET:      _step_budget,
     STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
-    "telegram_handle": _step_telegram_handle,
+    STATE_MAX:         _step_max,
+    # Сессии, застрявшие на прежнем телеграм-шаге, возвращаются к выбору
+    # способа связи: спрашивать у них @ник, которого в MAX нет, бессмысленно.
+    "telegram_handle": _step_contact,
 }
 
 PREVIOUS_STATE: Dict[str, str] = {
@@ -1330,6 +1369,7 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_BUDGET:      STATE_KIDS_AGES,
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
+    STATE_MAX:         STATE_CONTACT,
     "telegram_handle": STATE_CONTACT,
 }
 
@@ -1357,12 +1397,10 @@ def _prompt_for_state(user_id: int, state: str) -> None:
         _ask_contact(user_id)
     elif state == STATE_PHONE:
         send_message(user_id, "📱 Укажите номер телефона (+7…):", keyboard=_nav_keyboard())
+    elif state == STATE_MAX:
+        _ask_max_contact(user_id)
     elif state == "telegram_handle":
-        send_message(
-            user_id,
-            "✈️ Напишите Telegram (@username):",
-            keyboard=_nav_keyboard(),
-        )
+        _ask_contact(user_id)
     else:
         send_message(user_id, "Продолжите ввод:", keyboard=_nav_keyboard())
 

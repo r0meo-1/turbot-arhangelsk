@@ -15,6 +15,7 @@ STATE_BUDGET = "budget"
 STATE_CONTACT = "contact"  # choose how to be reached
 STATE_PHONE = "phone"
 STATE_VK = "vk"
+STATE_MAX = "max_contact"   # номер телефона или ссылка на профиль MAX
 
 PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
 
@@ -34,6 +35,12 @@ START_BUTTON_TEXT = "🚀 Начать подбор"
 CONTACT_TG_TEXT = "✈️ Telegram"
 CONTACT_PHONE_TEXT = "📱 Телефон"
 CONTACT_VK_TEXT = "💙 VK"
+# Offered instead of Telegram to clients who came in through VK. MAX has no
+# @username for personal profiles: people are found by phone number or by a
+# personal https://max.ru/u/<hash> link, so the step asks for those and not
+# for a handle that does not exist.
+CONTACT_MAX_TEXT = "🟣 MAX"
+MAX_PROFILE_HINT = "аватар → иконка QR → «Поделиться»"
 
 # Destination names without emoji (VK keyboard labels; TG uses emoji variants).
 POPULAR_DESTINATIONS_PLAIN = [
