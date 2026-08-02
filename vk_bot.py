@@ -1063,6 +1063,16 @@ def _step_origin(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not city:
         _ask_origin(user_id)
         return
+    if city.strip().lower() == str(info.get("destination", "")).strip().lower():
+        # Same city both ends: the search returns nothing and the client
+        # silently gets fallback text instead of prices.
+        send_message(
+            user_id,
+            f"🤔 {city} — это и есть ваше направление.\n\n"
+            "Из какого города вылетаете?",
+            keyboard=_origin_keyboard(),
+        )
+        return
     info["origin"] = city
     info["state"] = STATE_DATES
     _ask_dates(user_id)
@@ -1383,7 +1393,8 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
         user_id,
         "✅ Заявка принята! Менеджер «АПРЕЛЬ тур» свяжется с вами.\n\n"
         f"📍 Направление: {info.get('destination', '?')}\n"
-        f"📅 Даты: {info.get('dates', '?')}\n"
+        + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+        + f"📅 Даты: {info.get('dates', '?')}\n"
         f"👥 Состав: {_party_text(info)}\n"
         f"💰 Бюджет: {info.get('budget', '?')}₽\n"
         f"📞 Связь: {phone}\n\n"
@@ -1408,7 +1419,8 @@ def _notify_admin_telegram(
         f"От: {client_name or 'без имени'}\n"
         f"VK ID: {user_id}\n"
         f"📍 {info.get('destination', '?')}\n"
-        f"📅 {info.get('dates', '?')}\n"
+        + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+        + f"📅 {info.get('dates', '?')}\n"
         f"👥 {_party_text(info)}\n"
         f"💰 {info.get('budget', '?')}₽\n"
         f"📞 Связь: {phone}"
@@ -1441,7 +1453,8 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             "🔔 Новая заявка (VK)!\n\n"
             f"От: {client_name or 'без имени'} (ID: {user_id})\n"
             f"📍 {info.get('destination', '?')}\n"
-            f"📅 {info.get('dates', '?')}\n"
+            + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+            + f"📅 {info.get('dates', '?')}\n"
             f"👥 {_party_text(info)}\n"
             f"💰 {info.get('budget', '?')}₽\n"
             f"📞 Связь: {phone}",

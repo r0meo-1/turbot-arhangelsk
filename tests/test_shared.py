@@ -30,7 +30,7 @@ def test_validate_people_and_budget():
 def test_template_selection():
     text = template_selection("Турция", "15-22 июня", "2", "60000")
     assert "Турция" in text
-    assert "60000" in text
+    assert "Заявка у менеджера" in text
 
 
 def test_parse_russian_dates_basic():

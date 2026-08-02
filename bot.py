@@ -2196,6 +2196,17 @@ def _step_origin(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         _ask_origin(chat_id)
         return
 
+    if city.strip().lower() == str(info.get("destination", "")).strip().lower():
+        # Same city both ends: the flight search would return nothing and the
+        # client would silently get the fallback text instead of prices.
+        send_message(
+            chat_id,
+            f"🤔 {_esc(city)} — это и есть ваше направление.\n\n"
+            "Из какого города вылетаете?",
+            reply_markup=kb_origin(),
+            parse_mode="HTML",
+        )
+        return
     info["origin"] = city
     info["state"] = STATE_DATES
     _ask_dates(chat_id)
@@ -2579,7 +2590,8 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         chat_id,
         "✅ <b>Заявка принята!</b> Менеджер «АПРЕЛЬ тур» свяжется с вами в ближайшее время.\n\n"
         f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
-        f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
+        + (f"🛫 Откуда: {_esc(info['origin'])}\n" if info.get("origin") else "")
+        + f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
         f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: {_esc(info.get('budget', '?'))}₽\n"
         f"📞 Связь: {_esc(phone)}\n\n"
@@ -2611,7 +2623,8 @@ def _format_lead_notify_text(
         f"От: {who}\n"
         f"ID: <code>{chat_id}</code>\n"
         f"📍 {_esc(info.get('destination', '?'))}\n"
-        f"📅 {_esc(info.get('dates', '?'))}\n"
+        + (f"🛫 Откуда: {_esc(info['origin'])}\n" if info.get("origin") else "")
+        + f"📅 {_esc(info.get('dates', '?'))}\n"
         f"👥 {_esc(_party_text(info))}\n"
         f"💰 {_esc(info.get('budget', '?'))}₽\n"
         f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
