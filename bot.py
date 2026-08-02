@@ -3420,7 +3420,17 @@ def _polling_worker() -> None:
 
 
 def _deferred_network_startup() -> None:
-    """Telegram profile + MDT country list — must not delay HTTP port bind."""
+    """Start receiving first; cosmetics and CRM warm-up come after.
+
+    Order matters more than it looks. Profile setup calls setMyName, which
+    Telegram rate-limits hard — it answers 429, the session retries it three
+    times with backoff, and five such calls can grind for minutes. While that
+    ran ahead of the poller, the bot accepted nothing: systemd showed
+    active (running), /health returned 200, and every message went unanswered.
+    Nothing about setting a description should gate reading messages.
+    """
+    if BOT_MODE == "polling":
+        threading.Thread(target=_polling_worker, name="polling", daemon=True).start()
     try:
         ensure_bot_profile()
     except Exception as exc:
@@ -3430,8 +3440,6 @@ def _deferred_network_startup() -> None:
             _mdt_load_countries()
         except Exception as exc:
             logger.warning("MDT country load failed: %s", exc)
-    if BOT_MODE == "polling":
-        threading.Thread(target=_polling_worker, name="polling", daemon=True).start()
     logger.info("Deferred network startup finished (mode: %s)", BOT_MODE)
 
 

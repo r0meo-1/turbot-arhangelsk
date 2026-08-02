@@ -1205,3 +1205,28 @@ def test_people_step_asks_for_adults_not_everyone(client, monkeypatch):
     assert "взрослых" in ask
     assert "Сколько человек поедет" not in ask
     assert "12" in ask, "the age boundary has to be stated, not implied"
+
+
+def test_polling_starts_before_profile_setup(monkeypatch):
+    """Receiving messages must not queue behind cosmetics.
+
+    setMyName is rate-limited by Telegram; the session retries the 429 with
+    backoff, and five such calls ground on for minutes while the poller had
+    not started — service green, bot deaf.
+    """
+    order = []
+    monkeypatch.setattr(bot, "BOT_MODE", "polling")
+    monkeypatch.setattr(bot, "MDT_ENABLED", False)
+    monkeypatch.setattr(bot, "ensure_bot_profile",
+                        lambda: order.append("profile"))
+
+    class FakeThread:
+        def __init__(self, target=None, name=None, daemon=None):
+            self.name = name
+
+        def start(self):
+            order.append("polling")
+
+    monkeypatch.setattr(bot.threading, "Thread", FakeThread)
+    bot._deferred_network_startup()
+    assert order == ["polling", "profile"], f"wrong order: {order}"
