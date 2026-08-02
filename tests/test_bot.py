@@ -1188,3 +1188,20 @@ def test_party_text_shows_composition():
     assert bot._party_text({"people": "2", "kids": 2}) == "2 взр. + 2 реб. (2–11)"
     assert bot._party_text({"people": "1", "kids": 1, "infants": 1}) == \
         "1 взр. + 1 реб. (2–11) + 1 млад. (до 2)"
+
+
+def test_people_step_asks_for_adults_not_everyone(client, monkeypatch):
+    """The step means adults and children are asked next — but it used to say
+    «Сколько человек поедет?». A family of four answered 4, then 2 children,
+    and the bot priced six passengers."""
+    sent = []
+    monkeypatch.setattr(bot, "send_message",
+                        lambda cid, text, **k: sent.append(text) or _OkResp())
+    _consent(client, 7001)
+    _post(client, 7001, "Турция")
+    _post(client, 7001, "Москва")
+    _post(client, 7001, "15-22 сентября")
+    ask = [t for t in sent if "👥" in t][-1]
+    assert "взрослых" in ask
+    assert "Сколько человек поедет" not in ask
+    assert "12" in ask, "the age boundary has to be stated, not implied"

@@ -2110,7 +2110,8 @@ def _ask_dates(chat_id: int) -> None:
 def _ask_people(chat_id: int) -> None:
     send_message(
         chat_id,
-        "👥 <b>Сколько человек поедет?</b>\n\n"
+        "👥 <b>Сколько взрослых поедет?</b>\n\n"
+        "Только взрослые, от 12 лет — про детей спрошу следующим вопросом.\n"
         "Кнопка или число от 1 до 50.",
         reply_markup=kb_people(),
         parse_mode="HTML",
@@ -2305,7 +2306,7 @@ def _step_people(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not ok:
         send_message(
             chat_id,
-            "Укажите число от 1 до 50 (или «5+») — удобнее кнопкой ниже.",
+            "Сколько именно взрослых? Число от 1 до 50 или «5+» — удобнее кнопкой.",
             reply_markup=kb_people(),
         )
         return

@@ -982,7 +982,9 @@ def _ask_dates(user_id: int) -> None:
 def _ask_people(user_id: int) -> None:
     send_message(
         user_id,
-        "👥 Сколько человек поедет?\nКнопка или число 1–50:",
+        "👥 Сколько взрослых поедет?\n\n"
+        "Только взрослые, от 12 лет — про детей спрошу следующим вопросом.\n"
+        "Кнопка или число 1–50:",
         keyboard=_people_keyboard(),
     )
 
@@ -1163,7 +1165,7 @@ def _step_people(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not ok:
         send_message(
             user_id,
-            "Укажите число от 1 до 50 (или «5+») — удобнее кнопкой.",
+            "Сколько ВЗРОСЛЫХ? Число от 1 до 50 или «5+» — удобнее кнопкой.",
             keyboard=_people_keyboard(),
         )
         return
