@@ -104,6 +104,17 @@ def test_confirmation(client):
     assert resp.get_data(as_text=True) == "confirm123"
 
 
+def test_confirmation_accepts_a_configured_vk_secret(client, monkeypatch):
+    monkeypatch.setattr(bot, "VK_SECRET_KEY", "vk-test-secret")
+    resp = client.post(
+        "/vk/webhook",
+        json={"type": "confirmation", "group_id": 999, "secret": "vk-test-secret"},
+        content_type="application/json",
+    )
+    assert resp.status_code == 200
+    assert resp.get_data(as_text=True) == "confirm123"
+
+
 def test_start_asks_for_consent(client):
     resp = _post(client, 111, "Начать")
     assert resp.status_code == 200
