@@ -116,10 +116,6 @@ ADMIN_ID          = _env_int("ADMIN_ID", 0)
 DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT      = 15
 
-# Most enquiries are adults-only. Keep the common answer one tap away while
-# still collecting exact ages when children are travelling.
-NO_KIDS_BUTTON_TEXT = "👶 Детей нет"
-
 
 def _parse_chat_ids(raw: str) -> List[int]:
     """Parse comma-separated chat IDs; skip empty/invalid parts."""
@@ -808,10 +804,6 @@ def _people_keyboard() -> str:
     return _keyboard(rows)
 
 
-def _kids_ages_keyboard() -> str:
-    return _nav_keyboard([_btn(NO_KIDS_BUTTON_TEXT, "positive")])
-
-
 def _budget_keyboard() -> str:
     labels = [label for label, _ in BUDGET_PRESETS] + [BUDGET_CUSTOM_LABEL]
     rows = _chunk_buttons(labels, "primary", 2)
@@ -1048,11 +1040,10 @@ def _ask_dates(user_id: int) -> None:
     )
 
 
-def _ask_people(user_id: int, dates: Optional[str] = None) -> None:
-    dates_prefix = f"📅 Понял: {dates}\n\n" if dates else ""
+def _ask_people(user_id: int) -> None:
     send_message(
         user_id,
-        dates_prefix + "👥 Сколько взрослых поедет?\n\n"
+        "👥 Сколько взрослых поедет?\n\n"
         "Взрослый тариф — с 12 лет. Возрасты детей спрошу следующим вопросом.\n"
         "Кнопка или число 1–50:",
         keyboard=_people_keyboard(),
@@ -1067,11 +1058,11 @@ def _ask_kids_ages(user_id: int) -> None:
     """
     send_message(
         user_id,
-        "🎂 Есть дети до 12 лет?\n\n"
-        "Если да — напишите возраст каждого через запятую: 5, 9.\n"
+        "🎂 Сколько лет детям?\n\n"
+        "Напишите возрасты числами через запятую — например: 5, 9\n"
         "Малышам до года так и напишите: «до года».\n"
-        "Если детей нет — нажмите кнопку ниже.",
-        keyboard=_kids_ages_keyboard(),
+        "Если детей нет — отправьте 0.",
+        keyboard=_nav_keyboard(),
     )
 
 
@@ -1205,7 +1196,8 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
 
     info["dates"] = raw
     info["state"] = STATE_PEOPLE
-    _ask_people(user_id, _human_dates(depart, ret))
+    send_message(user_id, f"📅 Понял: {_human_dates(depart, ret)}")
+    _ask_people(user_id)
 
 
 def _human_dates(depart: str, ret: Optional[str] = None) -> str:
@@ -1255,8 +1247,7 @@ def _parse_choice(raw: str, options: List[str], none_label: str) -> Optional[int
 
 
 def _step_kids_ages(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    raw = "0" if (text or "").strip() == NO_KIDS_BUTTON_TEXT else (text or "")
-    ok, ages, problem = parse_kids_ages(raw)
+    ok, ages, problem = parse_kids_ages(text or "")
     if not ok:
         send_message(user_id, problem)
         return
@@ -1392,9 +1383,9 @@ _STATE_KEYBOARDS: Dict[str, Callable[[], str]] = {
     STATE_ORIGIN:      _origin_keyboard,
     STATE_DATES:       _dates_keyboard,
     STATE_PEOPLE:      _people_keyboard,
-    STATE_KIDS:        _kids_ages_keyboard,
-    STATE_KIDS_AGES:   _kids_ages_keyboard,
-    STATE_INFANTS:     _kids_ages_keyboard,
+    STATE_KIDS:        _nav_keyboard,
+    STATE_KIDS_AGES:   _nav_keyboard,
+    STATE_INFANTS:     _nav_keyboard,
     STATE_BUDGET:      _budget_keyboard,
     STATE_CONTACT:     _contact_keyboard,
     STATE_PHONE:       _nav_keyboard,
