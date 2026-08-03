@@ -1642,13 +1642,17 @@ def _post_completion_side_effects(
 
         send_typing(user_id)
         if client_text:
-            send_message(user_id, client_text)
+            send_message(user_id, client_text, keyboard=_hide_keyboard())
         else:
             # Tutu off or unavailable — the client still gets a suggestion.
-            send_message(user_id, generate_ai_selection(
-                info.get("destination", ""), info.get("dates", ""),
-                info.get("people", ""), info.get("budget", ""),
-            ))
+            send_message(
+                user_id,
+                generate_ai_selection(
+                    info.get("destination", ""), info.get("dates", ""),
+                    info.get("people", ""), info.get("budget", ""),
+                ),
+                keyboard=_hide_keyboard(),
+            )
 
         if result and TUTU_SHOW_ADMIN:
             _send_tutu_to_admin(user_id, result, client_name)
