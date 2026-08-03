@@ -290,10 +290,6 @@ WELCOME_BODY = (
 )
 
 HINT_START = "Чтобы подобрать тур, напишите «Начать» или нажмите кнопку.\nСправка — «Помощь»."
-HINT_AFTER_LEAD = (
-    "✅ Ваша заявка уже передана менеджеру. Он свяжется с вами в этом чате.\n\n"
-    "Хотите подобрать ещё один тур?"
-)
 
 # ---------------------------------------------------------------------------
 # Groq client
@@ -879,10 +875,6 @@ def _consent_keyboard() -> str:
 
 def _soft_start_keyboard() -> str:
     return _keyboard([[_btn(START_BUTTON_TEXT, "positive")]])
-
-
-def _new_selection_keyboard() -> str:
-    return _keyboard([[_btn(NEW_SELECTION_BUTTON_TEXT, "positive")]])
 
 
 def _hide_keyboard() -> str:
@@ -2038,7 +2030,10 @@ def _process_message(message: Dict[str, Any]) -> None:
         handle_dialog(user_id, text, msg)
     else:
         if has_completed_lead(user_id):
-            send_message(user_id, HINT_AFTER_LEAD, keyboard=_new_selection_keyboard())
+            # A manager now owns this conversation. Do not interrupt a normal
+            # reply such as "спасибо" with the bot's repeat-selection prompt.
+            # The explicit "Начать" command above still starts a new request.
+            return
         else:
             send_message(user_id, HINT_START)
 

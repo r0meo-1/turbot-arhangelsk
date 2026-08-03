@@ -714,8 +714,8 @@ def test_completion_followup_does_not_bring_back_start_button(monkeypatch):
         assert bot.START_BUTTON_TEXT not in labels, "soft-start вернулся после завершения заявки"
 
 
-def test_completed_lead_shows_new_selection_button(client, monkeypatch):
-    """A later message must not look like the completed request was discarded."""
+def test_completed_lead_does_not_interrupt_manager_dialog(client, monkeypatch):
+    """Normal replies after a lead must stay silent for the human manager."""
     captured = []
     user_id = 954
     bot.set_consent(user_id)
@@ -726,14 +726,7 @@ def test_completed_lead_shows_new_selection_button(client, monkeypatch):
 
     _post(client, user_id, "1")
 
-    reply = captured[-1]
-    assert "уже передана менеджеру" in reply["message"]
-    labels = [
-        button["action"]["label"]
-        for row in json.loads(reply["keyboard"])["buttons"]
-        for button in row
-    ]
-    assert labels == [bot.NEW_SELECTION_BUTTON_TEXT]
+    assert captured == []
 
-    _post(client, user_id, bot.NEW_SELECTION_BUTTON_TEXT)
+    _post(client, user_id, "Начать")
     assert bot.user_data[user_id]["state"] == bot.STATE_DESTINATION
