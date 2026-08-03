@@ -1287,7 +1287,7 @@ def test_party_text_shows_composition():
         "1 взр. + 1 реб. (2–11) + 1 млад. (до 2)"
 
 
-def test_people_step_asks_for_adults_not_everyone(client, monkeypatch):
+def test_people_step_asks_for_adults_without_age_threshold(client, monkeypatch):
     """The step means adults and children are asked next — but it used to say
     «Сколько человек поедет?». A family of four answered 4, then 2 children,
     and the bot priced six passengers."""
@@ -1301,7 +1301,8 @@ def test_people_step_asks_for_adults_not_everyone(client, monkeypatch):
     ask = [t for t in sent if "👥" in t][-1]
     assert "взрослых" in ask
     assert "Сколько человек поедет" not in ask
-    assert "12" in ask, "the age boundary has to be stated, not implied"
+    assert "Возраст детей" in ask
+    assert "12" not in ask
 
 
 def test_polling_starts_before_profile_setup(monkeypatch):

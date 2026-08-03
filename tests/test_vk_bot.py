@@ -445,6 +445,19 @@ def test_vk_asks_for_child_ages(client):
     assert bot.user_data[905]["kids"] == 1
 
 
+def test_vk_child_age_prompt_has_no_upper_age_limit(monkeypatch):
+    messages = []
+    monkeypatch.setattr(bot, "send_message", lambda _uid, text, **_kwargs: messages.append(text))
+
+    bot._ask_people(956)
+    bot._ask_kids_ages(956)
+
+    prompt = "\n".join(messages)
+    assert "до 12" not in prompt
+    assert "Возраст детей" in prompt
+    assert "5, 9" in prompt
+
+
 def test_vk_no_kids_button_skips_age_entry(client):
     _post(client, 907, "Начать")
     _post(client, 907, bot.CONSENT_YES_TEXT)
