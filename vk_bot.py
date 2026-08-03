@@ -257,6 +257,7 @@ CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
 REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
 REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
+NEW_SELECTION_BUTTON_TEXT = "🧳 Новый подбор"
 
 USER_HELP = (
     "🌴 «АПРЕЛЬ тур» — подбор отдыха\n\n"
@@ -283,6 +284,10 @@ WELCOME_BODY = (
 )
 
 HINT_START = "Чтобы подобрать тур, напишите «Начать» или нажмите кнопку.\nСправка — «Помощь»."
+HINT_AFTER_LEAD = (
+    "✅ Ваша заявка уже передана менеджеру. Он свяжется с вами в этом чате.\n\n"
+    "Хотите подобрать ещё один тур?"
+)
 
 # ---------------------------------------------------------------------------
 # Groq client
@@ -521,6 +526,13 @@ def get_user(chat_id: int) -> Optional[Dict[str, Any]]:
         cur.execute("SELECT * FROM users WHERE chat_id = ?", (chat_id,))
         row = cur.fetchone()
         return dict(row) if row else None
+
+
+def has_completed_lead(chat_id: int) -> bool:
+    """Whether the user has a saved request and should see the repeat-flow hint."""
+    with _db_cursor() as cur:
+        cur.execute("SELECT 1 FROM leads WHERE chat_id = ? LIMIT 1", (chat_id,))
+        return cur.fetchone() is not None
 
 
 # --- consent & erasure (152-ФЗ) ---
@@ -861,6 +873,10 @@ def _consent_keyboard() -> str:
 
 def _soft_start_keyboard() -> str:
     return _keyboard([[_btn(START_BUTTON_TEXT, "positive")]])
+
+
+def _new_selection_keyboard() -> str:
+    return _keyboard([[_btn(NEW_SELECTION_BUTTON_TEXT, "positive")]])
 
 
 def _hide_keyboard() -> str:
@@ -1896,7 +1912,9 @@ def _process_message(message: Dict[str, Any]) -> None:
     text_lower = text.lower()
     command = _COMMAND_ALIASES.get(text_lower)
     # Soft-start button must not re-trigger handle_start while already on consent step.
-    if text == START_BUTTON_TEXT or text_lower in ("🚀 начать подбор", "начать подбор"):
+    if text == NEW_SELECTION_BUTTON_TEXT:
+        command = "start"
+    elif text == START_BUTTON_TEXT or text_lower in ("🚀 начать подбор", "начать подбор"):
         cur_state = (user_data.get(user_id) or {}).get("state")
         if cur_state == STATE_CONSENT:
             command = None
@@ -2012,7 +2030,10 @@ def _process_message(message: Dict[str, Any]) -> None:
     if user_id in user_data:
         handle_dialog(user_id, text, msg)
     else:
-        send_message(user_id, HINT_START)
+        if has_completed_lead(user_id):
+            send_message(user_id, HINT_AFTER_LEAD, keyboard=_new_selection_keyboard())
+        else:
+            send_message(user_id, HINT_START)
 
 
 # ---------------------------------------------------------------------------

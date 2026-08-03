@@ -701,3 +701,28 @@ def test_completion_followup_does_not_bring_back_start_button(monkeypatch):
             for b in row
         ]
         assert bot.START_BUTTON_TEXT not in labels, "soft-start вернулся после завершения заявки"
+
+
+def test_completed_lead_shows_new_selection_button(client, monkeypatch):
+    """A later message must not look like the completed request was discarded."""
+    captured = []
+    user_id = 954
+    bot.set_consent(user_id)
+    bot.save_lead(user_id, {"destination": "Египет"}, "VK (чат id 954)", "Тест")
+    monkeypatch.setattr(bot, "send_message", _REAL_SEND_MESSAGE)
+    monkeypatch.setattr(bot, "_vk_api",
+                        lambda method, **p: captured.append(p) or {"response": 1})
+
+    _post(client, user_id, "1")
+
+    reply = captured[-1]
+    assert "уже передана менеджеру" in reply["message"]
+    labels = [
+        button["action"]["label"]
+        for row in json.loads(reply["keyboard"])["buttons"]
+        for button in row
+    ]
+    assert labels == [bot.NEW_SELECTION_BUTTON_TEXT]
+
+    _post(client, user_id, bot.NEW_SELECTION_BUTTON_TEXT)
+    assert bot.user_data[user_id]["state"] == bot.STATE_DESTINATION
