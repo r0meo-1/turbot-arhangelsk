@@ -136,9 +136,6 @@ def party_text(info: Dict) -> str:
     parts = [f"{adults} взр."]
     if ages:
         parts.append(f"дети: {format_ages(ages)}")
-        teens = [a for a in ages if a >= ADULT_FARE_FROM]
-        if teens:
-            parts.append(f"из них {len(teens)} по взрослому тарифу (от {ADULT_FARE_FROM})")
     else:
         if children:
             parts.append(f"{children} реб. (2–11)")
