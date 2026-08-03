@@ -251,7 +251,7 @@ certbot renew --dry-run
 
 ```bash
 curl https://bot.example.ru/health
-# Expected: {"status":"ok","revision":"...",...}
+# Expected: {"status":"ok","bot_token_configured":true,...}
 ```
 
 ---
@@ -334,7 +334,6 @@ Add these to `/opt/turbot/.env`:
 VK_ACCESS_TOKEN=vk1.a.BcDeFg...      # from step 6
 VK_GROUP_ID=123456                   # from step 7
 VK_CONFIRMATION=abc123def456         # from step 5
-VK_SECRET_KEY=<long-random-string>   # same value in Callback API settings
 VK_PORT=5100
 VK_DATABASE_PATH=/opt/turbot/vk_bot_state.sqlite
 ```

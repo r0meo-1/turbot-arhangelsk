@@ -41,7 +41,7 @@ Flask webhook · gunicorn · SQLite · MDT CRM · пакет `shared/` с VK-в�
 
 | | |
 |--|--|
-| **Health** | [bot.r0meo1.ru/health](https://bot.r0meo1.ru/health) — JSON со статусом и ревизией запущенного кода |
+| **Health** | [bot.r0meo1.ru/health](https://bot.r0meo1.ru/health) — JSON со статусом, флагами и счётчиком заявок |
 | **Политика ПДн** | [bot.r0meo1.ru/privacy](https://bot.r0meo1.ru/privacy) — бот отдаёт её сам, без отдельного хостинга |
 
 Свой VPS в РФ, сертификат Let's Encrypt, `/health` отвечает за **~0.5 с**.

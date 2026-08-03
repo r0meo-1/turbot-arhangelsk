@@ -1,11 +1,11 @@
-# TurBot — Docker Compose for Telegram + VK bots behind an HTTP nginx proxy.
+# TurBot — Docker Compose for Telegram + VK bots behind nginx.
 #
 # Usage:
 #   1. Copy .env.example to .env and fill in tokens
 #   2. docker compose up -d
 #
-# For production, terminate HTTPS in a reverse proxy (nginx, Caddy, Traefik)
-# in front of port 80. The VM installer remains the turnkey TLS option.
+# For production with HTTPS, use a reverse proxy (nginx, Caddy, Traefik)
+# in front of these containers, or add certbot.
 
 services:
   telegram-bot:
@@ -48,11 +48,16 @@ services:
     restart: always
     ports:
       - "80:80"
+      - "443:443"
     volumes:
-      - ./deploy/nginx-compose.conf:/etc/nginx/conf.d/turbot.conf:ro
+      - ./deploy/nginx-turbot.conf:/etc/nginx/conf.d/turbot.conf:ro
+      - certbot-web:/var/www/certbot:ro
+      - certs:/etc/letsencrypt:ro
     depends_on:
       - telegram-bot
       - vk-bot
 
 volumes:
   bot-data:
+  certbot-web:
+  certs:
