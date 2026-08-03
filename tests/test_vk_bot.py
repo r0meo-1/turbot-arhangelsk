@@ -493,3 +493,40 @@ def test_the_word_buttons_brings_the_step_back(client, monkeypatch):
     _post(client, 952, "кнопки")
     assert bot.user_data[952]["state"] == state_before, "шаг не должен меняться"
     assert captured[-1].get("keyboard"), "кнопки не вернулись"
+
+
+def test_completion_followup_does_not_bring_back_start_button(monkeypatch):
+    """После завершения заявки follow-up не должен снова приклеивать soft-start."""
+    captured = []
+    user_id = 953
+    bot.user_data[user_id] = {
+        "state": bot.STATE_MAX,
+        "destination": "Египет",
+        "origin": "Архангельск",
+        "dates": "даты гибкие",
+        "adults": 4,
+        "children_ages": [5, 14],
+        "budget": 80000,
+        "contact": "VK",
+    }
+
+    monkeypatch.setattr(bot, "send_message", _REAL_SEND_MESSAGE)
+    monkeypatch.setattr(bot, "_vk_api",
+                        lambda method, **p: captured.append((method, p)) or {"response": 1})
+    monkeypatch.setattr(bot, "_notify_admin", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "send_lead_to_mdt", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "generate_ai_selection",
+                        lambda *a, **k: "✅ Заявка у менеджера.\n\nМенеджер подберёт варианты.")
+
+    bot.handle_completion(user_id, "VK (чат id 31771632)", {"_user_name": "Роман Неклюдов"})
+
+    user_messages = [p for method, p in captured if method == "messages.send" and p["user_id"] == user_id]
+    assert len(user_messages) >= 2, "ожидали подтверждение заявки и follow-up клиенту"
+    for payload in user_messages[-2:]:
+        kb = json.loads(payload["keyboard"])
+        labels = [
+            b["action"]["label"]
+            for row in kb.get("buttons", [])
+            for b in row
+        ]
+        assert bot.START_BUTTON_TEXT not in labels, "soft-start вернулся после завершения заявки"
