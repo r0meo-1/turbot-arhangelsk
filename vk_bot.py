@@ -1075,11 +1075,10 @@ def _ask_kids_ages(user_id: int) -> None:
     )
 
 
-def _ask_budget(user_id: int, party: Optional[str] = None) -> None:
-    party_prefix = f"👥 Записал: {party}\n\n" if party else ""
+def _ask_budget(user_id: int) -> None:
     send_message(
         user_id,
-        party_prefix + "💰 Бюджет на человека (примерно, ₽)\nКнопка или своя сумма:",
+        "💰 Бюджет на человека (примерно, ₽)\nКнопка или своя сумма:",
         keyboard=_budget_keyboard(),
     )
 
@@ -1264,7 +1263,8 @@ def _step_kids_ages(user_id: int, text: str, message: Dict[str, Any], info: Dict
     info["kids_ages"] = ages
     _, info["kids"], info["infants"] = party_bands(info)
     info["state"] = STATE_BUDGET
-    _ask_budget(user_id, _party_text(info))
+    send_message(user_id, f"👥 Записал: {_party_text(info)}")
+    _ask_budget(user_id)
 
 
 def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:

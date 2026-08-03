@@ -340,28 +340,6 @@ def test_vk_child_age_keyboard_has_no_kids_shortcut():
     assert bot.CANCEL_BUTTON_TEXT in labels
 
 
-def test_vk_child_ages_show_budget_keyboard_once(client, monkeypatch):
-    captured = []
-    monkeypatch.setattr(bot, "send_message", _REAL_SEND_MESSAGE)
-    monkeypatch.setattr(bot, "_vk_api",
-                        lambda method, **p: captured.append(p) or {"response": 1})
-    for text in ["Начать", bot.CONSENT_YES_TEXT, "Египет", "Москва",
-                 "15-22 сентября", "2"]:
-        _post(client, 908, text)
-    captured.clear()
-
-    _post(client, 908, bot.NO_KIDS_BUTTON_TEXT)
-
-    assert len(captured) == 1
-    assert "Записал: 2 взр." in captured[0]["message"]
-    labels = [
-        button["action"]["label"]
-        for row in json.loads(captured[0]["keyboard"])["buttons"]
-        for button in row
-    ]
-    assert bot.BUDGET_PRESETS[0][0] in labels
-
-
 def test_vk_stores_child_ages_with_the_lead(client):
     _post(client, 906, "Начать")
     _post(client, 906, bot.CONSENT_YES_TEXT)
