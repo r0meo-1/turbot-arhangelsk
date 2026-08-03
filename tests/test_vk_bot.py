@@ -325,6 +325,54 @@ def test_vk_asks_for_child_ages(client):
     assert bot.user_data[905]["kids"] == 1
 
 
+def test_vk_no_kids_button_skips_age_entry(client):
+    _post(client, 907, "Начать")
+    _post(client, 907, bot.CONSENT_YES_TEXT)
+    for text in ["Египет", "Москва", "15-22 сентября", "2"]:
+        _post(client, 907, text)
+
+    _post(client, 907, bot.NO_KIDS_BUTTON_TEXT)
+
+    assert bot.user_data[907]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[907]["kids_ages"] == []
+    assert bot.user_data[907]["kids"] == 0
+    assert bot.user_data[907]["infants"] == 0
+
+
+def test_vk_child_age_keyboard_has_no_kids_shortcut():
+    keyboard = json.loads(bot._kids_ages_keyboard())
+    labels = [
+        button["action"]["label"]
+        for row in keyboard["buttons"]
+        for button in row
+    ]
+    assert bot.NO_KIDS_BUTTON_TEXT in labels
+    assert bot.BACK_BUTTON_TEXT in labels
+    assert bot.CANCEL_BUTTON_TEXT in labels
+
+
+def test_vk_child_ages_show_budget_keyboard_once(client, monkeypatch):
+    captured = []
+    monkeypatch.setattr(bot, "send_message", _REAL_SEND_MESSAGE)
+    monkeypatch.setattr(bot, "_vk_api",
+                        lambda method, **p: captured.append(p) or {"response": 1})
+    for text in ["Начать", bot.CONSENT_YES_TEXT, "Египет", "Москва",
+                 "15-22 сентября", "2"]:
+        _post(client, 908, text)
+    captured.clear()
+
+    _post(client, 908, bot.NO_KIDS_BUTTON_TEXT)
+
+    assert len(captured) == 1
+    assert "Записал: 2 взр." in captured[0]["message"]
+    labels = [
+        button["action"]["label"]
+        for row in json.loads(captured[0]["keyboard"])["buttons"]
+        for button in row
+    ]
+    assert bot.BUDGET_PRESETS[0][0] in labels
+
+
 def test_vk_stores_child_ages_with_the_lead(client):
     _post(client, 906, "Начать")
     _post(client, 906, bot.CONSENT_YES_TEXT)
