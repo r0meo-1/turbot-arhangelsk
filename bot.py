@@ -2928,11 +2928,6 @@ def health() -> Any:
     of the last completed getUpdates and answers 503 once that goes stale. The
     watchdog in deploy/ keys off the status code.
     """
-    try:
-        leads_total = count_leads()
-    except Exception:
-        leads_total = -1
-
     now = time.time()
     # Only meaningful while polling. Under a webhook nothing is expected to
     # phone Telegram on a schedule, so silence proves nothing.
@@ -2954,22 +2949,6 @@ def health() -> Any:
         "seconds_since_update": (
             round(now - _last_update_at, 1) if _last_update_at else None
         ),
-        "bot_token_configured": bool(BOT_TOKEN),
-        "admin_id_configured": bool(ADMIN_ID),
-        "lead_notify_configured": bool(LEAD_NOTIFY_IDS),
-        "lead_notify_count": len(LEAD_NOTIFY_IDS),
-        "groq_configured": bool(GROQ_API_KEY),
-        "ai_mode": AI_MODE,
-        "mdt_enabled": MDT_ENABLED,
-        "mdt_mode": MDT_MODE,
-        "total_users": len(all_users),
-        "active_sessions": len(user_data),
-        "total_leads": leads_total,
-        "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
-        "data_retention_days": DATA_RETENTION_DAYS,
-        "consent_mode": CONSENT_MODE,
-        "demo_mode": DEMO_MODE,
-        "tutu_enabled": TUTU_ENABLED,
         "bot_mode": BOT_MODE,
     })
     # 503 rather than 200-with-a-sad-field: monitoring reads status codes, and

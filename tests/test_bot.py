@@ -85,8 +85,8 @@ def test_health_endpoint(client):
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["status"] == "ok"
-    assert data["bot_token_configured"] is True
-    assert data["admin_id_configured"] is True
+    assert data["revision"]
+    assert "bot_token_configured" not in data
 
 
 def test_webhook_rejects_missing_secret(client):
@@ -858,10 +858,11 @@ def test_privacy_page_is_served(client):
     assert "<h1" in body or "<h2" in body
 
 
-def test_health_reports_demo_and_tutu_flags(client):
+def test_health_hides_operational_configuration(client):
     data = client.get("/health").get_json()
-    assert "demo_mode" in data
-    assert "tutu_enabled" in data
+    assert data["revision"]
+    assert "total_users" not in data
+    assert "bot_token_configured" not in data
 
 
 def test_health_fails_when_poller_went_quiet(client, monkeypatch):

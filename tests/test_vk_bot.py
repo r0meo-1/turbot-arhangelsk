@@ -9,6 +9,7 @@ import tempfile
 os.environ.setdefault("VK_ACCESS_TOKEN", "dummy-token")
 os.environ.setdefault("VK_GROUP_ID", "999")
 os.environ.setdefault("VK_CONFIRMATION", "confirm123")
+os.environ.setdefault("VK_SECRET_KEY", "vk-test-secret")
 os.environ.setdefault("TUTU_ENABLED", "false")
 os.environ.setdefault("VK_DEMO_MODE", "false")
 os.environ.setdefault("ADMIN_ID", "999")
@@ -58,7 +59,12 @@ def _vk_message(user_id, text=None):
     msg = {"peer_id": user_id, "from_id": user_id}
     if text is not None:
         msg["text"] = text
-    return {"type": "message_new", "object": {"message": msg}, "group_id": 999}
+    return {
+        "type": "message_new",
+        "object": {"message": msg},
+        "group_id": 999,
+        "secret": bot.VK_SECRET_KEY,
+    }
 
 
 def _post(client, user_id, text=None):
@@ -93,12 +99,15 @@ def test_health_endpoint(client):
     data = resp.get_json()
     assert data["status"] == "ok"
     assert data["platform"] == "vk"
-    assert data["vk_token_configured"] is True
+    assert data["revision"]
+    assert "total_users" not in data
+    assert "vk_group_id" not in data
 
 
 def test_confirmation(client):
     resp = client.post("/vk/webhook",
-                       json={"type": "confirmation", "group_id": 999},
+                       json={"type": "confirmation", "group_id": 999,
+                             "secret": bot.VK_SECRET_KEY},
                        content_type="application/json")
     assert resp.status_code == 200
     assert resp.get_data(as_text=True) == "confirm123"
@@ -113,6 +122,16 @@ def test_confirmation_does_not_require_a_vk_secret(client, monkeypatch):
     )
     assert resp.status_code == 200
     assert resp.get_data(as_text=True) == "confirm123"
+
+
+def test_vk_webhook_rejects_an_invalid_secret(client, monkeypatch):
+    monkeypatch.setattr(bot, "VK_SECRET_KEY", "vk-test-secret")
+    event = _vk_message(110, "Начать")
+    event["secret"] = "not-the-vk-secret"
+    resp = client.post("/vk/webhook", json=event, content_type="application/json")
+
+    assert resp.status_code == 403
+    assert 110 not in bot.user_data
 
 
 def test_start_asks_for_consent(client):
@@ -149,6 +168,8 @@ def test_dialog_completion(client):
     _post(client, 222, bot.CONSENT_YES_TEXT)
     for text in ["Египет", "Москва", "15-22 июня", "2", "Без детей", "60000"]:
         _post(client, 222, text)
+    assert bot.user_data[222]["state"] == bot.STATE_REVIEW
+    _post(client, 222, bot.REVIEW_CONFIRM_TEXT)
     assert bot.user_data[222]["state"] == bot.STATE_CONTACT
     _post(client, 222, "+79161234567")
     assert 222 not in bot.user_data
@@ -169,6 +190,8 @@ def test_soft_mode_and_vk_contact(client, monkeypatch):
     assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
     for text in ["Турция", "Москва", bot.DATE_PRESETS[0][0], "2", "Без детей", bot.BUDGET_PRESETS[1][0]]:
         _post(client, 901, text)
+    assert bot.user_data[901]["state"] == bot.STATE_REVIEW
+    _post(client, 901, bot.REVIEW_CONFIRM_TEXT)
     assert bot.user_data[901]["state"] == bot.STATE_CONTACT
     assert bot.user_data[901]["budget"] == bot.BUDGET_PRESETS[1][1]
     _post(client, 901, bot.CONTACT_VK_CHAT_LABEL)
@@ -188,6 +211,46 @@ def test_dates_and_budget_keyboards():
     b = json.loads(bot._budget_keyboard())
     blabels = [btn["action"]["label"] for row in b["buttons"] for btn in row]
     assert bot.BUDGET_PRESETS[0][0] in blabels
+
+
+def test_vk_review_allows_fixing_dates_and_budget(client):
+    _post(client, 902, "Начать")
+    _post(client, 902, bot.CONSENT_YES_TEXT)
+    for text in ["Египет", "Москва", "15-22 сентября", "2", "0", "70000"]:
+        _post(client, 902, text)
+    assert bot.user_data[902]["state"] == bot.STATE_REVIEW
+
+    _post(client, 902, bot.REVIEW_EDIT_DATES_TEXT)
+    assert bot.user_data[902]["state"] == bot.STATE_DATES
+    _post(client, 902, "20-27 сентября")
+    for text in ["2", "0", "70000"]:
+        _post(client, 902, text)
+    assert bot.user_data[902]["state"] == bot.STATE_REVIEW
+
+    _post(client, 902, bot.REVIEW_EDIT_BUDGET_TEXT)
+    assert bot.user_data[902]["state"] == bot.STATE_BUDGET
+
+
+def test_vk_undecided_destination_marks_consultation(client):
+    _post(client, 903, "Начать")
+    _post(client, 903, bot.CONSENT_YES_TEXT)
+    _post(client, 903, bot.DIRECTION_UNDECIDED_LABEL)
+
+    assert bot.user_data[903]["state"] == bot.STATE_ORIGIN
+    assert bot.user_data[903]["destination"] == bot.UNDECIDED_DESTINATION
+    assert bot.user_data[903]["needs_consultation"] is True
+
+
+def test_vk_consultation_flag_is_persisted():
+    bot.set_session(904, {
+        "state": bot.STATE_ORIGIN,
+        "destination": bot.UNDECIDED_DESTINATION,
+        "needs_consultation": True,
+    })
+
+    saved = bot.get_session(904)
+    assert saved is not None
+    assert saved["needs_consultation"] == 1
 
 
 def test_back_button(client):
@@ -257,6 +320,7 @@ def test_vk_origin_persisted_with_lead(client):
     _vk_consent(client, 902)
     for text in ["Турция", "Санкт-Петербург", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 902, text)
+    _post(client, 902, bot.REVIEW_CONFIRM_TEXT)
     _post(client, 902, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT origin FROM leads WHERE chat_id = ?", (902,))
@@ -270,6 +334,7 @@ def test_vk_demo_mode_masks_phone(client, monkeypatch):
     _vk_consent(client, 903)
     for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 903, text)
+    _post(client, 903, bot.REVIEW_CONFIRM_TEXT)
     _post(client, 903, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (903,))
@@ -283,10 +348,54 @@ def test_vk_real_mode_keeps_phone(client, monkeypatch):
     _vk_consent(client, 904)
     for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 904, text)
+    _post(client, 904, bot.REVIEW_CONFIRM_TEXT)
     _post(client, 904, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (904,))
         assert cur.fetchone()[0] == "+79161234567"
+
+
+def test_vk_concurrent_completion_creates_one_lead(monkeypatch):
+    import threading
+
+    user_id = 9041
+    bot.user_data[user_id] = {
+        "state": bot.STATE_CONTACT,
+        "destination": "Турция",
+        "origin": "Москва",
+        "dates": "1-7 августа",
+        "people": "2",
+        "kids": 0,
+        "infants": 0,
+        "budget": 70000,
+        "updated_at": int(time.time()),
+    }
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "_notify_admin", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *args, **kwargs: None)
+
+    real_save = bot.save_lead
+
+    def slow_save(*args, **kwargs):
+        time.sleep(0.05)
+        return real_save(*args, **kwargs)
+
+    monkeypatch.setattr(bot, "save_lead", slow_save)
+    barrier = threading.Barrier(2)
+
+    def complete():
+        barrier.wait()
+        bot.handle_completion(user_id, "+79161234567", {"_user_name": "Гонка"})
+
+    workers = [threading.Thread(target=complete) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(timeout=10)
+
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM leads WHERE chat_id = ?", (user_id,))
+        assert cur.fetchone()[0] == 1
 
 
 def test_vk_tutu_switch_is_independent(monkeypatch):
@@ -378,6 +487,7 @@ def test_vk_stores_child_ages_with_the_lead(client):
     _post(client, 906, bot.CONSENT_YES_TEXT)
     for text in ["Египет", "Москва", "15-22 сентября", "2", "6", "70000"]:
         _post(client, 906, text)
+    _post(client, 906, bot.REVIEW_CONFIRM_TEXT)
     _post(client, 906, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT kids_ages FROM leads WHERE chat_id = ?", (906,))
@@ -391,6 +501,8 @@ def _reach_contact(client, uid):
     for text in ["Египет", "Москва", "15-22 сентября", "2",
                  "0", "70000"]:
         _post(client, uid, text)
+    assert bot.user_data[uid]["state"] == bot.STATE_REVIEW
+    _post(client, uid, bot.REVIEW_CONFIRM_TEXT)
     assert bot.user_data[uid]["state"] == bot.STATE_CONTACT
 
 
