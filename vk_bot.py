@@ -2008,21 +2008,22 @@ def vk_webhook() -> Any:
     if not data or "type" not in data:
         return "ok", 200
 
+    event_type = data["type"]
+
+    # VK's address-verification payload contains no secret. It must be
+    # answered before validating regular event deliveries.
+    if event_type == "confirmation":
+        if VK_CONFIRMATION:
+            return VK_CONFIRMATION, 200
+        logger.warning("VK confirmation request but VK_CONFIRMATION not set")
+        return "ok", 200
+
     # Optional secret-key verification
     if VK_SECRET_KEY:
         received_secret = data.get("secret", "")
         if not hmac.compare_digest(received_secret, VK_SECRET_KEY):
             logger.warning("VK webhook: invalid secret key")
             return "ok", 200
-
-    event_type = data["type"]
-
-    # Confirmation request (VK verifies server ownership)
-    if event_type == "confirmation":
-        if VK_CONFIRMATION:
-            return VK_CONFIRMATION, 200
-        logger.warning("VK confirmation request but VK_CONFIRMATION not set")
-        return "ok", 200
 
     # New message from user
     if event_type == "message_new":
