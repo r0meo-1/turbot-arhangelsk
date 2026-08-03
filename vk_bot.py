@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import hmac
 import time
 import random
 import sqlite3
@@ -233,27 +234,29 @@ if CONSENT_MODE not in ("soft", "strict"):
 # ---------------------------------------------------------------------------
 
 POPULAR_DESTINATIONS = POPULAR_DESTINATIONS_PLAIN
+DIRECTION_UNDECIDED_LABEL = "🌴 Не определился"
+UNDECIDED_DESTINATION = "Не определился — нужна консультация"
+STATE_REVIEW = "review"
 
 # Quick picks (label on keyboard → value stored in lead). VK label ≤ 40 chars.
 DATE_PRESETS: List[Tuple[str, str]] = [
-    ("🏖 Выходные", "ближайшие выходные"),
-    ("📅 1–2 недели", "через 1-2 недели"),
-    ("🗓 Через месяц", "через месяц"),
-    ("☀️ Лето", "лето"),
-    ("❄️ Зима", "зима"),
+    ("🏖 Ближайшие выходные", "ближайшие выходные"),
+    ("📅 В этом месяце", "в этом месяце"),
+    ("🗓 Следующий месяц", "следующий месяц"),
     ("🤷 Даты гибкие", "даты гибкие"),
 ]
 BUDGET_PRESETS: List[Tuple[str, int]] = [
-    ("до 40 000 ₽", 40000),
-    ("60 000 ₽", 60000),
-    ("80 000 ₽", 80000),
-    ("100 000 ₽", 100000),
-    ("150 000 ₽", 150000),
-    ("200 000+ ₽", 200000),
+    ("до 60 000 ₽", 60000),
+    ("до 100 000 ₽", 100000),
+    ("до 150 000 ₽", 150000),
+    ("150 000+ ₽", 150000),
 ]
 DATE_CUSTOM_LABEL = "✏️ Свои даты"
 BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
 CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
+REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
+REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
+REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
 
 USER_HELP = (
     "🌴 «АПРЕЛЬ тур» — подбор отдыха\n\n"
@@ -365,6 +368,7 @@ def init_db() -> None:
                 infants INTEGER,
                 budget INTEGER,
                 phone TEXT,
+                needs_consultation INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL
             )
         """)
@@ -382,6 +386,7 @@ def init_db() -> None:
                 infants INTEGER,
                 budget INTEGER,
                 phone TEXT NOT NULL,
+                needs_consultation INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL
             )
         """)
@@ -396,6 +401,10 @@ def init_db() -> None:
             for _c in ("kids", "infants"):
                 if _c not in _cols:
                     cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} INTEGER")
+            if "needs_consultation" not in _cols:
+                cur.execute(
+                    f"ALTER TABLE {_t} ADD COLUMN needs_consultation INTEGER NOT NULL DEFAULT 0"
+                )
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("PRAGMA journal_mode=WAL")
@@ -408,8 +417,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("""
             INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
-                                  kids, kids_ages, infants, budget, phone, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  kids, kids_ages, infants, budget, phone, needs_consultation, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
@@ -417,13 +426,15 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 kids=excluded.kids, kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
                 budget=excluded.budget, phone=excluded.phone,
+                needs_consultation=excluded.needs_consultation,
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
               data.get("origin"),
               data.get("dates"), data.get("people"),
               data.get("kids"), _ages_to_db(data.get("kids_ages")),
               data.get("infants"), data.get("budget"),
-              data.get("phone"), data.get("updated_at", now)))
+              data.get("phone"), int(bool(data.get("needs_consultation"))),
+              data.get("updated_at", now)))
 
 
 def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
@@ -468,8 +479,8 @@ def save_lead(
             """
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates,
-                people, kids, kids_ages, infants, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                people, kids, kids_ages, infants, budget, phone, needs_consultation, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -484,6 +495,7 @@ def save_lead(
                 info.get("infants"),
                 info.get("budget"),
                 phone,
+                int(bool(info.get("needs_consultation"))),
                 now,
             ),
         )
@@ -780,6 +792,7 @@ def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) 
 
 def _dest_keyboard() -> str:
     rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 2)
+    rows.append([_btn(DIRECTION_UNDECIDED_LABEL, "secondary")])
     rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
@@ -818,6 +831,15 @@ def _budget_keyboard() -> str:
     rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
     rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
+
+
+def _review_keyboard() -> str:
+    return _keyboard([
+        [_btn(REVIEW_CONFIRM_TEXT, "positive")],
+        [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
+        [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
+        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
+    ])
 
 
 def _contact_keyboard() -> str:
@@ -999,7 +1021,8 @@ def _begin_destination(user_id: int, first_name: str = "") -> None:
     name = f", {first_name}" if first_name else ""
     send_message(
         user_id,
-        f"🌴 Отлично{name}! Давайте подберём тур.\n\n"
+        f"🌴 Отлично{name}! Давайте подберём тур.\n"
+        "Шаг 1 из 6 · направление\n\n"
         "📍 Куда хотите поехать?\n\n"
         "Жмите кнопку — или напишите своё направление:",
         keyboard=_dest_keyboard(),
@@ -1033,6 +1056,7 @@ def _origin_keyboard() -> str:
 def _ask_origin(user_id: int) -> None:
     send_message(
         user_id,
+        "Шаг 2 из 6 · город вылета\n\n"
         "🛫 Откуда вылетаете?\n\n"
         "Нужно, чтобы посчитать перелёт — цена сильно зависит от города.",
         keyboard=_origin_keyboard(),
@@ -1042,6 +1066,7 @@ def _ask_origin(user_id: int) -> None:
 def _ask_dates(user_id: int) -> None:
     send_message(
         user_id,
+        "Шаг 3 из 6 · даты\n\n"
         "📅 Когда планируете поездку?\n\n"
         "Кнопка или свои даты (например: 15-22 июня):",
         keyboard=_dates_keyboard(),
@@ -1052,7 +1077,8 @@ def _ask_people(user_id: int, dates: Optional[str] = None) -> None:
     dates_prefix = f"📅 Понял: {dates}\n\n" if dates else ""
     send_message(
         user_id,
-        dates_prefix + "👥 Сколько взрослых поедет?\n\n"
+        dates_prefix + "Шаг 4 из 6 · состав туристов\n\n"
+        "👥 Сколько взрослых поедет?\n\n"
         "Взрослый тариф — с 12 лет. Возрасты детей спрошу следующим вопросом.\n"
         "Кнопка или число 1–50:",
         keyboard=_people_keyboard(),
@@ -1067,6 +1093,7 @@ def _ask_kids_ages(user_id: int) -> None:
     """
     send_message(
         user_id,
+        "Шаг 4 из 6 · состав туристов\n\n"
         "🎂 Есть дети до 12 лет?\n\n"
         "Если да — напишите возраст каждого через запятую: 5, 9.\n"
         "Малышам до года так и напишите: «до года».\n"
@@ -1079,7 +1106,8 @@ def _ask_budget(user_id: int, party: Optional[str] = None) -> None:
     party_prefix = f"👥 Записал: {party}\n\n" if party else ""
     send_message(
         user_id,
-        party_prefix + "💰 Бюджет на человека (примерно, ₽)\nКнопка или своя сумма:",
+        party_prefix + "Шаг 5 из 6 · бюджет\n\n"
+        "💰 Бюджет на человека (примерно, ₽)\nКнопка или своя сумма:",
         keyboard=_budget_keyboard(),
     )
 
@@ -1087,6 +1115,7 @@ def _ask_budget(user_id: int, party: Optional[str] = None) -> None:
 def _ask_contact(user_id: int) -> None:
     send_message(
         user_id,
+        "Шаг 6 из 6 · способ связи\n\n"
         "📞 Как удобнее связаться?\n\n"
         "Можно просто VK (этот чат) — телефон не обязателен.\n"
         "Или телефон / MAX.",
@@ -1141,6 +1170,12 @@ def _step_consent(user_id: int, text: str, message: Dict[str, Any], info: Dict[s
 
 def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     dest = text.strip()
+    if dest == DIRECTION_UNDECIDED_LABEL:
+        info["destination"] = UNDECIDED_DESTINATION
+        info["needs_consultation"] = True
+        info["state"] = STATE_ORIGIN
+        _ask_origin(user_id)
+        return
     if dest.lower() == "другое":
         send_message(user_id, "✍️ Напишите ваше направление:", keyboard=_nav_keyboard())
         return
@@ -1279,8 +1314,8 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     budget_map = {label: val for label, val in BUDGET_PRESETS}
     if raw in budget_map:
         info["budget"] = budget_map[raw]
-        info["state"] = STATE_CONTACT
-        _ask_contact(user_id)
+        info["state"] = STATE_REVIEW
+        _ask_review(user_id)
         return
     ok, value = validate_budget(raw)
     if not ok:
@@ -1291,8 +1326,41 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["budget"] = value
-    info["state"] = STATE_CONTACT
-    _ask_contact(user_id)
+    info["state"] = STATE_REVIEW
+    _ask_review(user_id)
+
+
+def _ask_review(user_id: int) -> None:
+    info = user_data.get(user_id, {})
+    consultation = "\n💬 Нужна консультация по направлению." if info.get("needs_consultation") else ""
+    send_message(
+        user_id,
+        "Проверьте заявку:\n\n"
+        f"📍 {info.get('destination', '—')}\n"
+        f"🛫 Вылет: {info.get('origin', '—')}\n"
+        f"📅 Даты: {info.get('dates', '—')}\n"
+        f"👥 {_party_text(info)}\n"
+        f"💰 До {info.get('budget', '—')} ₽ на человека"
+        f"{consultation}\n\n"
+        "Всё верно?",
+        keyboard=_review_keyboard(),
+    )
+
+
+def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    if text == REVIEW_CONFIRM_TEXT:
+        info["state"] = STATE_CONTACT
+        _ask_contact(user_id)
+        return
+    if text == REVIEW_EDIT_DATES_TEXT:
+        info["state"] = STATE_DATES
+        _ask_dates(user_id)
+        return
+    if text == REVIEW_EDIT_BUDGET_TEXT:
+        info["state"] = STATE_BUDGET
+        _ask_budget(user_id)
+        return
+    _ask_review(user_id)
 
 
 def _step_contact(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -1396,6 +1464,7 @@ _STATE_KEYBOARDS: Dict[str, Callable[[], str]] = {
     STATE_KIDS_AGES:   _kids_ages_keyboard,
     STATE_INFANTS:     _kids_ages_keyboard,
     STATE_BUDGET:      _budget_keyboard,
+    STATE_REVIEW:      _review_keyboard,
     STATE_CONTACT:     _contact_keyboard,
     STATE_PHONE:       _nav_keyboard,
     STATE_MAX:         _nav_keyboard,
@@ -1415,6 +1484,7 @@ STATE_HANDLERS: Dict[str, Callable] = {
     # reply; asking for ages is the right next thing either way.
     STATE_INFANTS:     _step_kids_ages,
     STATE_BUDGET:      _step_budget,
+    STATE_REVIEW:      _step_review,
     STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
     STATE_MAX:         _step_max,
@@ -1431,6 +1501,7 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_KIDS_AGES:   STATE_PEOPLE,
     STATE_INFANTS:     STATE_PEOPLE,
     STATE_BUDGET:      STATE_KIDS_AGES,
+    STATE_REVIEW:      STATE_BUDGET,
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
     STATE_MAX:         STATE_CONTACT,
@@ -1455,6 +1526,8 @@ def _prompt_for_state(user_id: int, state: str) -> None:
         _ask_kids_ages(user_id)
     elif state == STATE_BUDGET:
         _ask_budget(user_id)
+    elif state == STATE_REVIEW:
+        _ask_review(user_id)
     elif state == STATE_CONTACT:
         _ask_contact(user_id)
     elif state == STATE_PHONE:
@@ -1579,7 +1652,7 @@ SYNC_COMPLETION = os.getenv("SYNC_COMPLETION", "").lower().strip() in ("1", "tru
 
 def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
     """Live transport search for a completed lead. Never raises."""
-    if not TUTU_ENABLED:
+    if not TUTU_ENABLED or info.get("needs_consultation"):
         return None
     # Bands come from the exact ages, so a 14-year-old is searched as an adult
     # and a one-year-old as an infant — which is what the airline will charge.
@@ -1660,7 +1733,16 @@ def _post_completion_side_effects(
 
 
 def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None:
-    info = dict(user_data.get(user_id, {}))
+    # VK can deliver separate, valid events almost simultaneously. Guarding
+    # completion prevents duplicate leads and duplicate manager notifications.
+    with _lock:
+        live = user_data.get(user_id)
+        if live is None or live.get("_completing"):
+            logger.info("Concurrent VK completion ignored for user_id=%s", user_id)
+            return
+        live["_completing"] = True
+        info = dict(live)
+    info.pop("_completing", None)
     client_name = message.get("_user_name") or f"VK {user_id}"
 
     try:
@@ -1846,7 +1928,7 @@ def _process_message(message: Dict[str, Any]) -> None:
             return
         if command == "export":
             with _db_cursor() as cur:
-                cur.execute("SELECT chat_id, destination, dates, people, budget, phone FROM sessions WHERE phone IS NOT NULL AND phone != '' ORDER BY updated_at DESC LIMIT 50")
+                cur.execute("SELECT chat_id, destination, dates, people, budget, phone FROM leads ORDER BY created_at DESC LIMIT 50")
                 rows = cur.fetchall()
             if not rows:
                 send_message(user_id, "Нет завершённых заявок для экспорта.")
@@ -1965,6 +2047,7 @@ def load_state() -> None:
             d = dict(row)
             chat_id = d.pop("chat_id")
             d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
+            d["needs_consultation"] = bool(d.get("needs_consultation"))
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():
@@ -1992,24 +2075,8 @@ def health() -> Any:
     return jsonify({
         "status": "ok",
         "platform": "vk",
-        # Отвечает на «я задеплоил, а изменений нет» без ssh.
         "revision": _version.REVISION,
         "uptime_seconds": _version.uptime_seconds(),
-        "vk_token_configured": bool(VK_ACCESS_TOKEN),
-        "vk_group_id": VK_GROUP_ID,
-        "admin_id_configured": bool(ADMIN_ID),
-        "lead_notify_configured": bool(LEAD_NOTIFY_IDS),
-        "groq_configured": bool(GROQ_API_KEY),
-        "ai_mode": AI_MODE,
-        "mdt_enabled": MDT_ENABLED,
-        "mdt_mode": MDT_MODE,
-        "total_users": len(all_users),
-        "active_sessions": len(user_data),
-        "privacy_policy_configured": bool(PRIVACY_POLICY_URL),
-        "data_retention_days": DATA_RETENTION_DAYS,
-        "consent_mode": CONSENT_MODE,
-        "demo_mode": DEMO_MODE,
-        "tutu_enabled": TUTU_ENABLED,
     })
 
 
@@ -2020,12 +2087,13 @@ def vk_webhook() -> Any:
     if not data or "type" not in data:
         return "ok", 200
 
-    # Optional secret-key verification
-    if VK_SECRET_KEY:
-        received_secret = data.get("secret", "")
-        if not hmac.compare_digest(received_secret, VK_SECRET_KEY):
-            logger.warning("VK webhook: invalid secret key")
-            return "ok", 200
+    if not VK_SECRET_KEY:
+        logger.error("VK webhook rejected: VK_SECRET_KEY is not configured")
+        return "Service unavailable", 503
+    received_secret = data.get("secret", "")
+    if not hmac.compare_digest(received_secret, VK_SECRET_KEY):
+        logger.warning("VK webhook: invalid secret key")
+        return "Forbidden", 403
 
     event_type = data["type"]
 
