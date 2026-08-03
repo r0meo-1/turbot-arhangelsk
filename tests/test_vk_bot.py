@@ -213,6 +213,17 @@ def test_dates_and_budget_keyboards():
     assert bot.BUDGET_PRESETS[0][0] in blabels
 
 
+def test_vk_mobile_origin_label_stores_full_city(client):
+    """The compact mobile label must not degrade the city saved in the lead."""
+    _post(client, 955, "Начать")
+    _post(client, 955, bot.CONSENT_YES_TEXT)
+    _post(client, 955, "Египет")
+    _post(client, 955, "Петербург")
+
+    assert bot.user_data[955]["origin"] == "Санкт-Петербург"
+    assert bot.user_data[955]["state"] == bot.STATE_DATES
+
+
 def test_vk_review_allows_fixing_dates_and_budget(client):
     _post(client, 902, "Начать")
     _post(client, 902, bot.CONSENT_YES_TEXT)

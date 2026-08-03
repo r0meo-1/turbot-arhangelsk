@@ -56,7 +56,6 @@ from shared.constants import (
     CONTACT_PHONE_TEXT,
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
-    ORIGIN_OPTIONS_PLAIN,
 )
 from shared import tutu as _tutu
 from shared import version as _version
@@ -238,12 +237,19 @@ DIRECTION_UNDECIDED_LABEL = "🌴 Не определился"
 UNDECIDED_DESTINATION = "Не определился — нужна консультация"
 STATE_REVIEW = "review"
 
-# Quick picks (label on keyboard → value stored in lead). VK label ≤ 40 chars.
+# Quick picks (label on keyboard → value stored in lead). Short labels are
+# deliberate: VK's Android client clips two-column inline buttons aggressively.
 DATE_PRESETS: List[Tuple[str, str]] = [
-    ("🏖 Ближайшие выходные", "ближайшие выходные"),
-    ("📅 В этом месяце", "в этом месяце"),
-    ("🗓 Следующий месяц", "следующий месяц"),
-    ("🤷 Даты гибкие", "даты гибкие"),
+    ("🏖 Выходные", "ближайшие выходные"),
+    ("📅 Этот месяц", "в этом месяце"),
+    ("🗓 След. месяц", "следующий месяц"),
+    ("🤷 Гибкие даты", "даты гибкие"),
+]
+ORIGIN_PRESETS: List[Tuple[str, str]] = [
+    ("Архангельск", "Архангельск"),
+    ("Москва", "Москва"),
+    ("Петербург", "Санкт-Петербург"),
+    ("Другой город", "Другой город"),
 ]
 BUDGET_PRESETS: List[Tuple[str, int]] = [
     ("до 60 000 ₽", 60000),
@@ -1063,7 +1069,7 @@ def handle_cancel(user_id: int) -> None:
 
 
 def _origin_keyboard() -> str:
-    rows = _chunk_buttons(list(ORIGIN_OPTIONS_PLAIN), "primary", 2)
+    rows = _chunk_buttons([label for label, _ in ORIGIN_PRESETS], "primary", 2)
     rows.append([_btn(BACK_BUTTON_TEXT, "secondary"),
                  _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
@@ -1201,7 +1207,8 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
 
 
 def _step_origin(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    city = (text or "").strip()
+    raw_city = (text or "").strip()
+    city = dict(ORIGIN_PRESETS).get(raw_city, raw_city)
     if city.lower() in ("другой город", "другое"):
         send_message(user_id, "✍️ Напишите город вылета:", keyboard=_nav_keyboard())
         return
