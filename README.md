@@ -1,29 +1,49 @@
-# TurBot — Telegram-бот, который не теряет заявки
+# TurBot — production lead-бот для турагентства
 
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-webhook-000)](https://flask.palletsprojects.com/)
 [![tests](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml/badge.svg)](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml)
+[![tests](https://img.shields.io/badge/tests-174_passed-2ea44f)](tests)
+[![channels](https://img.shields.io/badge/channels-Telegram_%2B_VK-0077ff)](#живое-демо)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-> Клиент хочет в Египет. Менеджер в чате. Заявка «где-то в переписке».  
-> **TurBot** — конечный автомат, который вежливо выпытывает направление, даты, людей, бюджет и телефон,  
-> кладёт lead в SQLite, орёт админу в Telegram и (по желанию) пихает всё в **MDT** (МойДокументы.Туризм).  
-> AI-подборка — бонус. Шаблон без VPN — режим выжившего из 2024.
+> Клиент отвечает на короткие вопросы в Telegram или VK. TurBot превращает
+> диалог в структурированную заявку, сохраняет её локально, уведомляет
+> менеджера и передаёт данные в CRM. Сбой внешнего API не теряет лид.
 
-Lead-бот для турагентства **«АПРЕЛЬ тур»**.  
-Flask webhook · gunicorn · SQLite · MDT CRM · пакет `shared/` с VK-версией · тесты · Docker · деплой на РФ VPS.
+Боевой проект для турагентства **«АПРЕЛЬ тур»**, а не учебный echo-бот:
+два мессенджера, интеграция с MDT CRM и Tutu MCP, работа с персональными
+данными, мониторинг и воспроизводимый деплой на российский VPS.
 
-**Репозиторий:** [github.com/r0meo-1/turbot-arhangelsk](https://github.com/r0meo-1/turbot-arhangelsk)
+`Python` · `Flask` · `gunicorn` · `SQLite` · `Telegram Bot API` · `VK Callback API` · `Docker` · `systemd` · `nginx`
 
-## За 20 секунд
+## Кейс в цифрах
 
-| | |
-|--|--|
-| **Что** | Lead-бот: диалог → валидация → SQLite → админ → MDT CRM + живые цены Tutu по MCP |
-| **Зачем** | Заявка не теряется в чате «ну я записал» |
-| **Проверить** | `pytest -q` · [CI](https://github.com/r0meo-1/turbot-arhangelsk/actions) · [живой /health](https://bot.r0meo1.ru/health) |
+| Результат | Реализация |
+|-----------|------------|
+| **2 канала** | Telegram и VK используют общие модули валидации, дат, CRM и политики ПДн |
+| **174 теста** | Диалоговые ветки, webhook security, дедупликация, конкуренция, CRM и сетевые ошибки |
+| **Заявка сначала сохраняется** | SQLite фиксирует лид до обращения к MDT, Tutu или AI |
+| **Продакшен на VPS** | nginx, TLS, systemd, health-check, watchdog, ночные backup и проверяемый deploy |
+| **152-ФЗ** | Российский VPS, согласие, политика, retention и удаление данных командой пользователя |
 
-Сайт: **[r0meo1.ru](https://r0meo1.ru)**
+## Живое демо
+
+| Что открыть | Что можно проверить |
+|-------------|---------------------|
+| [VK-сообщество](https://vk.ru/club240310110) | Боевой вход в диалог и клиентский путь подбора тура |
+| [Health API](https://bot.r0meo1.ru/health) | Статус сервиса и ревизию реально запущенного кода |
+| [Политика ПДн](https://bot.r0meo1.ru/privacy) | Публичную страницу, которую показывает бот перед сбором контакта |
+| [GitHub Actions](https://github.com/r0meo-1/turbot-arhangelsk/actions) | Результаты тестов на каждом push и pull request |
+| [Сайт автора](https://r0meo1.ru) | Другие проекты и контакты |
+
+## Что здесь важно инженеру
+
+- **Надёжный критический путь:** лид попадает в БД раньше любого сетевого вызова.
+- **Защита от дублей:** повторный webhook и двойное нажатие не создают две заявки.
+- **Безопасная деградация:** CRM, Tutu или AI могут упасть, но клиент получает ответ, а менеджер — заявку.
+- **Эксплуатация:** deploy сверяет ревизию обоих сервисов, а health-check проверяет не только наличие процесса.
+- **Безопасность:** секреты webhook проверяются, токены вырезаются из логов, пользователь может удалить свои данные.
 
 ### Как это выглядит
 
@@ -34,15 +54,6 @@ Flask webhook · gunicorn · SQLite · MDT CRM · пакет `shared/` с VK-в�
 приходят с живого MCP-сервера Tutu. Картинку можно перегенерировать и
 посмотреть в дифе — в отличие от PNG, который остаётся верить на слово.
 
-
-## Живое, можно потрогать
-
-<!-- Ссылку на бота в Telegram вставить сюда: | **Бот** | [@имя_бота](https://t.me/имя_бота) | -->
-
-| | |
-|--|--|
-| **Health** | [bot.r0meo1.ru/health](https://bot.r0meo1.ru/health) — JSON со статусом и ревизией запущенного кода |
-| **Политика ПДн** | [bot.r0meo1.ru/privacy](https://bot.r0meo1.ru/privacy) — бот отдаёт её сам, без отдельного хостинга |
 
 Свой VPS в РФ, сертификат Let's Encrypt, `/health` отвечает за **~0.5 с**.
 Ни холодного старта, ни засыпания: то, ради чего проект уехал с бесплатного
