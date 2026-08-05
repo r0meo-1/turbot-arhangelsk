@@ -380,6 +380,7 @@ CB_DEST_PREFIX = "d:"
 CB_ORIGIN_PREFIX = "or:"
 CB_DATE_PREFIX = "dt:"
 CB_PEOPLE_PREFIX = "p:"
+CB_KIDS_PREFIX = "ka:"
 CB_BUDGET_PREFIX = "bd:"
 CB_CONTACT_TG = "ct:tg"
 CB_CONTACT_PHONE = "ct:phone"
@@ -1495,6 +1496,21 @@ def kb_people() -> str:
     return inline_keyboard(rows)
 
 
+def kb_kids_ages() -> str:
+    """Inline: frequent child-age answers + manual entry + nav."""
+    return inline_keyboard([
+        [
+            _inline_btn("🚫 Детей нет", f"{CB_KIDS_PREFIX}none"),
+            _inline_btn("👶 До года", f"{CB_KIDS_PREFIX}infant"),
+        ],
+        [_inline_btn("✏️ Ввести вручную", f"{CB_KIDS_PREFIX}custom")],
+        [
+            _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+            _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+        ],
+    ])
+
+
 def _kb_choices(options: List[str], prefix: str) -> str:
     """Inline row of short choices + nav. Used for the two age-band steps."""
     rows = [[_inline_btn(o, f"{prefix}{o}") for o in options]]
@@ -2138,15 +2154,15 @@ def _ask_kids_ages(chat_id: int) -> None:
     """Возрасты детей одним числовым ответом.
 
     Отдельный вопрос «дети до 12 едут?» убран: он спрашивал то, что и так
-    видно из возрастов, и добавлял шаг ради ответа «да». Кнопками возраст не
-    задать — вариантов восемнадцать на ребёнка, поэтому шаг числовой.
+    видно из возрастов, и добавлял шаг ради ответа «да».
     """
     send_message(
         chat_id,
         "🎂 <b>Напишите возраст каждого ребёнка</b>\n\n"
         "Возраст детей укажите числами через запятую — например: <code>5, 9</code>\n"
         "Малыша можно указать словами «до года».\n"
-        "Если детей нет — отправьте <code>0</code>.",
+        "Если детей нет — нажмите кнопку ниже.",
+        reply_markup=kb_kids_ages(),
         parse_mode="HTML",
     )
 
@@ -2329,7 +2345,19 @@ def _parse_choice(raw: str, prefix: str, options: List[str], none_label: str) ->
 
 
 def _step_kids_ages(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    ok, ages, problem = parse_kids_ages(text or "")
+    raw = (text or "").strip()
+    if raw == f"{CB_KIDS_PREFIX}none":
+        raw = "0"
+    elif raw == f"{CB_KIDS_PREFIX}infant":
+        raw = "до года"
+    elif raw == f"{CB_KIDS_PREFIX}custom":
+        send_message(
+            chat_id,
+            "✏️ Напишите возраст каждого ребёнка через запятую — например: 5, 9.",
+            reply_markup=kb_nav(include_back=True),
+        )
+        return
+    ok, ages, problem = parse_kids_ages(raw)
     if not ok:
         send_message(chat_id, problem)
         return
@@ -3095,6 +3123,14 @@ def _process_callback(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
             return
         _step_people(chat_id, people, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_KIDS_PREFIX):
+        if info.get("state") not in (STATE_KIDS, STATE_KIDS_AGES, STATE_INFANTS):
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_kids_ages(chat_id, cb_data, synthetic, info)
         _mark_dirty(chat_id, user=False)
         return
 

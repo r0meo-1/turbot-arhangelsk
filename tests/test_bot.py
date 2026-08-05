@@ -284,7 +284,7 @@ def test_dialog_completion_via_inline_buttons(client):
     assert bot.user_data[223]["state"] == bot.STATE_KIDS_AGES
     assert bot.user_data[223]["people"] == "2"
 
-    _post(client, 223, "0")            # детей нет
+    _callback(client, 223, f"{bot.CB_KIDS_PREFIX}none")
     assert bot.user_data[223]["state"] == bot.STATE_BUDGET
 
     _post(client, 223, "80000")
@@ -358,6 +358,14 @@ def test_inline_keyboard_builders():
     assert bot.CB_BACK in flat
     assert bot.CB_CANCEL in flat
 
+    kids = json.loads(bot.kb_kids_ages())
+    kflat = [b["callback_data"] for row in kids["inline_keyboard"] for b in row]
+    assert f"{bot.CB_KIDS_PREFIX}none" in kflat
+    assert f"{bot.CB_KIDS_PREFIX}infant" in kflat
+    assert f"{bot.CB_KIDS_PREFIX}custom" in kflat
+    assert bot.CB_BACK in kflat
+    assert bot.CB_CANCEL in kflat
+
     dates = json.loads(bot.kb_dates())
     dflat = [b["callback_data"] for row in dates["inline_keyboard"] for b in row]
     assert f"{bot.CB_DATE_PREFIX}0" in dflat
@@ -367,6 +375,27 @@ def test_inline_keyboard_builders():
     bflat = [b["callback_data"] for row in budget["inline_keyboard"] for b in row]
     assert f"{bot.CB_BUDGET_PREFIX}0" in bflat
     assert f"{bot.CB_BUDGET_PREFIX}custom" in bflat
+
+
+def test_child_age_shortcut_and_manual_entry(client, monkeypatch):
+    _consent(client, 225)
+    for text in ["Турция", "Москва", "15-22 сентября", "2"]:
+        _post(client, 225, text)
+
+    _callback(client, 225, f"{bot.CB_KIDS_PREFIX}infant")
+    assert bot.user_data[225]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[225]["kids_ages"] == [0]
+
+    sent = []
+    monkeypatch.setattr(bot, "send_message",
+                        lambda cid, text, **kwargs: sent.append(text) or _OkResp())
+    _consent(client, 226)
+    for text in ["Турция", "Москва", "15-22 сентября", "2"]:
+        _post(client, 226, text)
+
+    _callback(client, 226, f"{bot.CB_KIDS_PREFIX}custom")
+    assert bot.user_data[226]["state"] == bot.STATE_KIDS_AGES
+    assert any("через запятую" in text for text in sent)
 
 
 def test_full_flow_all_buttons(client):
@@ -382,7 +411,7 @@ def test_full_flow_all_buttons(client):
     assert "выходные" in bot.user_data[910]["dates"]
     _callback(client, 910, f"{bot.CB_PEOPLE_PREFIX}2")
     assert bot.user_data[910]["state"] == bot.STATE_KIDS_AGES
-    _post(client, 910, "0")            # детей нет
+    _callback(client, 910, f"{bot.CB_KIDS_PREFIX}none")
     assert bot.user_data[910]["state"] == bot.STATE_BUDGET
     _callback(client, 910, f"{bot.CB_BUDGET_PREFIX}1")
     assert bot.user_data[910]["state"] == bot.STATE_CONTACT
@@ -977,14 +1006,15 @@ def test_log_filter_redacts_bot_token():
     keeps the token in the path — so one network blip writes it to journald."""
     import logging as _logging
     f = bot._TokenRedactingFilter()
+    fake_secret = "x" * 24
     leaked = ("Retrying after connection broken by NewConnectionError: "
-              "/bot8886586430:AAHzxHyH5hx_ay_Iqgjw1ZciQvAyKe_nz5Q/setChatMenuButton")
+              f"/bot12345:{fake_secret}/setChatMenuButton")
     rec = _logging.LogRecord("urllib3", _logging.WARNING, __file__, 1, leaked, None, None)
     f.filter(rec)
     out = rec.getMessage()
-    assert "AAHzxHyH5hx_ay_Iqgjw1ZciQvAyKe_nz5Q" not in out
+    assert fake_secret not in out
     assert "<redacted>" in out
-    assert "bot8886586430" in out          # id kept: still useful for debugging
+    assert "bot12345" in out               # id kept: still useful for debugging
     assert "setChatMenuButton" in out      # the rest of the message survives
 
 
