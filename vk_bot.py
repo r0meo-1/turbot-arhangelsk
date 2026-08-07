@@ -283,10 +283,10 @@ ORIGIN_PRESETS: List[Tuple[str, str]] = [
     ("Другой город", "Другой город"),
 ]
 BUDGET_PRESETS: List[Tuple[str, int]] = [
-    ("до 60 000 ₽", 60000),
-    ("до 100 000 ₽", 100000),
     ("до 150 000 ₽", 150000),
-    ("150 000+ ₽", 150000),
+    ("до 200 000 ₽", 200000),
+    ("до 300 000 ₽", 300000),
+    ("300 000+ ₽", 300000),
 ]
 DATE_CUSTOM_LABEL = "✏️ Свои даты"
 BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
@@ -295,6 +295,8 @@ REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
 TOUR_SEARCH_BUTTON_TEXT = "🔎 Показать варианты"
 TOUR_MORE_BUTTON_TEXT = "🔄 Ещё варианты"
 TOUR_SEND_MANAGER_TEXT = "✅ Отправить менеджеру"
+TOUR_SEND_SELECTED_TEXT = "✅ Отправить этот вариант"
+CONTACT_OTHER_TEXT = "📱 Телефон или MAX"
 REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
 REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
 NEW_SELECTION_BUTTON_TEXT = "🧳 Новый подбор"
@@ -408,6 +410,7 @@ def init_db() -> None:
                 kids INTEGER,
                 infants INTEGER,
                 budget INTEGER,
+                budget_scope TEXT,
                 phone TEXT,
                 needs_consultation INTEGER NOT NULL DEFAULT 0,
                 selected_tour TEXT,
@@ -427,6 +430,7 @@ def init_db() -> None:
                 kids INTEGER,
                 infants INTEGER,
                 budget INTEGER,
+                budget_scope TEXT,
                 phone TEXT NOT NULL,
                 needs_consultation INTEGER NOT NULL DEFAULT 0,
                 selected_tour TEXT,
@@ -450,6 +454,8 @@ def init_db() -> None:
                 )
             if "selected_tour" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN selected_tour TEXT")
+            if "budget_scope" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN budget_scope TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("PRAGMA journal_mode=WAL")
@@ -477,16 +483,17 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("""
             INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
-                                  kids, kids_ages, infants, budget, phone, needs_consultation,
-                                  selected_tour, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  kids, kids_ages, infants, budget, budget_scope, phone,
+                                  needs_consultation, selected_tour, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
                 dates=excluded.dates, people=excluded.people,
                 kids=excluded.kids, kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
-                budget=excluded.budget, phone=excluded.phone,
+                budget=excluded.budget, budget_scope=excluded.budget_scope,
+                phone=excluded.phone,
                 needs_consultation=excluded.needs_consultation,
                 selected_tour=excluded.selected_tour,
                 updated_at=excluded.updated_at
@@ -495,7 +502,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
               data.get("dates"), data.get("people"),
               data.get("kids"), _ages_to_db(data.get("kids_ages")),
               data.get("infants"), data.get("budget"),
-              data.get("phone"), int(bool(data.get("needs_consultation"))),
+              data.get("budget_scope"), data.get("phone"),
+              int(bool(data.get("needs_consultation"))),
               _tour_to_db(data.get("selected_tour")),
               data.get("updated_at", now)))
 
@@ -542,9 +550,9 @@ def save_lead(
             """
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates,
-                people, kids, kids_ages, infants, budget, phone, needs_consultation,
-                selected_tour, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                people, kids, kids_ages, infants, budget, budget_scope, phone,
+                needs_consultation, selected_tour, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -558,6 +566,7 @@ def save_lead(
                 _ages_to_db(info.get("kids_ages")),
                 info.get("infants"),
                 info.get("budget"),
+                info.get("budget_scope"),
                 phone,
                 int(bool(info.get("needs_consultation"))),
                 _tour_to_db(info.get("selected_tour")),
@@ -1015,6 +1024,7 @@ def _review_keyboard() -> str:
     if TOURVISOR_ENABLED:
         rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "primary")])
     rows.extend([
+        [_btn(CONTACT_OTHER_TEXT, "secondary")],
         [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
         [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
@@ -1022,16 +1032,22 @@ def _review_keyboard() -> str:
     return _keyboard(rows)
 
 
-def _tour_results_keyboard(select_numbers: Optional[List[int]] = None) -> str:
+def _tour_results_keyboard(
+    select_numbers: Optional[List[int]] = None,
+    selected: bool = False,
+) -> str:
     rows: List[List[Dict[str, Any]]] = []
     if select_numbers:
-        rows.append([
-            _btn(f"Выбрать №{number}", "primary", {"command": "tour_select", "number": number})
+        rows.extend([
+            [_btn(f"✅ Тур №{number}", "primary", {"command": "tour_select", "number": number})]
             for number in select_numbers
         ])
     rows.append([_btn(TOUR_MORE_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "positive")])
-    rows.append([_btn(REVIEW_EDIT_DATES_TEXT, "secondary"), _btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")])
+    send_label = TOUR_SEND_SELECTED_TEXT if selected else TOUR_SEND_MANAGER_TEXT
+    rows.append([_btn(send_label, "positive")])
+    rows.append([_btn(CONTACT_OTHER_TEXT, "secondary")])
+    rows.append([_btn(REVIEW_EDIT_DATES_TEXT, "secondary")])
+    rows.append([_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")])
     return _keyboard(rows)
 
 
@@ -1300,7 +1316,7 @@ def _ask_budget(user_id: int, party: Optional[str] = None) -> None:
     send_message(
         user_id,
         party_prefix + "Шаг 5 из 6 · бюджет\n\n"
-        "💰 Бюджет на человека (примерно, ₽)\nКнопка или своя сумма:",
+        "💰 Общий бюджет на всю поездку (примерно, ₽)\nКнопка или своя сумма:",
         keyboard=_budget_keyboard(),
     )
 
@@ -1509,6 +1525,7 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if raw in budget_map:
         info["budget"] = budget_map[raw]
         info["budget_open_ended"] = raw == BUDGET_PRESETS[-1][0]
+        info["budget_scope"] = "total"
         info["state"] = STATE_REVIEW
         _ask_review(user_id)
         return
@@ -1522,6 +1539,7 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         return
     info["budget"] = value
     info["budget_open_ended"] = False
+    info["budget_scope"] = "total"
     info["state"] = STATE_REVIEW
     _ask_review(user_id)
 
@@ -1530,6 +1548,7 @@ def _ask_review(user_id: int) -> None:
     info = user_data.get(user_id, {})
     consultation = "\n💬 Нужна консультация по направлению." if info.get("needs_consultation") else ""
     budget_prefix = "От" if info.get("budget_open_ended") else "До"
+    budget_suffix = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
     send_message(
         user_id,
         "Проверьте заявку:\n\n"
@@ -1537,7 +1556,7 @@ def _ask_review(user_id: int) -> None:
         f"🛫 Вылет: {info.get('origin', '—')}\n"
         f"📅 Даты: {info.get('dates', '—')}\n"
         f"👥 {_party_text(info)}\n"
-        f"💰 {budget_prefix} {info.get('budget', '—')} ₽ на человека"
+        f"💰 {budget_prefix} {info.get('budget', '—')} ₽ {budget_suffix}"
         f"{consultation}\n\n"
         "Всё верно?",
         keyboard=_review_keyboard(),
@@ -1601,11 +1620,13 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         )
         send_message(user_id, _tourvisor.format_client_message(fallback), keyboard=_hide_keyboard())
     numbers = [] if carousel_sent else list(range(offset + 1, offset + len(offers) + 1))
+    with _lock:
+        selected = bool((user_data.get(user_id) or {}).get("selected_tour"))
     send_message(
         user_id,
         f"Показаны варианты {offset + 1}–{offset + len(offers)} из {len(pool)}.\n"
         "Выберите тур или передайте подборку менеджеру.",
-        keyboard=_tour_results_keyboard(numbers),
+        keyboard=_tour_results_keyboard(numbers, selected=selected),
     )
 
 
@@ -1632,6 +1653,11 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
+def _budget_summary(info: Dict[str, Any]) -> str:
+    suffix = " на всю поездку" if info.get("budget_scope") == "total" else ""
+    return f"{info.get('budget', '?')}₽{suffix}"
+
+
 def _select_tour(user_id: int, number: int) -> None:
     with _lock:
         live = user_data.get(user_id)
@@ -1648,7 +1674,7 @@ def _select_tour(user_id: int, number: int) -> None:
         user_id,
         f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
         "Перед бронированием менеджер проверит наличие и окончательную цену.",
-        keyboard=_tour_results_keyboard(),
+        keyboard=_tour_results_keyboard(selected=True),
     )
 
 
@@ -1705,9 +1731,14 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if text == TOUR_MORE_BUTTON_TEXT:
         _send_tour_results_page(user_id, int(info.get("_tour_page") or 0) + 1)
         return
-    if text in (REVIEW_CONFIRM_TEXT, TOUR_SEND_MANAGER_TEXT):
+    if text in (REVIEW_CONFIRM_TEXT, TOUR_SEND_MANAGER_TEXT, TOUR_SEND_SELECTED_TEXT):
         info.pop("_tour_searching", None)
         info.pop("_tour_search_marker", None)
+        info["contact_method"] = "vk"
+        client_name = message.get("_user_name") or f"VK {user_id}"
+        handle_completion(user_id, f"VK (чат id {user_id}) · {client_name}", message)
+        return
+    if text == CONTACT_OTHER_TEXT:
         info["state"] = STATE_CONTACT
         _ask_contact(user_id)
         return
@@ -1869,7 +1900,7 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_INFANTS:     STATE_PEOPLE,
     STATE_BUDGET:      STATE_KIDS_AGES,
     STATE_REVIEW:      STATE_BUDGET,
-    STATE_CONTACT:     STATE_BUDGET,
+    STATE_CONTACT:     STATE_REVIEW,
     STATE_PHONE:       STATE_CONTACT,
     STATE_MAX:         STATE_CONTACT,
     "telegram_handle": STATE_CONTACT,
@@ -1945,7 +1976,7 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
         + f"📅 Даты: {info.get('dates', '?')}\n"
         f"👥 Состав: {_party_text(info)}\n"
-        f"💰 Бюджет: {info.get('budget', '?')}₽\n"
+        f"💰 Бюджет: {_budget_summary(info)}\n"
         f"📞 Связь: {phone}\n"
         + (f"\n🎯 Выбранный вариант:\n{selected}\n" if selected else "")
         + "\n"
@@ -1973,7 +2004,7 @@ def _notify_admin_telegram(
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
         + f"📅 {info.get('dates', '?')}\n"
         f"👥 {_party_text(info)}\n"
-        f"💰 {info.get('budget', '?')}₽\n"
+        f"💰 {_budget_summary(info)}\n"
         f"📞 Связь: {phone}"
         + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else "")
     )
@@ -2009,7 +2040,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
             + f"📅 {info.get('dates', '?')}\n"
             f"👥 {_party_text(info)}\n"
-            f"💰 {info.get('budget', '?')}₽\n"
+            f"💰 {_budget_summary(info)}\n"
             f"📞 Связь: {phone}"
             + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else ""),
         )
@@ -2041,6 +2072,7 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
             kids=_children,
             infants=_infants,
             budget=info.get("budget"),
+            budget_is_total=info.get("budget_scope") == "total",
             log=logger,
         )
     except Exception as exc:

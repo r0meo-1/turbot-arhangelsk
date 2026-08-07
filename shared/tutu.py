@@ -420,6 +420,7 @@ def search_offers(
     kids: Any = 0,
     infants: Any = 0,
     budget: Any = None,
+    budget_is_total: bool = False,
     log: Optional[logging.Logger] = None,
     request_fn: Optional[RequestFn] = None,
 ) -> Optional[SearchResult]:
@@ -467,13 +468,14 @@ def search_offers(
         arguments["children"] = children
     if babies:
         arguments["infants"] = babies
-    # The funnel asks for a budget PER PERSON; Tutu caps the price of the whole
-    # offer. Comparing them directly would filter far too aggressively.
+    # Tutu caps the whole offer. Telegram and legacy VK sessions use a
+    # per-person budget; the current VK funnel supplies a total trip budget.
     try:
         if budget:
-            # Budget is per person; children and infants occupy the same trip,
-            # so the cap tracks everyone travelling, not just the adults.
-            arguments["price_max"] = int(budget) * max(adults + children + babies, 1)
+            amount = int(budget)
+            if not budget_is_total:
+                amount *= max(adults + children + babies, 1)
+            arguments["price_max"] = amount
     except (TypeError, ValueError):
         pass
 

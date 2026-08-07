@@ -151,6 +151,37 @@ def test_open_ended_budget_does_not_set_price_ceiling():
     assert "priceTo" not in captured
 
 
+def test_total_budget_is_not_multiplied_by_party_size():
+    seen = {}
+
+    def request(method, path, params=None):
+        if path == "departures":
+            return [{"id": 1, "name": "Москва"}]
+        if path == "countries":
+            return [{"id": 2, "name": "Турция"}]
+        if path == "tours/search":
+            seen.update(params or {})
+            return {"searchId": 10}
+        if path.endswith("/status"):
+            return {"progress": 100, "status": "completed"}
+        return []
+
+    tourvisor.search_tours(
+        tourvisor.TourvisorSettings(
+            enabled=True, token="test", poll_interval=0, max_wait=1
+        ),
+        session=None,
+        info={
+            "origin": "Москва", "destination": "Турция",
+            "dates": "15-22 сентября 2030", "people": "2",
+            "kids_ages": [5], "budget": 200000, "budget_scope": "total",
+        },
+        request_fn=request, sleep_fn=lambda _: None,
+    )
+
+    assert seen["priceTo"] == 200000
+
+
 def test_client_message_states_total_tour_price():
     result = tourvisor.SearchResult(offers=[tourvisor.TourOffer(
         hotel="Hotel", category=4, region="Сиде", date="2030-09-15",

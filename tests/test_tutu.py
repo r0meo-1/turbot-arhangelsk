@@ -317,6 +317,17 @@ def test_budget_cap_is_multiplied_by_party_size():
     assert fn.seen[0][1]["price_max"] == 150000
 
 
+def test_total_budget_is_not_multiplied_by_party_size():
+    s = tutu.TutuSettings(enabled=True)
+    tutu.get_cache(s).clear()
+    fn = _stub([SAMPLE_SEARCH])
+    tutu.search_offers(
+        s, FakeSession(), destination="Египет", dates_raw="через месяц",
+        people="3", budget=200000, budget_is_total=True, request_fn=fn,
+    )
+    assert fn.seen[0][1]["price_max"] == 200000
+
+
 def test_over_budget_client_message_is_honest():
     """Never quote a client a price several times their stated budget."""
     res = _result()

@@ -289,7 +289,12 @@ def search_tours(
         except (TypeError, ValueError):
             budget = 0
         if budget and not info.get("budget_open_ended"):
-            params["priceTo"] = budget * (adults + len(child_ages))
+            if info.get("budget_scope") == "total":
+                params["priceTo"] = budget
+            else:
+                # Preserve the meaning of sessions started before VK switched
+                # from a per-person budget to a total trip budget.
+                params["priceTo"] = budget * (adults + len(child_ages))
 
         started = caller("GET", "tours/search", params)
         search_id = int((started or {}).get("searchId"))

@@ -154,6 +154,16 @@ def _parse_budget(budget: Any) -> int:
         return 0
 
 
+def _budget_label(info: Dict[str, Any]) -> str:
+    suffix = " на всю поездку" if info.get("budget_scope") == "total" else ""
+    return f"{info.get('budget')}₽{suffix}"
+
+
+def _budget_field_value(info: Dict[str, Any]) -> str:
+    suffix = " ₽ на всю поездку" if info.get("budget_scope") == "total" else ""
+    return f"{info.get('budget')}{suffix}"
+
+
 def add_tourist_temp(
     settings: MDTSettings,
     name: str,
@@ -203,7 +213,7 @@ def create_preorder(
     if info.get("people"):
         comment_parts.append(f"Человек: {info['people']}")
     if budget:
-        comment_parts.append(f"Бюджет: {budget}₽")
+        comment_parts.append(f"Бюджет: {_budget_label(info)}")
 
     params: Dict[str, Any] = {
         "tourist_type": "tourist_temp",
@@ -257,7 +267,7 @@ def create_lead(
     if info.get("people"):
         fields.append({"name": "Количество человек", "values": [str(info["people"])]})
     if info.get("budget"):
-        fields.append({"name": "Бюджет", "values": [str(info["budget"])]})
+        fields.append({"name": "Бюджет", "values": [_budget_field_value(info)]})
     selected = info.get("selected_tour")
     if isinstance(selected, dict):
         selected_text = " · ".join(str(value) for value in (
@@ -310,7 +320,7 @@ def notify_managers(
     if info.get("people"):
         text_parts.append(f"Человек: {info['people']}")
     if info.get("budget"):
-        text_parts.append(f"Бюджет: {info['budget']}₽")
+        text_parts.append(f"Бюджет: {_budget_label(info)}")
     selected = info.get("selected_tour")
     if isinstance(selected, dict) and selected.get("hotel"):
         text_parts.append(

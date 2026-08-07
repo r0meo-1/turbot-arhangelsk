@@ -170,14 +170,12 @@ def test_dialog_completion(client):
         _post(client, 222, text)
     assert bot.user_data[222]["state"] == bot.STATE_REVIEW
     _post(client, 222, bot.REVIEW_CONFIRM_TEXT)
-    assert bot.user_data[222]["state"] == bot.STATE_CONTACT
-    _post(client, 222, "+79161234567")
     assert 222 not in bot.user_data
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone, destination FROM leads WHERE chat_id = ?", (222,))
         row = cur.fetchone()
     assert row is not None
-    assert row[0] == "+79161234567"
+    assert "VK" in row[0]
     assert "Египет" in (row[1] or "")
 
 
@@ -192,9 +190,6 @@ def test_soft_mode_and_vk_contact(client, monkeypatch):
         _post(client, 901, text)
     assert bot.user_data[901]["state"] == bot.STATE_REVIEW
     _post(client, 901, bot.REVIEW_CONFIRM_TEXT)
-    assert bot.user_data[901]["state"] == bot.STATE_CONTACT
-    assert bot.user_data[901]["budget"] == bot.BUDGET_PRESETS[1][1]
-    _post(client, 901, bot.CONTACT_VK_CHAT_LABEL)
     assert 901 not in bot.user_data
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (901,))
@@ -221,7 +216,22 @@ def test_vk_open_ended_budget_is_not_shown_as_maximum(client, monkeypatch):
     bot._step_budget(958, bot.BUDGET_PRESETS[-1][0], {}, bot.user_data[958])
 
     assert bot.user_data[958]["budget_open_ended"] is True
-    assert any("От 150000 ₽" in text for text in captured)
+    assert any(f"От {bot.BUDGET_PRESETS[-1][1]} ₽" in text for text in captured)
+
+
+def test_vk_budget_is_total_and_review_offers_optional_contact(client):
+    _post(client, 9571, "Начать")
+    _post(client, 9571, bot.CONSENT_YES_TEXT)
+    for text in ["Турция", "Москва", "15-22 сентября", "2", "0", "200000"]:
+        _post(client, 9571, text)
+
+    assert bot.user_data[9571]["budget_scope"] == "total"
+    labels = [
+        button["action"]["label"]
+        for row in json.loads(bot._review_keyboard())["buttons"]
+        for button in row
+    ]
+    assert bot.CONTACT_OTHER_TEXT in labels
 
 
 def test_vk_mobile_origin_label_stores_full_city(client):
@@ -360,6 +370,12 @@ def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
     assert stored["hotel"] == "Selected Hotel"
     assert stored["tour_id"] == "offer-42"
     assert "ID предложения: offer-42" in bot._selected_tour_summary(bot.user_data[960])
+    labels = [
+        button["action"]["label"]
+        for row in json.loads(bot._tour_results_keyboard(selected=True))["buttons"]
+        for button in row
+    ]
+    assert bot.TOUR_SEND_SELECTED_TEXT in labels
 
 
 def test_vk_discards_tour_result_after_user_leaves_review(monkeypatch):
@@ -479,7 +495,6 @@ def test_vk_origin_persisted_with_lead(client):
     for text in ["Турция", "Санкт-Петербург", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 902, text)
     _post(client, 902, bot.REVIEW_CONFIRM_TEXT)
-    _post(client, 902, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT origin FROM leads WHERE chat_id = ?", (902,))
         assert cur.fetchone()[0] == "Санкт-Петербург"
@@ -492,7 +507,7 @@ def test_vk_demo_mode_masks_phone(client, monkeypatch):
     _vk_consent(client, 903)
     for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 903, text)
-    _post(client, 903, bot.REVIEW_CONFIRM_TEXT)
+    _post(client, 903, bot.CONTACT_OTHER_TEXT)
     _post(client, 903, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (903,))
@@ -506,7 +521,7 @@ def test_vk_real_mode_keeps_phone(client, monkeypatch):
     _vk_consent(client, 904)
     for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 904, text)
-    _post(client, 904, bot.REVIEW_CONFIRM_TEXT)
+    _post(client, 904, bot.CONTACT_OTHER_TEXT)
     _post(client, 904, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (904,))
@@ -659,7 +674,6 @@ def test_vk_stores_child_ages_with_the_lead(client):
     for text in ["Египет", "Москва", "15-22 сентября", "2", "6", "70000"]:
         _post(client, 906, text)
     _post(client, 906, bot.REVIEW_CONFIRM_TEXT)
-    _post(client, 906, "+79161234567")
     with bot._db_cursor() as cur:
         cur.execute("SELECT kids_ages FROM leads WHERE chat_id = ?", (906,))
         assert cur.fetchone()[0] == "6"
@@ -673,7 +687,7 @@ def _reach_contact(client, uid):
                  "0", "70000"]:
         _post(client, uid, text)
     assert bot.user_data[uid]["state"] == bot.STATE_REVIEW
-    _post(client, uid, bot.REVIEW_CONFIRM_TEXT)
+    _post(client, uid, bot.CONTACT_OTHER_TEXT)
     assert bot.user_data[uid]["state"] == bot.STATE_CONTACT
 
 
