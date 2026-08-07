@@ -223,7 +223,7 @@ def test_vk_budget_presets_are_strict_total_caps(client, monkeypatch):
     assert bot._budget_summary(bot.user_data[958]) == "до 400 000 ₽ на всю поездку"
 
 
-def test_vk_budget_is_total_and_review_offers_optional_contact(client):
+def test_vk_budget_is_total_and_review_offers_direct_contact_choices(client):
     _post(client, 9571, "Начать")
     _post(client, 9571, bot.CONSENT_YES_TEXT)
     for text in ["Турция", "Москва", "15-22 сентября", "2", "0", "200000"]:
@@ -235,7 +235,9 @@ def test_vk_budget_is_total_and_review_offers_optional_contact(client):
         for row in json.loads(bot._review_keyboard())["buttons"]
         for button in row
     ]
-    assert bot.CONTACT_OTHER_TEXT in labels
+    assert bot.CONTACT_PHONE_TEXT in labels
+    assert bot.CONTACT_MAX_TEXT in labels
+    assert bot.CONTACT_OTHER_TEXT not in labels
 
 
 def test_vk_mobile_origin_label_stores_full_city(client):
@@ -366,6 +368,52 @@ def test_vk_review_can_show_tourvisor_results(monkeypatch):
     assert not bot.user_data[user_id].get("_tour_searching")
 
 
+def test_vk_search_replaces_review_keyboard_with_waiting_status(monkeypatch):
+    edits = []
+    user_id = 958
+    bot.user_data[user_id] = {
+        "state": bot.STATE_REVIEW,
+        "destination": "Турция",
+        "origin": "Москва",
+        "dates": "15-22 сентября 2030",
+        "people": "2",
+        "kids_ages": [],
+        "budget": 200000,
+        "_review_message_id": 777,
+    }
+    monkeypatch.setattr(bot, "TOURVISOR_ENABLED", True)
+    monkeypatch.setattr(bot, "TOURVISOR_TOKEN", "test-token")
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", False)
+    monkeypatch.setattr(bot, "send_typing", lambda *args: None)
+    monkeypatch.setattr(
+        bot,
+        "edit_message",
+        lambda uid, mid, text, keyboard=None: edits.append((uid, mid, text, keyboard)) or True,
+    )
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target, args, **kwargs):
+            started.append((target, args))
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(bot.threading, "Thread", FakeThread)
+
+    bot._start_tour_search(user_id, bot.user_data[user_id])
+
+    assert edits[0][1] == 777
+    assert "Ищу актуальные туры" in edits[0][2]
+    labels = [
+        button["action"]["label"]
+        for row in json.loads(edits[0][3])["buttons"]
+        for button in row
+    ]
+    assert labels == [bot.CANCEL_BUTTON_TEXT]
+    assert len(started) == 2
+
+
 def test_vk_tourvisor_native_carousel_contains_selectable_tour_ids(monkeypatch):
     captured = []
     offers = [{
@@ -451,6 +499,25 @@ def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
         for button in row
     ]
     assert bot.TOUR_SEND_SELECTED_TEXT in labels
+    assert bot.CONTACT_PHONE_TEXT in labels
+    assert bot.CONTACT_MAX_TEXT in labels
+
+
+def test_vk_selected_tour_can_choose_phone_without_extra_contact_step(monkeypatch):
+    captured = []
+    user_id = 9601
+    bot.user_data[user_id] = {"state": bot.STATE_REVIEW, "selected_tour": {"hotel": "Test"}}
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda uid, text, **kwargs: captured.append((text, kwargs.get("keyboard"))),
+    )
+
+    bot._step_review(user_id, bot.CONTACT_PHONE_TEXT, {}, bot.user_data[user_id])
+
+    assert bot.user_data[user_id]["state"] == bot.STATE_PHONE
+    assert bot.user_data[user_id]["contact_method"] == "phone"
+    assert "номер телефона" in captured[-1][0]
 
 
 def test_vk_tour_filters_reuse_existing_results(monkeypatch):

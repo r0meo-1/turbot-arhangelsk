@@ -842,6 +842,36 @@ def send_message(
     return _vk_api("messages.send", **params)
 
 
+def _message_id(response: Any) -> Optional[int]:
+    """Extract a VK message id from old and new messages.send responses."""
+    if isinstance(response, int):
+        return response
+    if isinstance(response, dict):
+        value = response.get("message_id")
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def edit_message(
+    user_id: int,
+    message_id: Optional[int],
+    text: str,
+    keyboard: Optional[str] = None,
+) -> bool:
+    """Edit a bot message; callers keep a send fallback for older VK clients."""
+    if not message_id:
+        return False
+    params: Dict[str, Any] = {
+        "peer_id": user_id,
+        "message_id": message_id,
+        "message": text,
+    }
+    if keyboard is not None:
+        params["keyboard"] = _downgrade_if_needed(user_id, keyboard)
+    return _vk_api("messages.edit", **params) is not None
+
+
 _vk_photo_cache: Dict[str, str] = {}
 _vk_photo_cache_lock = threading.Lock()
 
@@ -1083,11 +1113,15 @@ def _review_keyboard() -> str:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.extend([
         [_btn(REVIEW_HOTEL_TEXT, "secondary")],
-        [_btn(CONTACT_OTHER_TEXT, "secondary")],
+        [_btn(CONTACT_PHONE_TEXT, "secondary"), _btn(CONTACT_MAX_TEXT, "secondary")],
         [_btn(TOUR_EDIT_DATES_TEXT, "secondary"), _btn(TOUR_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
     return _keyboard(rows)
+
+
+def _tour_search_wait_keyboard() -> str:
+    return _keyboard([[_btn(CANCEL_BUTTON_TEXT, "negative")]])
 
 
 def _tour_results_keyboard(
@@ -1122,7 +1156,7 @@ def _selected_tour_keyboard() -> str:
         [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
         [_btn(TOUR_SIMILAR_TEXT, "primary")],
         [_btn(TOUR_COMPARE_TEXT, "secondary")],
-        [_btn(CONTACT_OTHER_TEXT, "secondary")],
+        [_btn(CONTACT_PHONE_TEXT, "secondary"), _btn(CONTACT_MAX_TEXT, "secondary")],
         [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
         [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
     ])
@@ -1737,14 +1771,62 @@ def _ask_review(user_id: int) -> None:
         f"{consultation}\n\n"
         "Всё верно?"
     )
-    send_message(
+    response = send_message(
         user_id,
         summary,
         keyboard=_review_keyboard(),
     )
+    info["_review_message_id"] = _message_id(response)
 
 
-def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> None:
+def _tour_search_wait_text(status: str) -> str:
+    return (
+        "🔎 Ищу актуальные туры по вашей заявке\n\n"
+        "✅ Параметры приняты\n"
+        f"{status}\n\n"
+        "Обычно поиск занимает 10–20 секунд. Можно не держать чат открытым — "
+        "я пришлю варианты сюда."
+    )
+
+
+def _tour_search_wait_animation(user_id: int, marker: str, message_id: int) -> None:
+    """Keep VK's native typing indicator alive and gently update one message."""
+    statuses = (
+        "⏳ Запрашиваю предложения у туроператоров…",
+        "✈️ Сверяю даты, длительность и состав туристов…",
+        "💰 Сравниваю доступные варианты по цене…",
+    )
+    for status in statuses:
+        time.sleep(4)
+        with _lock:
+            live = user_data.get(user_id)
+            active = bool(live and live.get("_tour_search_marker") == marker)
+        if not active:
+            return
+        send_typing(user_id)
+        edit_message(
+            user_id,
+            message_id,
+            _tour_search_wait_text(status),
+            keyboard=_tour_search_wait_keyboard(),
+        )
+        # The API may finish between the active check and messages.edit.
+        # Restore the final state so a late animation tick never wins the race.
+        with _lock:
+            live = user_data.get(user_id)
+            active = bool(live and live.get("_tour_search_marker") == marker)
+            final_text = str((live or {}).get("_tour_wait_final_text") or "")
+        if not active and final_text:
+            edit_message(user_id, message_id, final_text, keyboard=_hide_keyboard())
+            return
+
+
+def _tour_search_worker(
+    user_id: int,
+    marker: str,
+    snapshot: Dict[str, Any],
+    wait_message_id: Optional[int] = None,
+) -> None:
     """Search in the background and only answer while this review is current."""
     origins = [part.strip() for part in str(snapshot.get("origin") or "").split("/") if part.strip()]
     origins = origins or [str(snapshot.get("origin") or "")]
@@ -1770,8 +1852,20 @@ def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> 
         live.pop("_tour_search_marker", None)
         if live.get("state") != STATE_REVIEW:
             return
+        final_text = (
+            f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
+            if result.offers else
+            "🔎 Поиск завершён. Готовых вариантов по заданным параметрам не нашлось."
+        )
+        live["_tour_wait_final_text"] = final_text
 
     if result.offers:
+        edit_message(
+            user_id,
+            wait_message_id,
+            final_text,
+            keyboard=_hide_keyboard(),
+        )
         with _lock:
             live = user_data.get(user_id)
             if live is None or live.get("state") != STATE_REVIEW:
@@ -1791,6 +1885,12 @@ def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> 
         return
 
     logger.info("VK Tourvisor search returned no offers for %s: %s", user_id, result.error)
+    edit_message(
+        user_id,
+        wait_message_id,
+        final_text,
+        keyboard=_hide_keyboard(),
+    )
     can_show_over = bool(
         result.search_id and snapshot.get("budget")
         and not snapshot.get("budget_open_ended")
@@ -1912,7 +2012,9 @@ def _select_tour(user_id: int, number: int) -> None:
     send_message(
         user_id,
         f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
-        "Перед бронированием менеджер проверит наличие и окончательную цену.",
+        "Перед бронированием менеджер проверит наличие и окончательную цену.\n\n"
+        "Зелёная кнопка — менеджер ответит в этом чате.\n"
+        "Для связи в другом месте выберите «Телефон» или «MAX».",
         keyboard=_selected_tour_keyboard(),
     )
 
@@ -2074,22 +2176,41 @@ def _start_tour_search(
     info.pop("_tour_offers", None)
     info.pop("_tour_offers_base", None)
     info.pop("_tour_page", None)
+    info.pop("_tour_wait_final_text", None)
     info["_tour_searching"] = True
     info["_tour_search_marker"] = marker
     snapshot = dict(info)
     if ignore_budget:
         snapshot["budget_open_ended"] = True
         snapshot["_show_over_budget"] = True
-    send_message(
+    waiting_text = _tour_search_wait_text("⏳ Запрашиваю предложения у туроператоров…")
+    wait_message_id = info.get("_review_message_id")
+    if not edit_message(
         user_id,
-        "🔎 Ищу актуальные туры у туроператоров. Обычно это занимает 10–20 секунд…",
-    )
+        wait_message_id,
+        waiting_text,
+        keyboard=_tour_search_wait_keyboard(),
+    ):
+        response = send_message(
+            user_id,
+            waiting_text,
+            keyboard=_tour_search_wait_keyboard(),
+        )
+        wait_message_id = _message_id(response)
+    send_typing(user_id)
     if SYNC_COMPLETION:
-        _tour_search_worker(user_id, marker, snapshot)
+        _tour_search_worker(user_id, marker, snapshot, wait_message_id)
     else:
+        if wait_message_id:
+            threading.Thread(
+                target=_tour_search_wait_animation,
+                args=(user_id, marker, wait_message_id),
+                daemon=True,
+                name=f"vk-tour-wait-{user_id}",
+            ).start()
         threading.Thread(
             target=_tour_search_worker,
-            args=(user_id, marker, snapshot),
+            args=(user_id, marker, snapshot, wait_message_id),
             daemon=True,
             name=f"vk-tour-search-{user_id}",
         ).start()
@@ -2142,6 +2263,20 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if text == CONTACT_OTHER_TEXT:
         info["state"] = STATE_CONTACT
         _ask_contact(user_id)
+        return
+    if text == CONTACT_PHONE_TEXT:
+        info["contact_method"] = "phone"
+        info["state"] = STATE_PHONE
+        send_message(
+            user_id,
+            "📱 Укажите номер телефона (+7…):",
+            keyboard=_nav_keyboard(),
+        )
+        return
+    if text == CONTACT_MAX_TEXT:
+        info["contact_method"] = "max"
+        info["state"] = STATE_MAX
+        _ask_max_contact(user_id)
         return
     if text in (REVIEW_EDIT_DATES_TEXT, TOUR_EDIT_DATES_TEXT):
         info.pop("_tour_searching", None)
