@@ -294,9 +294,16 @@ CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
 TOUR_SEARCH_BUTTON_TEXT = "🔎 Показать варианты"
 TOUR_MORE_BUTTON_TEXT = "🔄 Ещё варианты"
-TOUR_SEND_MANAGER_TEXT = "✅ Отправить менеджеру"
+TOUR_SEND_MANAGER_TEXT = "💬 Нужна помощь"
 TOUR_SEND_SELECTED_TEXT = "✅ Отправить этот вариант"
 CONTACT_OTHER_TEXT = "📱 Телефон или MAX"
+TOUR_CHEAPER_TEXT = "💰 Дешевле"
+TOUR_BETTER_TEXT = "⭐ Лучше"
+TOUR_ALL_INCLUSIVE_TEXT = "🍽 Всё включено"
+TOUR_SIMILAR_TEXT = "🏨 Похожие отели"
+TOUR_COMPARE_TEXT = "⚖️ Сравнить варианты"
+TOUR_EDIT_DATES_TEXT = "📅 Даты"
+TOUR_EDIT_BUDGET_TEXT = "💰 Бюджет"
 REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
 REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
 NEW_SELECTION_BUTTON_TEXT = "🧳 Новый подбор"
@@ -860,7 +867,12 @@ def _compact_tour_price(offer: Dict[str, Any]) -> str:
     return f"{amount:,}".replace(",", " ") + f" {suffix}"
 
 
-def send_tour_carousel(user_id: int, offers: List[Dict[str, Any]], offset: int) -> bool:
+def send_tour_carousel(
+    user_id: int,
+    offers: List[Dict[str, Any]],
+    offset: int,
+    active_check: Optional[Callable[[], bool]] = None,
+) -> bool:
     """Send a native VK carousel. False lets the caller use a text fallback."""
     elements = []
     for local_index, offer in enumerate(offers):
@@ -873,7 +885,7 @@ def send_tour_carousel(user_id: int, offers: List[Dict[str, Any]], offset: int) 
         if offer.get("nights"):
             bits.append(f"{offer['nights']} ночей")
         if offer.get("meal"):
-            bits.append(str(offer["meal"]))
+            bits.append(_tourvisor.meal_label(offer["meal"]))
         bits.append("от " + _compact_tour_price(offer))
         element: Dict[str, Any] = {
             "title": title[:80],
@@ -893,6 +905,8 @@ def send_tour_carousel(user_id: int, offers: List[Dict[str, Any]], offset: int) 
             element["action"] = {"type": "open_photo"}
         elements.append(element)
     if not elements:
+        return False
+    if active_check is not None and not active_check():
         return False
     template = json.dumps({"type": "carousel", "elements": elements}, ensure_ascii=False)
     response = _vk_api(
@@ -1018,11 +1032,12 @@ def _budget_keyboard() -> str:
 
 
 def _review_keyboard() -> str:
-    rows = [
-        [_btn(REVIEW_CONFIRM_TEXT, "positive")],
-    ]
+    rows: List[List[Dict[str, Any]]] = []
     if TOURVISOR_ENABLED:
-        rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "primary")])
+        rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "positive")])
+        rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "secondary")])
+    else:
+        rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.extend([
         [_btn(CONTACT_OTHER_TEXT, "secondary")],
         [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
@@ -1038,17 +1053,36 @@ def _tour_results_keyboard(
 ) -> str:
     rows: List[List[Dict[str, Any]]] = []
     if select_numbers:
-        rows.extend([
-            [_btn(f"✅ Тур №{number}", "primary", {"command": "tour_select", "number": number})]
+        rows.append([
+            _btn(f"№{number}", "primary", {"command": "tour_select", "number": number})
             for number in select_numbers
         ])
-    rows.append([_btn(TOUR_MORE_BUTTON_TEXT, "secondary")])
+    rows.append([
+        _btn(TOUR_CHEAPER_TEXT, "secondary"),
+        _btn(TOUR_BETTER_TEXT, "secondary"),
+    ])
+    rows.append([
+        _btn(TOUR_ALL_INCLUSIVE_TEXT, "secondary"),
+        _btn(TOUR_MORE_BUTTON_TEXT, "secondary"),
+    ])
     send_label = TOUR_SEND_SELECTED_TEXT if selected else TOUR_SEND_MANAGER_TEXT
     rows.append([_btn(send_label, "positive")])
-    rows.append([_btn(CONTACT_OTHER_TEXT, "secondary")])
-    rows.append([_btn(REVIEW_EDIT_DATES_TEXT, "secondary")])
-    rows.append([_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")])
+    rows.append([
+        _btn(TOUR_EDIT_DATES_TEXT, "secondary"),
+        _btn(TOUR_EDIT_BUDGET_TEXT, "secondary"),
+    ])
     return _keyboard(rows)
+
+
+def _selected_tour_keyboard() -> str:
+    return _keyboard([
+        [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
+        [_btn(TOUR_SIMILAR_TEXT, "primary")],
+        [_btn(TOUR_COMPARE_TEXT, "secondary")],
+        [_btn(CONTACT_OTHER_TEXT, "secondary")],
+        [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
+        [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
+    ])
 
 
 def _contact_keyboard() -> str:
@@ -1582,7 +1616,9 @@ def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> 
             live = user_data.get(user_id)
             if live is None or live.get("state") != STATE_REVIEW:
                 return
-            live["_tour_offers"] = [offer.__dict__.copy() for offer in result.offers]
+            offers = [offer.__dict__.copy() for offer in result.offers]
+            live["_tour_offers_base"] = offers
+            live["_tour_offers"] = list(offers)
             live["_tour_page"] = 0
             live.pop("selected_tour", None)
         _send_tour_results_page(user_id, 0)
@@ -1596,6 +1632,12 @@ def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> 
         "проверит чартеры и предложения, которых нет в автоматическом поиске.",
         keyboard=_review_keyboard(),
     )
+
+
+def _tour_results_active(user_id: int) -> bool:
+    with _lock:
+        live = user_data.get(user_id)
+        return bool(live and live.get("state") == STATE_REVIEW and live.get("_tour_offers"))
 
 
 def _send_tour_results_page(user_id: int, page: int) -> None:
@@ -1613,20 +1655,29 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         offers = pool[offset:offset + 3]
         live["_tour_page"] = page
 
-    carousel_sent = send_tour_carousel(user_id, offers, offset)
+    active_check = lambda: _tour_results_active(user_id)
+    carousel_sent = send_tour_carousel(user_id, offers, offset, active_check=active_check)
+    if not active_check():
+        return
+    with _lock:
+        selected = bool((user_data.get(user_id) or {}).get("selected_tour"))
+    numbers = [] if carousel_sent else list(range(offset + 1, offset + len(offers) + 1))
+    keyboard = _tour_results_keyboard(numbers, selected=selected)
     if not carousel_sent:
         fallback = _tourvisor.SearchResult(
             offers=[_tourvisor.TourOffer(**offer) for offer in offers]
         )
-        send_message(user_id, _tourvisor.format_client_message(fallback), keyboard=_hide_keyboard())
-    numbers = [] if carousel_sent else list(range(offset + 1, offset + len(offers) + 1))
-    with _lock:
-        selected = bool((user_data.get(user_id) or {}).get("selected_tour"))
+        send_message(
+            user_id,
+            _tourvisor.format_client_message(fallback, start_index=offset + 1),
+            keyboard=keyboard,
+        )
+        return
     send_message(
         user_id,
         f"Показаны варианты {offset + 1}–{offset + len(offers)} из {len(pool)}.\n"
         "Выберите тур или передайте подборку менеджеру.",
-        keyboard=_tour_results_keyboard(numbers, selected=selected),
+        keyboard=keyboard,
     )
 
 
@@ -1641,10 +1692,17 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
     parts = [f"🏨 {title}"]
     if offer.get("region"):
         parts.append(f"📍 {offer['region']}")
-    if offer.get("date") or offer.get("nights"):
-        parts.append(f"📅 {offer.get('date', '')} · {offer.get('nights', '?')} ночей")
+    trip_details = []
+    if offer.get("date"):
+        trip_details.append(_tourvisor.display_date(offer["date"]))
+    if offer.get("nights"):
+        trip_details.append(f"{offer['nights']} ночей")
+    if trip_details:
+        parts.append("📅 " + " · ".join(trip_details))
     if offer.get("meal"):
-        parts.append(f"🍽 {offer['meal']}")
+        parts.append(f"🍽 {_tourvisor.meal_label(offer['meal'])}")
+    if offer.get("room"):
+        parts.append(f"🛏 Номер: {offer['room']}")
     parts.append(f"💰 {_compact_tour_price(offer)} за тур")
     if offer.get("operator"):
         parts.append(f"Туроператор: {offer['operator']}")
@@ -1674,7 +1732,134 @@ def _select_tour(user_id: int, number: int) -> None:
         user_id,
         f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
         "Перед бронированием менеджер проверит наличие и окончательную цену.",
-        keyboard=_tour_results_keyboard(selected=True),
+        keyboard=_selected_tour_keyboard(),
+    )
+
+
+def _offer_total_price(offer: Dict[str, Any]) -> int:
+    try:
+        return int(offer.get("price") or 0) + int(offer.get("fuel_charge") or 0)
+    except (TypeError, ValueError):
+        return 10**15
+
+
+def _base_tour_offers(info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return list(info.get("_tour_offers_base") or info.get("_tour_offers") or [])
+
+
+def _show_tour_view(
+    user_id: int,
+    offers: List[Dict[str, Any]],
+    intro: str,
+    *,
+    keep_selected: bool = False,
+) -> None:
+    with _lock:
+        live = user_data.get(user_id)
+        if live is None or live.get("state") != STATE_REVIEW:
+            return
+        live["_tour_offers"] = list(offers)
+        live["_tour_page"] = 0
+        if not keep_selected:
+            live.pop("selected_tour", None)
+    send_message(user_id, intro, keyboard=_hide_keyboard())
+    _send_tour_results_page(user_id, 0)
+
+
+def _apply_tour_filter(user_id: int, mode: str) -> None:
+    with _lock:
+        live = user_data.get(user_id)
+        base = _base_tour_offers(live or {})
+    if not base:
+        send_message(user_id, "Сначала нажмите «Показать варианты».", keyboard=_review_keyboard())
+        return
+
+    if mode == "cheaper":
+        offers = sorted(base, key=_offer_total_price)
+        intro = "💰 Сначала показываю самые доступные варианты."
+    elif mode == "better":
+        offers = sorted(
+            base,
+            key=lambda offer: (-int(offer.get("category") or 0), _offer_total_price(offer)),
+        )
+        intro = "⭐ Сначала показываю отели с более высокой категорией."
+    else:
+        offers = [offer for offer in base if _tourvisor.is_all_inclusive(offer.get("meal"))]
+        if not offers:
+            send_message(
+                user_id,
+                "Среди найденных туров нет вариантов «всё включено». "
+                "Попробуйте другой бюджет или даты.",
+                keyboard=_tour_results_keyboard(),
+            )
+            return
+        offers.sort(key=_offer_total_price)
+        intro = "🍽 Оставил только варианты с питанием «всё включено»."
+    _show_tour_view(user_id, offers, intro)
+
+
+def _show_similar_tours(user_id: int) -> None:
+    with _lock:
+        live = user_data.get(user_id) or {}
+        selected = live.get("selected_tour")
+        base = _base_tour_offers(live)
+    if not isinstance(selected, dict):
+        send_message(user_id, "Сначала выберите один из туров.", keyboard=_tour_results_keyboard())
+        return
+    selected_id = str(selected.get("tour_id") or "")
+    selected_hotel = str(selected.get("hotel") or "").casefold()
+    candidates = [
+        offer for offer in base
+        if not (
+            (selected_id and str(offer.get("tour_id") or "") == selected_id)
+            or str(offer.get("hotel") or "").casefold() == selected_hotel
+        )
+    ]
+    region = str(selected.get("region") or "").casefold()
+    same_region = [offer for offer in candidates if str(offer.get("region") or "").casefold() == region]
+    if same_region:
+        candidates = same_region
+    category = int(selected.get("category") or 0)
+    price = _offer_total_price(selected)
+    candidates.sort(key=lambda offer: (
+        abs(int(offer.get("category") or 0) - category),
+        abs(_offer_total_price(offer) - price),
+    ))
+    if not candidates:
+        send_message(user_id, "Похожих отелей в этой выдаче больше нет.", keyboard=_selected_tour_keyboard())
+        return
+    _show_tour_view(
+        user_id,
+        candidates,
+        "🏨 Вот наиболее похожие отели из найденной подборки.",
+        keep_selected=True,
+    )
+
+
+def _compare_tours(user_id: int) -> None:
+    with _lock:
+        live = user_data.get(user_id) or {}
+        selected = live.get("selected_tour")
+        base = _base_tour_offers(live)
+    if not isinstance(selected, dict):
+        send_message(user_id, "Сначала выберите один из туров.", keyboard=_tour_results_keyboard())
+        return
+    selected_id = str(selected.get("tour_id") or "")
+    selected_hotel = str(selected.get("hotel") or "").casefold()
+    alternatives = [
+        offer for offer in base
+        if not (
+            (selected_id and str(offer.get("tour_id") or "") == selected_id)
+            or str(offer.get("hotel") or "").casefold() == selected_hotel
+        )
+    ]
+    alternatives.sort(key=_offer_total_price)
+    comparison = [dict(selected)] + alternatives[:2]
+    _show_tour_view(
+        user_id,
+        comparison,
+        "⚖️ Сравните выбранный тур с двумя доступными альтернативами.",
+        keep_selected=True,
     )
 
 
@@ -1701,6 +1886,7 @@ def _start_tour_search(user_id: int, info: Dict[str, Any]) -> None:
     marker = f"{time.time_ns()}-{random.randint(1000, 9999)}"
     info.pop("selected_tour", None)
     info.pop("_tour_offers", None)
+    info.pop("_tour_offers_base", None)
     info.pop("_tour_page", None)
     info["_tour_searching"] = True
     info["_tour_search_marker"] = marker
@@ -1724,12 +1910,31 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if text == TOUR_SEARCH_BUTTON_TEXT:
         _start_tour_search(user_id, info)
         return
-    selected_match = re.fullmatch(r"(?:✅\s*)?Выбрать\s*№?\s*(\d+)", (text or "").strip(), re.I)
+    selected_match = re.fullmatch(
+        r"(?:✅\s*)?(?:(?:Выбрать|Тур)\s*)?№?\s*(\d+)",
+        (text or "").strip(),
+        re.I,
+    )
     if selected_match:
         _select_tour(user_id, int(selected_match.group(1)))
         return
     if text == TOUR_MORE_BUTTON_TEXT:
         _send_tour_results_page(user_id, int(info.get("_tour_page") or 0) + 1)
+        return
+    if text == TOUR_CHEAPER_TEXT:
+        _apply_tour_filter(user_id, "cheaper")
+        return
+    if text == TOUR_BETTER_TEXT:
+        _apply_tour_filter(user_id, "better")
+        return
+    if text == TOUR_ALL_INCLUSIVE_TEXT:
+        _apply_tour_filter(user_id, "all_inclusive")
+        return
+    if text == TOUR_SIMILAR_TEXT:
+        _show_similar_tours(user_id)
+        return
+    if text == TOUR_COMPARE_TEXT:
+        _compare_tours(user_id)
         return
     if text in (REVIEW_CONFIRM_TEXT, TOUR_SEND_MANAGER_TEXT, TOUR_SEND_SELECTED_TEXT):
         info.pop("_tour_searching", None)
@@ -1742,19 +1947,21 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         info["state"] = STATE_CONTACT
         _ask_contact(user_id)
         return
-    if text == REVIEW_EDIT_DATES_TEXT:
+    if text in (REVIEW_EDIT_DATES_TEXT, TOUR_EDIT_DATES_TEXT):
         info.pop("_tour_searching", None)
         info.pop("_tour_search_marker", None)
         info.pop("selected_tour", None)
         info.pop("_tour_offers", None)
+        info.pop("_tour_offers_base", None)
         info["state"] = STATE_DATES
         _ask_dates(user_id)
         return
-    if text == REVIEW_EDIT_BUDGET_TEXT:
+    if text in (REVIEW_EDIT_BUDGET_TEXT, TOUR_EDIT_BUDGET_TEXT):
         info.pop("_tour_searching", None)
         info.pop("_tour_search_marker", None)
         info.pop("selected_tour", None)
         info.pop("_tour_offers", None)
+        info.pop("_tour_offers_base", None)
         info["state"] = STATE_BUDGET
         _ask_budget(user_id)
         return

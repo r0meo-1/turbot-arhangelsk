@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-webhook-000)](https://flask.palletsprojects.com/)
 [![tests](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml/badge.svg)](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml)
-[![tests](https://img.shields.io/badge/tests-174_passed-2ea44f)](tests)
+[![tests](https://img.shields.io/badge/tests-192_passed-2ea44f)](tests)
 [![channels](https://img.shields.io/badge/channels-Telegram_%2B_VK-0077ff)](#живое-демо)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -12,7 +12,8 @@
 > менеджера и передаёт данные в CRM. Сбой внешнего API не теряет лид.
 
 Боевой проект для турагентства **«АПРЕЛЬ тур»**, а не учебный echo-бот:
-два мессенджера, интеграция с MDT CRM и Tutu MCP, работа с персональными
+два мессенджера, самостоятельная выдача туров Tourvisor, интеграция с MDT CRM
+и Tutu MCP, работа с персональными
 данными, мониторинг и воспроизводимый деплой на российский VPS.
 
 `Python` · `Flask` · `gunicorn` · `SQLite` · `Telegram Bot API` · `VK Callback API` · `Docker` · `systemd` · `nginx`
@@ -22,7 +23,8 @@
 | Результат | Реализация |
 |-----------|------------|
 | **2 канала** | Telegram и VK используют общие модули валидации, дат, CRM и политики ПДн |
-| **174 теста** | Диалоговые ветки, webhook security, дедупликация, конкуренция, CRM и сетевые ошибки |
+| **192 теста** | Диалоговые ветки, webhook security, Tourvisor, дедупликация, конкуренция, CRM и сетевые ошибки |
+| **Подбор без менеджера** | VK показывает туры, фильтрует их по цене, категории и питанию, сравнивает похожие варианты |
 | **Заявка сначала сохраняется** | SQLite фиксирует лид до обращения к MDT, Tutu или AI |
 | **Продакшен на VPS** | nginx, TLS, systemd, health-check, watchdog, ночные backup и проверяемый deploy |
 | **152-ФЗ** | Российский VPS, согласие, политика, retention и удаление данных командой пользователя |

@@ -193,3 +193,17 @@ def test_client_message_states_total_tour_price():
 
     assert "180 000 ₽ + сбор 5 000 ₽ за тур" in text
     assert "на человека" not in text
+
+
+def test_client_message_humanises_meal_date_and_keeps_page_numbers():
+    result = tourvisor.SearchResult(offers=[tourvisor.TourOffer(
+        hotel="Hotel", category=4, region="Сиде", date="2030-09-15",
+        nights=7, meal="RO", room="Standard", operator="Алеан", price=180000,
+    )])
+
+    text = tourvisor.format_client_message(result, start_index=4)
+
+    assert "4. Hotel" in text
+    assert "15.09.2030" in text
+    assert "без питания" in text
+    assert tourvisor.is_all_inclusive("UAI") is True

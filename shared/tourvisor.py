@@ -325,21 +325,57 @@ def _format_price(value: int, currency: str) -> str:
     return f"{value:,}".replace(",", " ") + f" {suffix}"
 
 
-def format_client_message(result: SearchResult, max_len: int = 3500) -> str:
+_MEAL_LABELS = {
+    "RO": "без питания",
+    "BB": "завтраки",
+    "HB": "завтраки и ужины",
+    "FB": "полный пансион",
+    "AI": "всё включено",
+    "UAI": "ультра всё включено",
+}
+
+
+def meal_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    return _MEAL_LABELS.get(raw.upper(), raw)
+
+
+def display_date(value: Any) -> str:
+    raw = str(value or "").strip()
+    try:
+        return datetime.strptime(raw[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return raw
+
+
+def is_all_inclusive(value: Any) -> bool:
+    normalised = meal_label(value).casefold().replace("ё", "е")
+    return (
+        "все включено" in normalised
+        or "all inclusive" in normalised
+        or str(value or "").strip().upper() in {"AI", "UAI"}
+    )
+
+
+def format_client_message(
+    result: SearchResult,
+    max_len: int = 3500,
+    start_index: int = 1,
+) -> str:
     if not result.offers:
         return ""
     lines = ["🔎 Нашёл несколько вариантов по вашей заявке:", ""]
-    for index, offer in enumerate(result.offers, 1):
+    for index, offer in enumerate(result.offers, start_index):
         stars = f" {offer.category}★" if offer.category else ""
         place = f" · {offer.region}" if offer.region else ""
         lines.append(f"{index}. {offer.hotel}{stars}{place}")
         details = []
         if offer.date:
-            details.append(offer.date)
+            details.append(display_date(offer.date))
         if offer.nights:
             details.append(f"{offer.nights} ночей")
         if offer.meal:
-            details.append(offer.meal)
+            details.append(meal_label(offer.meal))
         if details:
             lines.append("   📅 " + " · ".join(details))
         if offer.room:

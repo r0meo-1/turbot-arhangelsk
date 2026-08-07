@@ -335,7 +335,9 @@ def test_vk_more_tours_pages_existing_results_without_new_search(monkeypatch):
     }
     monkeypatch.setattr(
         bot, "send_tour_carousel",
-        lambda uid, offers, offset: pages.append((offset, [o["hotel"] for o in offers])) or True,
+        lambda uid, offers, offset, **kwargs: pages.append(
+            (offset, [o["hotel"] for o in offers])
+        ) or True,
     )
     monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
 
@@ -372,10 +374,66 @@ def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
     assert "ID предложения: offer-42" in bot._selected_tour_summary(bot.user_data[960])
     labels = [
         button["action"]["label"]
-        for row in json.loads(bot._tour_results_keyboard(selected=True))["buttons"]
+        for row in json.loads(bot._selected_tour_keyboard())["buttons"]
         for button in row
     ]
     assert bot.TOUR_SEND_SELECTED_TEXT in labels
+
+
+def test_vk_tour_filters_reuse_existing_results(monkeypatch):
+    offers = [
+        {"hotel": "Budget", "category": 3, "meal": "RO", "price": 90000, "fuel_charge": 0},
+        {"hotel": "Premium", "category": 5, "meal": "BB", "price": 180000, "fuel_charge": 0},
+        {"hotel": "All Inclusive", "category": 4, "meal": "AI", "price": 150000, "fuel_charge": 0},
+    ]
+    bot.user_data[961] = {
+        "state": bot.STATE_REVIEW,
+        "_tour_offers": list(offers),
+        "_tour_offers_base": list(offers),
+    }
+    shown = []
+    monkeypatch.setattr(
+        bot,
+        "_send_tour_results_page",
+        lambda uid, page: shown.append([o["hotel"] for o in bot.user_data[uid]["_tour_offers"]]),
+    )
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
+
+    bot._apply_tour_filter(961, "better")
+    bot._apply_tour_filter(961, "all_inclusive")
+
+    assert shown[0] == ["Premium", "All Inclusive", "Budget"]
+    assert shown[1] == ["All Inclusive"]
+
+
+def test_vk_fallback_sends_text_and_buttons_together(monkeypatch):
+    sent = []
+    bot.user_data[962] = {
+        "state": bot.STATE_REVIEW,
+        "_tour_offers": [{
+            "hotel": "Hotel", "category": 4, "region": "Сиде",
+            "date": "2030-09-15", "nights": 7, "meal": "RO", "room": "Std",
+            "operator": "Operator", "price": 100000, "currency": "RUB",
+            "fuel_charge": 0, "tour_id": "1", "picture_url": "",
+        }],
+    }
+    monkeypatch.setattr(bot, "send_tour_carousel", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        bot, "send_message",
+        lambda uid, text, **kwargs: sent.append((text, kwargs.get("keyboard"))),
+    )
+
+    bot._send_tour_results_page(962, 0)
+
+    assert len(sent) == 1
+    assert "Hotel" in sent[0][0]
+    assert sent[0][1]
+    labels = [
+        button["action"]["label"]
+        for row in json.loads(sent[0][1])["buttons"]
+        for button in row
+    ]
+    assert "№1" in labels
 
 
 def test_vk_discards_tour_result_after_user_leaves_review(monkeypatch):
