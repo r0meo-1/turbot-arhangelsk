@@ -55,6 +55,8 @@ class TourOffer:
     price: int
     currency: str = "RUB"
     fuel_charge: int = 0
+    tour_id: str = ""
+    picture_url: str = ""
 
 
 @dataclass
@@ -214,6 +216,8 @@ def _extract_offers(payload: Any, limit: int) -> List[TourOffer]:
             price=price,
             currency=str(tour.get("currency") or hotel.get("currency") or "RUB"),
             fuel_charge=fuel_charge,
+            tour_id=str(tour.get("id") or ""),
+            picture_url=str(hotel.get("picturelink") or ""),
         ))
     offers.sort(key=lambda item: item.price + item.fuel_charge)
     # One cheapest room per hotel is enough for a compact messenger preview.

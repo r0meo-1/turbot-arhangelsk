@@ -230,8 +230,11 @@ TOURVISOR_BASE_URL = os.getenv(
 ).strip()
 TOURVISOR_TIMEOUT = _env_int("TOURVISOR_TIMEOUT", 15)
 TOURVISOR_POLL_INTERVAL = _env_int("TOURVISOR_POLL_INTERVAL", 3)
-TOURVISOR_MAX_WAIT = _env_int("TOURVISOR_MAX_WAIT", 15)
-TOURVISOR_MAX_OFFERS = _env_int("TOURVISOR_MAX_OFFERS", 3)
+TOURVISOR_MAX_WAIT = _env_int("TOURVISOR_MAX_WAIT", 30)
+TOURVISOR_MAX_OFFERS = _env_int("TOURVISOR_MAX_OFFERS", 9)
+TOURVISOR_CAROUSEL_IMAGES = os.getenv(
+    "VK_TOURVISOR_CAROUSEL_IMAGES", "true"
+).lower().strip() in ("1", "true", "yes")
 
 
 def _tourvisor_settings() -> "_tourvisor.TourvisorSettings":
@@ -290,6 +293,8 @@ BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
 CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
 TOUR_SEARCH_BUTTON_TEXT = "🔎 Показать варианты"
+TOUR_MORE_BUTTON_TEXT = "🔄 Ещё варианты"
+TOUR_SEND_MANAGER_TEXT = "✅ Отправить менеджеру"
 REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
 REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
 NEW_SELECTION_BUTTON_TEXT = "🧳 Новый подбор"
@@ -405,6 +410,7 @@ def init_db() -> None:
                 budget INTEGER,
                 phone TEXT,
                 needs_consultation INTEGER NOT NULL DEFAULT 0,
+                selected_tour TEXT,
                 updated_at INTEGER NOT NULL
             )
         """)
@@ -423,6 +429,7 @@ def init_db() -> None:
                 budget INTEGER,
                 phone TEXT NOT NULL,
                 needs_consultation INTEGER NOT NULL DEFAULT 0,
+                selected_tour TEXT,
                 created_at INTEGER NOT NULL
             )
         """)
@@ -441,6 +448,8 @@ def init_db() -> None:
                 cur.execute(
                     f"ALTER TABLE {_t} ADD COLUMN needs_consultation INTEGER NOT NULL DEFAULT 0"
                 )
+            if "selected_tour" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN selected_tour TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("PRAGMA journal_mode=WAL")
@@ -448,13 +457,29 @@ def init_db() -> None:
 
 # --- session helpers ---
 
+def _tour_to_db(value: Any) -> Optional[str]:
+    if not isinstance(value, dict) or not value:
+        return None
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _tour_from_db(raw: Any) -> Optional[Dict[str, Any]]:
+    if not raw:
+        return None
+    try:
+        value = json.loads(str(raw))
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
 def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     now = int(time.time())
     with _db_cursor(commit=True) as cur:
         cur.execute("""
             INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
-                                  kids, kids_ages, infants, budget, phone, needs_consultation, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  kids, kids_ages, infants, budget, phone, needs_consultation,
+                                  selected_tour, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
@@ -463,6 +488,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 infants=excluded.infants,
                 budget=excluded.budget, phone=excluded.phone,
                 needs_consultation=excluded.needs_consultation,
+                selected_tour=excluded.selected_tour,
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
               data.get("origin"),
@@ -470,6 +496,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
               data.get("kids"), _ages_to_db(data.get("kids_ages")),
               data.get("infants"), data.get("budget"),
               data.get("phone"), int(bool(data.get("needs_consultation"))),
+              _tour_to_db(data.get("selected_tour")),
               data.get("updated_at", now)))
 
 
@@ -515,8 +542,9 @@ def save_lead(
             """
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates,
-                people, kids, kids_ages, infants, budget, phone, needs_consultation, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                people, kids, kids_ages, infants, budget, phone, needs_consultation,
+                selected_tour, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -532,6 +560,7 @@ def save_lead(
                 info.get("budget"),
                 phone,
                 int(bool(info.get("needs_consultation"))),
+                _tour_to_db(info.get("selected_tour")),
                 now,
             ),
         )
@@ -764,6 +793,109 @@ def send_message(
     return _vk_api("messages.send", **params)
 
 
+_vk_photo_cache: Dict[str, str] = {}
+_vk_photo_cache_lock = threading.Lock()
+
+
+def _upload_vk_message_photo(user_id: int, url: str) -> str:
+    """Upload one trusted Tourvisor image to VK and return owner_id_photo_id."""
+    if not TOURVISOR_CAROUSEL_IMAGES or not str(url or "").startswith(("http://", "https://")):
+        return ""
+    with _vk_photo_cache_lock:
+        cached = _vk_photo_cache.get(url)
+    if cached:
+        return cached
+    try:
+        image = http_session.get(url, timeout=10)
+        image.raise_for_status()
+        content_type = image.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+        if not content_type.startswith("image/") or len(image.content) > 10 * 1024 * 1024:
+            return ""
+        server = _vk_api("photos.getMessagesUploadServer", peer_id=user_id) or {}
+        upload_url = server.get("upload_url")
+        if not upload_url:
+            return ""
+        uploaded = http_session.post(
+            upload_url,
+            files={"photo": ("tour.jpg", image.content, content_type)},
+            timeout=HTTP_TIMEOUT,
+        )
+        uploaded.raise_for_status()
+        payload = uploaded.json()
+        saved = _vk_api(
+            "photos.saveMessagesPhoto",
+            server=payload.get("server"),
+            photo=payload.get("photo"),
+            hash=payload.get("hash"),
+        )
+        if not isinstance(saved, list) or not saved:
+            return ""
+        photo_id = f"{saved[0]['owner_id']}_{saved[0]['id']}"
+        with _vk_photo_cache_lock:
+            if len(_vk_photo_cache) >= 128:
+                _vk_photo_cache.pop(next(iter(_vk_photo_cache)))
+            _vk_photo_cache[url] = photo_id
+        return photo_id
+    except Exception as exc:
+        logger.info("VK carousel photo skipped: %s", exc)
+        return ""
+
+
+def _compact_tour_price(offer: Dict[str, Any]) -> str:
+    try:
+        amount = int(offer.get("price") or 0) + int(offer.get("fuel_charge") or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    currency = str(offer.get("currency") or "RUB").upper()
+    suffix = "₽" if currency in ("RUB", "RUR") else currency
+    return f"{amount:,}".replace(",", " ") + f" {suffix}"
+
+
+def send_tour_carousel(user_id: int, offers: List[Dict[str, Any]], offset: int) -> bool:
+    """Send a native VK carousel. False lets the caller use a text fallback."""
+    elements = []
+    for local_index, offer in enumerate(offers):
+        number = offset + local_index + 1
+        title = f"{offer.get('hotel') or 'Отель'}"
+        category = int(offer.get("category") or 0)
+        if category:
+            title += f" {category}★"
+        bits = [str(offer.get("region") or "").strip()]
+        if offer.get("nights"):
+            bits.append(f"{offer['nights']} ночей")
+        if offer.get("meal"):
+            bits.append(str(offer["meal"]))
+        bits.append("от " + _compact_tour_price(offer))
+        element: Dict[str, Any] = {
+            "title": title[:80],
+            "description": " · ".join(bit for bit in bits if bit)[:80],
+            "buttons": [
+                _btn(
+                    f"Выбрать №{number}",
+                    "primary",
+                    {"command": "tour_select", "number": number,
+                     "tour_id": offer.get("tour_id") or ""},
+                )
+            ],
+        }
+        photo_id = _upload_vk_message_photo(user_id, str(offer.get("picture_url") or ""))
+        if photo_id:
+            element["photo_id"] = photo_id
+            element["action"] = {"type": "open_photo"}
+        elements.append(element)
+    if not elements:
+        return False
+    template = json.dumps({"type": "carousel", "elements": elements}, ensure_ascii=False)
+    response = _vk_api(
+        "messages.send",
+        user_id=user_id,
+        message="Актуальные варианты по вашей заявке",
+        template=template,
+        random_id=random.randint(0, 2**31),
+    )
+    return response is not None
+
+
 def send_typing(user_id: int) -> None:
     """Send 'typing' indicator via VK messages.setActivity."""
     if not VK_ACCESS_TOKEN:
@@ -887,6 +1019,19 @@ def _review_keyboard() -> str:
         [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
+    return _keyboard(rows)
+
+
+def _tour_results_keyboard(select_numbers: Optional[List[int]] = None) -> str:
+    rows: List[List[Dict[str, Any]]] = []
+    if select_numbers:
+        rows.append([
+            _btn(f"Выбрать №{number}", "primary", {"command": "tour_select", "number": number})
+            for number in select_numbers
+        ])
+    rows.append([_btn(TOUR_MORE_BUTTON_TEXT, "secondary")])
+    rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "positive")])
+    rows.append([_btn(REVIEW_EDIT_DATES_TEXT, "secondary"), _btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")])
     return _keyboard(rows)
 
 
@@ -1414,11 +1559,14 @@ def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> 
             return
 
     if result.offers:
-        send_message(
-            user_id,
-            _tourvisor.format_client_message(result),
-            keyboard=_review_keyboard(),
-        )
+        with _lock:
+            live = user_data.get(user_id)
+            if live is None or live.get("state") != STATE_REVIEW:
+                return
+            live["_tour_offers"] = [offer.__dict__.copy() for offer in result.offers]
+            live["_tour_page"] = 0
+            live.pop("selected_tour", None)
+        _send_tour_results_page(user_id, 0)
         return
 
     logger.info("VK Tourvisor search returned no offers for %s: %s", user_id, result.error)
@@ -1428,6 +1576,79 @@ def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> 
         "Можно изменить даты или бюджет, либо отправить заявку — менеджер "
         "проверит чартеры и предложения, которых нет в автоматическом поиске.",
         keyboard=_review_keyboard(),
+    )
+
+
+def _send_tour_results_page(user_id: int, page: int) -> None:
+    with _lock:
+        live = user_data.get(user_id)
+        if live is None or live.get("state") != STATE_REVIEW:
+            return
+        pool = list(live.get("_tour_offers") or [])
+        if not pool:
+            send_message(user_id, "Сначала нажмите «Показать варианты».", keyboard=_review_keyboard())
+            return
+        page_count = max(1, (len(pool) + 2) // 3)
+        page = page % page_count
+        offset = page * 3
+        offers = pool[offset:offset + 3]
+        live["_tour_page"] = page
+
+    carousel_sent = send_tour_carousel(user_id, offers, offset)
+    if not carousel_sent:
+        fallback = _tourvisor.SearchResult(
+            offers=[_tourvisor.TourOffer(**offer) for offer in offers]
+        )
+        send_message(user_id, _tourvisor.format_client_message(fallback), keyboard=_hide_keyboard())
+    numbers = [] if carousel_sent else list(range(offset + 1, offset + len(offers) + 1))
+    send_message(
+        user_id,
+        f"Показаны варианты {offset + 1}–{offset + len(offers)} из {len(pool)}.\n"
+        "Выберите тур или передайте подборку менеджеру.",
+        keyboard=_tour_results_keyboard(numbers),
+    )
+
+
+def _selected_tour_summary(info: Dict[str, Any]) -> str:
+    offer = info.get("selected_tour")
+    if not isinstance(offer, dict):
+        return ""
+    title = str(offer.get("hotel") or "Выбранный тур")
+    category = int(offer.get("category") or 0)
+    if category:
+        title += f" {category}★"
+    parts = [f"🏨 {title}"]
+    if offer.get("region"):
+        parts.append(f"📍 {offer['region']}")
+    if offer.get("date") or offer.get("nights"):
+        parts.append(f"📅 {offer.get('date', '')} · {offer.get('nights', '?')} ночей")
+    if offer.get("meal"):
+        parts.append(f"🍽 {offer['meal']}")
+    parts.append(f"💰 {_compact_tour_price(offer)} за тур")
+    if offer.get("operator"):
+        parts.append(f"Туроператор: {offer['operator']}")
+    if offer.get("tour_id"):
+        parts.append(f"ID предложения: {offer['tour_id']}")
+    return "\n".join(parts)
+
+
+def _select_tour(user_id: int, number: int) -> None:
+    with _lock:
+        live = user_data.get(user_id)
+        pool = list((live or {}).get("_tour_offers") or [])
+        if live is None or live.get("state") != STATE_REVIEW or not (1 <= number <= len(pool)):
+            offer = None
+        else:
+            offer = dict(pool[number - 1])
+            live["selected_tour"] = offer
+    if offer is None:
+        send_message(user_id, "Этот вариант уже недоступен. Запустите поиск ещё раз.", keyboard=_review_keyboard())
+        return
+    send_message(
+        user_id,
+        f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
+        "Перед бронированием менеджер проверит наличие и окончательную цену.",
+        keyboard=_tour_results_keyboard(),
     )
 
 
@@ -1452,6 +1673,9 @@ def _start_tour_search(user_id: int, info: Dict[str, Any]) -> None:
         return
 
     marker = f"{time.time_ns()}-{random.randint(1000, 9999)}"
+    info.pop("selected_tour", None)
+    info.pop("_tour_offers", None)
+    info.pop("_tour_page", None)
     info["_tour_searching"] = True
     info["_tour_search_marker"] = marker
     snapshot = dict(info)
@@ -1474,7 +1698,14 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if text == TOUR_SEARCH_BUTTON_TEXT:
         _start_tour_search(user_id, info)
         return
-    if text == REVIEW_CONFIRM_TEXT:
+    selected_match = re.fullmatch(r"(?:✅\s*)?Выбрать\s*№?\s*(\d+)", (text or "").strip(), re.I)
+    if selected_match:
+        _select_tour(user_id, int(selected_match.group(1)))
+        return
+    if text == TOUR_MORE_BUTTON_TEXT:
+        _send_tour_results_page(user_id, int(info.get("_tour_page") or 0) + 1)
+        return
+    if text in (REVIEW_CONFIRM_TEXT, TOUR_SEND_MANAGER_TEXT):
         info.pop("_tour_searching", None)
         info.pop("_tour_search_marker", None)
         info["state"] = STATE_CONTACT
@@ -1483,12 +1714,16 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if text == REVIEW_EDIT_DATES_TEXT:
         info.pop("_tour_searching", None)
         info.pop("_tour_search_marker", None)
+        info.pop("selected_tour", None)
+        info.pop("_tour_offers", None)
         info["state"] = STATE_DATES
         _ask_dates(user_id)
         return
     if text == REVIEW_EDIT_BUDGET_TEXT:
         info.pop("_tour_searching", None)
         info.pop("_tour_search_marker", None)
+        info.pop("selected_tour", None)
+        info.pop("_tour_offers", None)
         info["state"] = STATE_BUDGET
         _ask_budget(user_id)
         return
@@ -1702,6 +1937,7 @@ def handle_dialog(user_id: int, text: str, message: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
+    selected = _selected_tour_summary(info)
     send_message(
         user_id,
         "✅ Заявка принята! Менеджер «АПРЕЛЬ тур» свяжется с вами.\n\n"
@@ -1710,7 +1946,9 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
         + f"📅 Даты: {info.get('dates', '?')}\n"
         f"👥 Состав: {_party_text(info)}\n"
         f"💰 Бюджет: {info.get('budget', '?')}₽\n"
-        f"📞 Связь: {phone}\n\n"
+        f"📞 Связь: {phone}\n"
+        + (f"\n🎯 Выбранный вариант:\n{selected}\n" if selected else "")
+        + "\n"
         "Спасибо, что выбрали нас 🌺",
         keyboard=_hide_keyboard(),
     )
@@ -1726,6 +1964,7 @@ def _notify_admin_telegram(
     bot_token = os.getenv("BOT_TOKEN", "").strip()
     if not bot_token or not LEAD_NOTIFY_IDS:
         return
+    selected = _selected_tour_summary(info)
     text = (
         "🔔 Новая заявка (VK)!\n\n"
         f"От: {client_name or 'без имени'}\n"
@@ -1736,6 +1975,7 @@ def _notify_admin_telegram(
         f"👥 {_party_text(info)}\n"
         f"💰 {info.get('budget', '?')}₽\n"
         f"📞 Связь: {phone}"
+        + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else "")
     )
     for recipient in LEAD_NOTIFY_IDS:
         try:
@@ -1759,6 +1999,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
     """Notify admin: Telegram (creator) + optional VK peer if ADMIN_ID is a VK user."""
     _notify_admin_telegram(user_id, info, phone, client_name)
     if ADMIN_ID:
+        selected = _selected_tour_summary(info)
         # Legacy: also ping ADMIN_ID inside VK (if it is a VK user id).
         send_message(
             ADMIN_ID,
@@ -1769,7 +2010,8 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             + f"📅 {info.get('dates', '?')}\n"
             f"👥 {_party_text(info)}\n"
             f"💰 {info.get('budget', '?')}₽\n"
-            f"📞 Связь: {phone}",
+            f"📞 Связь: {phone}"
+            + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else ""),
         )
     elif not LEAD_NOTIFY_IDS:
         logger.warning(
@@ -1837,6 +2079,12 @@ def _post_completion_side_effects(
     """MDT push + live offers + AI blurb — off the VK Callback hot path."""
     try:
         send_lead_to_mdt(user_id, info, phone, client_name)
+
+        # The client already chose a complete package. Sending an unrelated
+        # flight-only estimate or an AI placeholder after confirmation would
+        # make the successful selection look as if it had been lost.
+        if info.get("selected_tour"):
+            return
 
         result = _tutu_search(info)
         client_text = ""
@@ -1998,6 +2246,12 @@ def _process_message(message: Dict[str, Any]) -> None:
     if not user_id:
         return
     text = (msg.get("text") or "").strip()
+    try:
+        button_payload = json.loads(msg.get("payload") or "{}")
+    except (TypeError, ValueError):
+        button_payload = {}
+    if button_payload.get("command") == "tour_select" and button_payload.get("number"):
+        text = f"Выбрать №{button_payload['number']}"
     _remember_client_capabilities(user_id, message)
 
     # Fetch user name (cached in all_users)
@@ -2188,6 +2442,7 @@ def load_state() -> None:
             chat_id = d.pop("chat_id")
             d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
             d["needs_consultation"] = bool(d.get("needs_consultation"))
+            d["selected_tour"] = _tour_from_db(d.get("selected_tour"))
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():

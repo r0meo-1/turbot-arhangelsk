@@ -56,6 +56,7 @@ def test_search_maps_dialog_fields_and_returns_cheapest_unique_hotels():
                 {
                     "name": "Hotel Best",
                     "category": 4,
+                    "picturelink": "https://example.test/best.jpg",
                     "subRegion": {"name": "Сиде"},
                     "tours": [
                         {
@@ -94,6 +95,8 @@ def test_search_maps_dialog_fields_and_returns_cheapest_unique_hotels():
 
     assert [offer.hotel for offer in result.offers] == ["Hotel Best", "Hotel Expensive"]
     assert result.offers[0].price == 180000
+    assert result.offers[0].tour_id == "a1"
+    assert result.offers[0].picture_url == "https://example.test/best.jpg"
     start = next(call for call in calls if call[1] == "tours/search")
     assert start[2]["childs"] == [5, 9]
     assert start[2]["priceTo"] == 280000

@@ -258,6 +258,18 @@ def create_lead(
         fields.append({"name": "Количество человек", "values": [str(info["people"])]})
     if info.get("budget"):
         fields.append({"name": "Бюджет", "values": [str(info["budget"])]})
+    selected = info.get("selected_tour")
+    if isinstance(selected, dict):
+        selected_text = " · ".join(str(value) for value in (
+            selected.get("hotel"),
+            selected.get("date"),
+            f"{selected.get('nights')} ночей" if selected.get("nights") else "",
+            selected.get("meal"),
+            str(selected.get("price") or "") + " ₽" if selected.get("price") else "",
+            f"ID {selected.get('tour_id')}" if selected.get("tour_id") else "",
+        ) if value)
+        if selected_text:
+            fields.append({"name": "Выбранный тур", "values": [selected_text]})
 
     params = {
         "name": client_name or f"{settings.name_prefix} {chat_id}",
@@ -299,6 +311,13 @@ def notify_managers(
         text_parts.append(f"Человек: {info['people']}")
     if info.get("budget"):
         text_parts.append(f"Бюджет: {info['budget']}₽")
+    selected = info.get("selected_tour")
+    if isinstance(selected, dict) and selected.get("hotel"):
+        text_parts.append(
+            f"Выбранный тур: {selected['hotel']} · "
+            f"{selected.get('date', '')} · {selected.get('price', '?')}₽ · "
+            f"ID {selected.get('tour_id', '—')}"
+        )
     text_parts.append(f"Телефон: {phone}")
 
     result = request_fn(

@@ -273,6 +273,7 @@ def test_vk_review_can_show_tourvisor_results(monkeypatch):
     monkeypatch.setattr(bot, "TOURVISOR_ENABLED", True)
     monkeypatch.setattr(bot, "TOURVISOR_TOKEN", "test-token")
     monkeypatch.setattr(bot._tourvisor, "search_tours", lambda *args, **kwargs: result)
+    monkeypatch.setattr(bot, "send_tour_carousel", lambda *args, **kwargs: False)
     monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
 
     bot._start_tour_search(user_id, bot.user_data[user_id])
@@ -280,6 +281,85 @@ def test_vk_review_can_show_tourvisor_results(monkeypatch):
     assert any("Ищу актуальные туры" in text for text in captured)
     assert any("Test Hotel" in text for text in captured)
     assert not bot.user_data[user_id].get("_tour_searching")
+
+
+def test_vk_tourvisor_native_carousel_contains_selectable_tour_ids(monkeypatch):
+    captured = []
+    offers = [{
+        "hotel": "Test Hotel", "category": 4, "region": "Сиде",
+        "nights": 7, "meal": "Всё включено", "price": 190000,
+        "currency": "RUB", "fuel_charge": 5000, "tour_id": "tour-77",
+        "picture_url": "https://example.test/hotel.jpg",
+    }]
+    monkeypatch.setattr(bot, "_upload_vk_message_photo", lambda *args: "-999_123")
+    monkeypatch.setattr(
+        bot, "_vk_api",
+        lambda method, **params: captured.append((method, params)) or 1,
+    )
+
+    assert bot.send_tour_carousel(956, offers, 0) is True
+
+    method, params = captured[-1]
+    assert method == "messages.send"
+    template = json.loads(params["template"])
+    card = template["elements"][0]
+    assert template["type"] == "carousel"
+    assert card["photo_id"] == "-999_123"
+    assert card["buttons"][0]["action"]["label"] == "Выбрать №1"
+    payload = json.loads(card["buttons"][0]["action"]["payload"])
+    assert payload["tour_id"] == "tour-77"
+
+
+def test_vk_more_tours_pages_existing_results_without_new_search(monkeypatch):
+    pages = []
+    bot.user_data[959] = {
+        "state": bot.STATE_REVIEW,
+        "_tour_page": 0,
+        "_tour_offers": [
+            {"hotel": f"Hotel {i}", "category": 4, "region": "Сиде",
+             "date": "2030-09-15", "nights": 7, "meal": "AI", "room": "Std",
+             "operator": "Operator", "price": 100000 + i, "currency": "RUB",
+             "fuel_charge": 0, "tour_id": str(i), "picture_url": ""}
+            for i in range(1, 5)
+        ],
+    }
+    monkeypatch.setattr(
+        bot, "send_tour_carousel",
+        lambda uid, offers, offset: pages.append((offset, [o["hotel"] for o in offers])) or True,
+    )
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
+
+    bot._step_review(959, bot.TOUR_MORE_BUTTON_TEXT, {}, bot.user_data[959])
+
+    assert pages == [(3, ["Hotel 4"])]
+    assert bot.user_data[959]["_tour_page"] == 1
+
+
+def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
+    selected = {
+        "hotel": "Selected Hotel", "category": 5, "region": "Анталья",
+        "date": "2030-09-15", "nights": 7, "meal": "Всё включено",
+        "room": "Family", "operator": "Operator", "price": 250000,
+        "currency": "RUB", "fuel_charge": 0, "tour_id": "offer-42",
+        "picture_url": "",
+    }
+    bot.user_data[960] = {
+        "state": bot.STATE_REVIEW,
+        "_tour_offers": [selected],
+        "destination": "Турция",
+    }
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
+
+    bot._select_tour(960, 1)
+    bot.save_lead(960, bot.user_data[960], "VK", "Test User")
+
+    assert bot.user_data[960]["selected_tour"]["tour_id"] == "offer-42"
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT selected_tour FROM leads WHERE chat_id = ?", (960,))
+        stored = json.loads(cur.fetchone()[0])
+    assert stored["hotel"] == "Selected Hotel"
+    assert stored["tour_id"] == "offer-42"
+    assert "ID предложения: offer-42" in bot._selected_tour_summary(bot.user_data[960])
 
 
 def test_vk_discards_tour_result_after_user_leaves_review(monkeypatch):
