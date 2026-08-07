@@ -312,6 +312,16 @@ def search_tours(
 
         payload = caller("GET", f"tours/search/{search_id}", {"limit": 25})
         offers = _extract_offers(payload, settings.max_offers)
+        if budget and not info.get("budget_open_ended"):
+            total_cap = budget
+            if info.get("budget_scope") != "total":
+                total_cap *= adults + len(child_ages)
+            # Tourvisor may return the fuel surcharge separately from `price`.
+            # Respect the client's ceiling using the actual displayed total.
+            offers = [
+                offer for offer in offers
+                if offer.price + offer.fuel_charge <= total_cap
+            ]
         if not offers:
             return SearchResult(error="Подходящих туров пока не найдено", search_id=search_id)
         return SearchResult(offers=offers, search_id=search_id)

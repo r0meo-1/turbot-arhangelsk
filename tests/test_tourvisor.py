@@ -164,9 +164,20 @@ def test_total_budget_is_not_multiplied_by_party_size():
             return {"searchId": 10}
         if path.endswith("/status"):
             return {"progress": 100, "status": "completed"}
+        if path == "tours/search/10":
+            return [
+                {
+                    "name": "Within Budget",
+                    "tours": [{"id": "ok", "price": 190000, "fuelCharge": 5000}],
+                },
+                {
+                    "name": "Over With Fuel",
+                    "tours": [{"id": "over", "price": 195000, "fuelCharge": 10000}],
+                },
+            ]
         return []
 
-    tourvisor.search_tours(
+    result = tourvisor.search_tours(
         tourvisor.TourvisorSettings(
             enabled=True, token="test", poll_interval=0, max_wait=1
         ),
@@ -180,6 +191,7 @@ def test_total_budget_is_not_multiplied_by_party_size():
     )
 
     assert seen["priceTo"] == 200000
+    assert [offer.hotel for offer in result.offers] == ["Within Budget"]
 
 
 def test_client_message_states_total_tour_price():

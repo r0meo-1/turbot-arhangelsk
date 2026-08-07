@@ -286,7 +286,7 @@ BUDGET_PRESETS: List[Tuple[str, int]] = [
     ("до 150 000 ₽", 150000),
     ("до 200 000 ₽", 200000),
     ("до 300 000 ₽", 300000),
-    ("300 000+ ₽", 300000),
+    ("до 400 000 ₽", 400000),
 ]
 DATE_CUSTOM_LABEL = "✏️ Свои даты"
 BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
@@ -1558,7 +1558,7 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     budget_map = {label: val for label, val in BUDGET_PRESETS}
     if raw in budget_map:
         info["budget"] = budget_map[raw]
-        info["budget_open_ended"] = raw == BUDGET_PRESETS[-1][0]
+        info["budget_open_ended"] = False
         info["budget_scope"] = "total"
         info["state"] = STATE_REVIEW
         _ask_review(user_id)
@@ -1713,7 +1713,12 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
 
 def _budget_summary(info: Dict[str, Any]) -> str:
     suffix = " на всю поездку" if info.get("budget_scope") == "total" else ""
-    return f"{info.get('budget', '?')}₽{suffix}"
+    prefix = "от " if info.get("budget_open_ended") else "до "
+    try:
+        amount = f"{int(info.get('budget')):,}".replace(",", " ")
+    except (TypeError, ValueError):
+        amount = str(info.get("budget", "?"))
+    return f"{prefix}{amount} ₽{suffix}"
 
 
 def _select_tour(user_id: int, number: int) -> None:

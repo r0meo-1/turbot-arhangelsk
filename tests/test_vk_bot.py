@@ -208,15 +208,16 @@ def test_dates_and_budget_keyboards():
     assert bot.BUDGET_PRESETS[0][0] in blabels
 
 
-def test_vk_open_ended_budget_is_not_shown_as_maximum(client, monkeypatch):
+def test_vk_budget_presets_are_strict_total_caps(client, monkeypatch):
     captured = []
     monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
     bot.user_data[958] = {"state": bot.STATE_BUDGET}
 
     bot._step_budget(958, bot.BUDGET_PRESETS[-1][0], {}, bot.user_data[958])
 
-    assert bot.user_data[958]["budget_open_ended"] is True
-    assert any(f"От {bot.BUDGET_PRESETS[-1][1]} ₽" in text for text in captured)
+    assert bot.user_data[958]["budget_open_ended"] is False
+    assert any(f"До {bot.BUDGET_PRESETS[-1][1]} ₽" in text for text in captured)
+    assert bot._budget_summary(bot.user_data[958]) == "до 400 000 ₽ на всю поездку"
 
 
 def test_vk_budget_is_total_and_review_offers_optional_contact(client):
