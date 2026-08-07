@@ -213,6 +213,17 @@ def test_dates_and_budget_keyboards():
     assert bot.BUDGET_PRESETS[0][0] in blabels
 
 
+def test_vk_open_ended_budget_is_not_shown_as_maximum(client, monkeypatch):
+    captured = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
+    bot.user_data[958] = {"state": bot.STATE_BUDGET}
+
+    bot._step_budget(958, bot.BUDGET_PRESETS[-1][0], {}, bot.user_data[958])
+
+    assert bot.user_data[958]["budget_open_ended"] is True
+    assert any("От 150000 ₽" in text for text in captured)
+
+
 def test_vk_mobile_origin_label_stores_full_city(client):
     """The compact mobile label must not degrade the city saved in the lead."""
     _post(client, 955, "Начать")
@@ -240,6 +251,62 @@ def test_vk_review_allows_fixing_dates_and_budget(client):
 
     _post(client, 902, bot.REVIEW_EDIT_BUDGET_TEXT)
     assert bot.user_data[902]["state"] == bot.STATE_BUDGET
+
+
+def test_vk_review_can_show_tourvisor_results(monkeypatch):
+    captured = []
+    user_id = 956
+    bot.user_data[user_id] = {
+        "state": bot.STATE_REVIEW,
+        "destination": "Турция",
+        "origin": "Москва",
+        "dates": "15-22 сентября 2030",
+        "people": "2",
+        "kids_ages": [],
+        "budget": 100000,
+    }
+    result = bot._tourvisor.SearchResult(offers=[bot._tourvisor.TourOffer(
+        hotel="Test Hotel", category=4, region="Сиде", date="2030-09-15",
+        nights=7, meal="Всё включено", room="Standard", operator="Test Operator",
+        price=190000,
+    )])
+    monkeypatch.setattr(bot, "TOURVISOR_ENABLED", True)
+    monkeypatch.setattr(bot, "TOURVISOR_TOKEN", "test-token")
+    monkeypatch.setattr(bot._tourvisor, "search_tours", lambda *args, **kwargs: result)
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
+
+    bot._start_tour_search(user_id, bot.user_data[user_id])
+
+    assert any("Ищу актуальные туры" in text for text in captured)
+    assert any("Test Hotel" in text for text in captured)
+    assert not bot.user_data[user_id].get("_tour_searching")
+
+
+def test_vk_discards_tour_result_after_user_leaves_review(monkeypatch):
+    captured = []
+    user_id = 957
+    marker = "search-1"
+    bot.user_data[user_id] = {
+        "state": bot.STATE_CONTACT,
+        "_tour_searching": True,
+        "_tour_search_marker": marker,
+    }
+    monkeypatch.setattr(
+        bot._tourvisor,
+        "search_tours",
+        lambda *args, **kwargs: bot._tourvisor.SearchResult(offers=[
+            bot._tourvisor.TourOffer(
+                hotel="Late Hotel", category=4, region="", date="2030-09-15",
+                nights=7, meal="", room="", operator="", price=100000,
+            )
+        ]),
+    )
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: captured.append(args))
+
+    bot._tour_search_worker(user_id, marker, dict(bot.user_data[user_id]))
+
+    assert captured == []
+    assert not bot.user_data[user_id].get("_tour_searching")
 
 
 def test_vk_undecided_destination_marks_consultation(client):

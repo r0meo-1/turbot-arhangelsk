@@ -58,6 +58,7 @@ from shared.constants import (
     POPULAR_DESTINATIONS_PLAIN,
 )
 from shared import tutu as _tutu
+from shared import tourvisor as _tourvisor
 from shared import version as _version
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
@@ -217,6 +218,33 @@ TUTU_SHOW_ADMIN = os.getenv(
     "VK_TUTU_SHOW_ADMIN", os.getenv("TUTU_SHOW_ADMIN", "true")
 ).lower().strip() in ("1", "true", "yes")
 
+# --- Tourvisor package tours ------------------------------------------------
+# The token enables the integration by default; the VK-specific flag can turn
+# it off instantly without removing credentials during a rollout.
+TOURVISOR_TOKEN = os.getenv("TOURVISOR_TOKEN", "").strip()
+TOURVISOR_ENABLED = os.getenv(
+    "VK_TOURVISOR_ENABLED", "true" if TOURVISOR_TOKEN else "false"
+).lower().strip() in ("1", "true", "yes")
+TOURVISOR_BASE_URL = os.getenv(
+    "TOURVISOR_BASE_URL", "https://api.tourvisor.ru/search/api/v1"
+).strip()
+TOURVISOR_TIMEOUT = _env_int("TOURVISOR_TIMEOUT", 15)
+TOURVISOR_POLL_INTERVAL = _env_int("TOURVISOR_POLL_INTERVAL", 3)
+TOURVISOR_MAX_WAIT = _env_int("TOURVISOR_MAX_WAIT", 15)
+TOURVISOR_MAX_OFFERS = _env_int("TOURVISOR_MAX_OFFERS", 3)
+
+
+def _tourvisor_settings() -> "_tourvisor.TourvisorSettings":
+    return _tourvisor.TourvisorSettings(
+        enabled=TOURVISOR_ENABLED,
+        token=TOURVISOR_TOKEN,
+        base_url=TOURVISOR_BASE_URL,
+        timeout=TOURVISOR_TIMEOUT,
+        poll_interval=TOURVISOR_POLL_INTERVAL,
+        max_wait=TOURVISOR_MAX_WAIT,
+        max_offers=TOURVISOR_MAX_OFFERS,
+    )
+
 
 def _tutu_settings() -> "_tutu.TutuSettings":
     return _tutu.TutuSettings(
@@ -261,6 +289,7 @@ DATE_CUSTOM_LABEL = "✏️ Свои даты"
 BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
 CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
+TOUR_SEARCH_BUTTON_TEXT = "🔎 Показать варианты"
 REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
 REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
 NEW_SELECTION_BUTTON_TEXT = "🧳 Новый подбор"
@@ -848,12 +877,17 @@ def _budget_keyboard() -> str:
 
 
 def _review_keyboard() -> str:
-    return _keyboard([
+    rows = [
         [_btn(REVIEW_CONFIRM_TEXT, "positive")],
+    ]
+    if TOURVISOR_ENABLED:
+        rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "primary")])
+    rows.extend([
         [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
         [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
+    return _keyboard(rows)
 
 
 def _contact_keyboard() -> str:
@@ -1329,6 +1363,7 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     budget_map = {label: val for label, val in BUDGET_PRESETS}
     if raw in budget_map:
         info["budget"] = budget_map[raw]
+        info["budget_open_ended"] = raw == BUDGET_PRESETS[-1][0]
         info["state"] = STATE_REVIEW
         _ask_review(user_id)
         return
@@ -1341,6 +1376,7 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["budget"] = value
+    info["budget_open_ended"] = False
     info["state"] = STATE_REVIEW
     _ask_review(user_id)
 
@@ -1348,6 +1384,7 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
 def _ask_review(user_id: int) -> None:
     info = user_data.get(user_id, {})
     consultation = "\n💬 Нужна консультация по направлению." if info.get("needs_consultation") else ""
+    budget_prefix = "От" if info.get("budget_open_ended") else "До"
     send_message(
         user_id,
         "Проверьте заявку:\n\n"
@@ -1355,23 +1392,103 @@ def _ask_review(user_id: int) -> None:
         f"🛫 Вылет: {info.get('origin', '—')}\n"
         f"📅 Даты: {info.get('dates', '—')}\n"
         f"👥 {_party_text(info)}\n"
-        f"💰 До {info.get('budget', '—')} ₽ на человека"
+        f"💰 {budget_prefix} {info.get('budget', '—')} ₽ на человека"
         f"{consultation}\n\n"
         "Всё верно?",
         keyboard=_review_keyboard(),
     )
 
 
+def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> None:
+    """Search in the background and only answer while this review is current."""
+    result = _tourvisor.search_tours(
+        _tourvisor_settings(), http_session, snapshot, log=logger,
+    )
+    with _lock:
+        live = user_data.get(user_id)
+        if live is None or live.get("_tour_search_marker") != marker:
+            return
+        live.pop("_tour_searching", None)
+        live.pop("_tour_search_marker", None)
+        if live.get("state") != STATE_REVIEW:
+            return
+
+    if result.offers:
+        send_message(
+            user_id,
+            _tourvisor.format_client_message(result),
+            keyboard=_review_keyboard(),
+        )
+        return
+
+    logger.info("VK Tourvisor search returned no offers for %s: %s", user_id, result.error)
+    send_message(
+        user_id,
+        "По заданным параметрам готовых вариантов сейчас не нашлось.\n\n"
+        "Можно изменить даты или бюджет, либо отправить заявку — менеджер "
+        "проверит чартеры и предложения, которых нет в автоматическом поиске.",
+        keyboard=_review_keyboard(),
+    )
+
+
+def _start_tour_search(user_id: int, info: Dict[str, Any]) -> None:
+    if not TOURVISOR_ENABLED or not TOURVISOR_TOKEN:
+        send_message(
+            user_id,
+            "Автоматический поиск сейчас недоступен. Отправьте заявку — менеджер подберёт варианты.",
+            keyboard=_review_keyboard(),
+        )
+        return
+    if info.get("needs_consultation"):
+        send_message(
+            user_id,
+            "Чтобы искать автоматически, сначала нужно выбрать направление. "
+            "Можно отправить заявку — менеджер поможет определиться.",
+            keyboard=_review_keyboard(),
+        )
+        return
+    if info.get("_tour_searching"):
+        send_message(user_id, "Поиск уже идёт — обычно это занимает 10–20 секунд.")
+        return
+
+    marker = f"{time.time_ns()}-{random.randint(1000, 9999)}"
+    info["_tour_searching"] = True
+    info["_tour_search_marker"] = marker
+    snapshot = dict(info)
+    send_message(
+        user_id,
+        "🔎 Ищу актуальные туры у туроператоров. Обычно это занимает 10–20 секунд…",
+    )
+    if SYNC_COMPLETION:
+        _tour_search_worker(user_id, marker, snapshot)
+    else:
+        threading.Thread(
+            target=_tour_search_worker,
+            args=(user_id, marker, snapshot),
+            daemon=True,
+            name=f"vk-tour-search-{user_id}",
+        ).start()
+
+
 def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    if text == TOUR_SEARCH_BUTTON_TEXT:
+        _start_tour_search(user_id, info)
+        return
     if text == REVIEW_CONFIRM_TEXT:
+        info.pop("_tour_searching", None)
+        info.pop("_tour_search_marker", None)
         info["state"] = STATE_CONTACT
         _ask_contact(user_id)
         return
     if text == REVIEW_EDIT_DATES_TEXT:
+        info.pop("_tour_searching", None)
+        info.pop("_tour_search_marker", None)
         info["state"] = STATE_DATES
         _ask_dates(user_id)
         return
     if text == REVIEW_EDIT_BUDGET_TEXT:
+        info.pop("_tour_searching", None)
+        info.pop("_tour_search_marker", None)
         info["state"] = STATE_BUDGET
         _ask_budget(user_id)
         return

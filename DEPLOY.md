@@ -337,6 +337,11 @@ VK_CONFIRMATION=abc123def456         # from step 5
 VK_SECRET_KEY=<long-random-string>   # same value in Callback API settings
 VK_PORT=5100
 VK_DATABASE_PATH=/opt/turbot/vk_bot_state.sqlite
+
+# Optional: Tourvisor package-tour search in the VK review step.
+# Keep the real JWT only in /opt/turbot/.env, never in Git.
+TOURVISOR_TOKEN=
+# VK_TOURVISOR_ENABLED=true
 ```
 
 ### Install the systemd service
