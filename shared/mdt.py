@@ -210,6 +210,10 @@ def create_preorder(
         comment_parts.append(f"Направление: {info['destination']}")
     if info.get("dates"):
         comment_parts.append(f"Даты: {info['dates']}")
+    if info.get("nights"):
+        comment_parts.append(f"Ночей: {info['nights']}")
+    if info.get("hotel_query"):
+        comment_parts.append(f"Отель: {info['hotel_query']}")
     if info.get("people"):
         comment_parts.append(f"Человек: {info['people']}")
     if budget:
@@ -264,6 +268,10 @@ def create_lead(
         fields.append({"name": "Направление", "values": [info["destination"]]})
     if info.get("dates"):
         fields.append({"name": "Даты", "values": [info["dates"]]})
+    if info.get("nights"):
+        fields.append({"name": "Ночей", "values": [str(info["nights"])]})
+    if info.get("hotel_query"):
+        fields.append({"name": "Отель", "values": [str(info["hotel_query"])]})
     if info.get("people"):
         fields.append({"name": "Количество человек", "values": [str(info["people"])]})
     if info.get("budget"):
@@ -317,6 +325,10 @@ def notify_managers(
         text_parts.append(f"Направление: {info['destination']}")
     if info.get("dates"):
         text_parts.append(f"Даты: {info['dates']}")
+    if info.get("nights"):
+        text_parts.append(f"Ночей: {info['nights']}")
+    if info.get("hotel_query"):
+        text_parts.append(f"Отель: {info['hotel_query']}")
     if info.get("people"):
         text_parts.append(f"Человек: {info['people']}")
     if info.get("budget"):

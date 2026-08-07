@@ -18,6 +18,40 @@ def test_exact_trip_dates_become_departure_and_nights():
     )
 
 
+def test_departure_window_uses_separate_nights_range():
+    window = tourvisor.resolve_search_window(
+        "12-13 сентября 2030", today=date(2030, 1, 1), nights_raw="11-12"
+    )
+
+    assert window == tourvisor.SearchWindow(
+        date_from="2030-09-12",
+        date_to="2030-09-13",
+        nights_from=11,
+        nights_to=12,
+    )
+
+
+def test_teenager_is_sent_as_adult_without_being_duplicated():
+    adults, child_ages, error = tourvisor._people({
+        "people": "2", "kids_ages": [16, 9],
+    })
+
+    assert error == ""
+    assert adults == 3
+    assert child_ages == [9]
+
+
+def test_specific_hotel_match_tolerates_hotel_word_and_case():
+    assert tourvisor._hotel_matches("BELKON HOTEL", "отель Belkon") is True
+    assert tourvisor._hotel_matches("BELKON HOTEL", "Mitos Apart") is False
+
+
+def test_nights_label_uses_correct_russian_plural():
+    assert tourvisor.nights_label(1) == "1 ночь"
+    assert tourvisor.nights_label(3) == "3 ночи"
+    assert tourvisor.nights_label(11) == "11 ночей"
+    assert tourvisor.nights_label("11-12") == "11-12 ночей"
+
 def test_flexible_dates_stay_inside_tourvisor_limits():
     window = tourvisor.resolve_search_window("даты гибкие", today=date(2030, 1, 1))
 

@@ -1316,7 +1316,7 @@ def test_party_text_shows_composition():
     assert bot._party_text({"people": "1", "kids": 1, "infants": 1}) == \
         "1 взр. + 1 реб. (2–11) + 1 млад. (до 2)"
     assert bot._party_text({"people": "2", "kids_ages": [5, 12]}) == \
-        "3 взр. + дети: 5 и 12 лет"
+        "2 взр. + дети: 5 и 12 лет"
 
 
 def test_people_step_asks_for_adults_without_age_threshold(client, monkeypatch):

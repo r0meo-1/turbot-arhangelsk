@@ -132,11 +132,15 @@ def format_ages(ages: List[int]) -> str:
 def party_text(info: Dict) -> str:
     """«2 взр. + дети: 5 и 9 лет» — менеджер считает по точному возрасту."""
     ages = info.get("kids_ages") or []
-    adults, children, infants = party_bands(info)
-    parts = [f"{adults} взр."]
+    try:
+        declared_adults = int(str(info.get("people", 1)).rstrip("+") or 1)
+    except (TypeError, ValueError):
+        declared_adults = 1
+    parts = [f"{declared_adults} взр."]
     if ages:
         parts.append(f"дети: {format_ages(ages)}")
     else:
+        _, children, infants = party_bands(info)
         if children:
             parts.append(f"{children} реб. (2–11)")
         if infants:

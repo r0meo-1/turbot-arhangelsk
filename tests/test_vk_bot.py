@@ -186,7 +186,10 @@ def test_soft_mode_and_vk_contact(client, monkeypatch):
     _post(client, 901, bot.START_BUTTON_TEXT)
     assert bot.has_consent(901)
     assert bot.user_data[901]["state"] == bot.STATE_DESTINATION
-    for text in ["Турция", "Москва", bot.DATE_PRESETS[0][0], "2", "Без детей", bot.BUDGET_PRESETS[1][0]]:
+    for text in [
+        "Турция", "Москва", bot.DATE_PRESETS[0][0], bot.NIGHTS_PRESETS[0][0],
+        "2", "Без детей", bot.BUDGET_PRESETS[1][0],
+    ]:
         _post(client, 901, text)
     assert bot.user_data[901]["state"] == bot.STATE_REVIEW
     _post(client, 901, bot.REVIEW_CONFIRM_TEXT)
@@ -244,6 +247,75 @@ def test_vk_mobile_origin_label_stores_full_city(client):
 
     assert bot.user_data[955]["origin"] == "Санкт-Петербург"
     assert bot.user_data[955]["state"] == bot.STATE_DATES
+
+
+def test_vk_short_departure_window_asks_for_nights(client):
+    _post(client, 9561, "Начать")
+    _post(client, 9561, bot.CONSENT_YES_TEXT)
+    for text in ["Турция", "Челябинск или Екатеринбург", "12-13 сентября"]:
+        _post(client, 9561, text)
+
+    assert bot.user_data[9561]["state"] == bot.STATE_NIGHTS
+    assert bot.user_data[9561]["origin"] == "Челябинск / Екатеринбург"
+
+    _post(client, 9561, "11-12")
+    assert bot.user_data[9561]["state"] == bot.STATE_PEOPLE
+    assert bot.user_data[9561]["nights"] == "11-12"
+    assert bot.user_data[9561]["dates_are_trip"] is False
+
+
+def test_vk_family_summary_does_not_double_count_teenager():
+    info = {"people": "2", "kids_ages": [16, 9]}
+
+    assert bot._party_text(info) == "2 взр. + дети: 9 и 16 лет"
+
+
+def test_vk_searches_both_departure_cities(monkeypatch):
+    calls = []
+    user_id = 9562
+    marker = "two-cities"
+    bot.user_data[user_id] = {
+        "state": bot.STATE_REVIEW,
+        "_tour_search_marker": marker,
+        "_tour_searching": True,
+    }
+
+    def fake_search(settings, session, info, **kwargs):
+        calls.append(info["origin"])
+        return bot._tourvisor.SearchResult(offers=[bot._tourvisor.TourOffer(
+            hotel=f"Hotel {info['origin']}", category=4, region="Анталья",
+            date="2030-09-12", nights=11, meal="AI", room="Family",
+            operator="Operator", price=200000, departure=info["origin"],
+        )])
+
+    monkeypatch.setattr(bot._tourvisor, "search_tours", fake_search)
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *args: None)
+
+    bot._tour_search_worker(user_id, marker, {"origin": "Челябинск / Екатеринбург"})
+
+    assert calls == ["Челябинск", "Екатеринбург"]
+    departures = {offer["departure"] for offer in bot.user_data[user_id]["_tour_offers"]}
+    assert departures == {"Челябинск", "Екатеринбург"}
+
+
+def test_vk_can_request_specific_hotel_and_explicitly_show_over_budget(monkeypatch):
+    bot.user_data[9563] = {"state": bot.STATE_REVIEW}
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
+
+    bot._step_review(9563, bot.REVIEW_HOTEL_TEXT, {}, bot.user_data[9563])
+    assert bot.user_data[9563]["state"] == bot.STATE_HOTEL
+    bot._step_hotel(9563, "Belkon Hotel", {}, bot.user_data[9563])
+    assert bot.user_data[9563]["hotel_query"] == "Belkon Hotel"
+
+    called = []
+    monkeypatch.setattr(
+        bot, "_start_tour_search",
+        lambda uid, info, **kwargs: called.append(kwargs),
+    )
+    bot._step_review(
+        9563, bot.TOUR_SHOW_OVER_BUDGET_TEXT, {}, bot.user_data[9563],
+    )
+    assert called == [{"ignore_budget": True}]
 
 
 def test_vk_review_allows_fixing_dates_and_budget(client):

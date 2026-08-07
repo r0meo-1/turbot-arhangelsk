@@ -57,6 +57,7 @@ class TourOffer:
     fuel_charge: int = 0
     tour_id: str = ""
     picture_url: str = ""
+    departure: str = ""
 
 
 @dataclass
@@ -76,10 +77,24 @@ def _next_month(today: date) -> date:
     return date(today.year, today.month + 1, 1)
 
 
-def resolve_search_window(raw: str, today: Optional[date] = None) -> Optional[SearchWindow]:
+def _nights_range(raw: Any) -> Optional[Tuple[int, int]]:
+    values = [int(value) for value in re.findall(r"\d+", str(raw or ""))]
+    if not values:
+        return None
+    start = max(1, min(values[0], 28))
+    end = max(1, min(values[1] if len(values) > 1 else start, 28))
+    return min(start, end), max(start, end)
+
+
+def resolve_search_window(
+    raw: str,
+    today: Optional[date] = None,
+    nights_raw: Any = None,
+) -> Optional[SearchWindow]:
     """Map the dialog's Russian dates to Tourvisor departure/nights ranges."""
     today = today or date.today()
     text = (raw or "").strip().lower()
+    explicit_nights = _nights_range(nights_raw)
     if not text:
         return None
 
@@ -92,17 +107,25 @@ def resolve_search_window(raw: str, today: Optional[date] = None) -> Optional[Se
             start = None
             end = None
         if start and start >= today:
+            if explicit_nights:
+                departure_to = end if end and end >= start else start
+                return SearchWindow(
+                    start.isoformat(), departure_to.isoformat(),
+                    explicit_nights[0], explicit_nights[1],
+                )
             nights = max(1, min((end - start).days if end and end > start else 7, 28))
             return SearchWindow(start.isoformat(), start.isoformat(), nights, nights)
 
     if "выходн" in text:
         start = _next_saturday(today)
-        return SearchWindow(start.isoformat(), start.isoformat(), 2, 3)
+        nights = explicit_nights or (2, 3)
+        return SearchWindow(start.isoformat(), start.isoformat(), *nights)
 
     if "след" in text and "месяц" in text:
         start = _next_month(today)
         end = start + timedelta(days=20)
-        return SearchWindow(start.isoformat(), end.isoformat(), 6, 12)
+        nights = explicit_nights or (6, 12)
+        return SearchWindow(start.isoformat(), end.isoformat(), *nights)
 
     if "эт" in text and "месяц" in text:
         start = today + timedelta(days=3)
@@ -111,12 +134,14 @@ def resolve_search_window(raw: str, today: Optional[date] = None) -> Optional[Se
         if end < start:
             start = next_month
             end = start + timedelta(days=20)
-        return SearchWindow(start.isoformat(), end.isoformat(), 6, 12)
+        nights = explicit_nights or (6, 12)
+        return SearchWindow(start.isoformat(), end.isoformat(), *nights)
 
     if "гибк" in text:
         start = today + timedelta(days=14)
         end = start + timedelta(days=21)
-        return SearchWindow(start.isoformat(), end.isoformat(), 6, 12)
+        nights = explicit_nights or (6, 12)
+        return SearchWindow(start.isoformat(), end.isoformat(), *nights)
 
     return None
 
@@ -150,16 +175,25 @@ def _find_named_id(items: Any, wanted: str) -> Optional[int]:
     return None
 
 
+def _hotel_matches(name: str, query: str) -> bool:
+    hotel = _normalise_name(name)
+    wanted = _normalise_name(query)
+    wanted = re.sub(r"\b(?:hotel|отель)\b", "", wanted).strip()
+    return bool(wanted and (wanted in hotel or hotel in wanted))
+
+
 def _people(info: Dict[str, Any]) -> Tuple[Optional[int], List[int], str]:
     raw = str(info.get("people") or "1")
     match = re.search(r"\d+", raw)
-    adults = int(match.group()) if match else 1
+    declared_adults = int(match.group()) if match else 1
     ages = [int(age) for age in (info.get("kids_ages") or [])]
+    adults = declared_adults + sum(1 for age in ages if age >= 12)
+    child_ages = [age for age in ages if age < 12]
     if adults > 6:
-        return None, ages, "Tourvisor ищет максимум для 6 взрослых"
-    if len(ages) > 3:
-        return None, ages, "Tourvisor ищет максимум для 3 детей"
-    return max(adults, 1), ages, ""
+        return None, child_ages, "Tourvisor ищет максимум для 6 взрослых"
+    if len(child_ages) > 3:
+        return None, child_ages, "Tourvisor ищет максимум для 3 детей"
+    return max(adults, 1), child_ages, ""
 
 
 def _http_request(
@@ -250,7 +284,8 @@ def search_tours(
     if info.get("needs_consultation"):
         return SearchResult(error="Для направления нужна консультация менеджера")
 
-    window = resolve_search_window(str(info.get("dates") or ""))
+    nights_raw = info.get("nights") if info.get("dates_are_trip") is False else None
+    window = resolve_search_window(str(info.get("dates") or ""), nights_raw=nights_raw)
     if not window:
         return SearchResult(error="Не получилось определить даты для автоматического поиска")
     adults, child_ages, people_error = _people(info)
@@ -311,7 +346,15 @@ def search_tours(
                 break
 
         payload = caller("GET", f"tours/search/{search_id}", {"limit": 25})
-        offers = _extract_offers(payload, settings.max_offers)
+        extract_limit = 25 if info.get("hotel_query") else settings.max_offers
+        offers = _extract_offers(payload, extract_limit)
+        for offer in offers:
+            offer.departure = str(info.get("origin") or "")
+        if info.get("hotel_query"):
+            offers = [
+                offer for offer in offers
+                if _hotel_matches(offer.hotel, str(info["hotel_query"]))
+            ]
         if budget and not info.get("budget_open_ended"):
             total_cap = budget
             if info.get("budget_scope") != "total":
@@ -322,6 +365,7 @@ def search_tours(
                 offer for offer in offers
                 if offer.price + offer.fuel_charge <= total_cap
             ]
+        offers = offers[:settings.max_offers]
         if not offers:
             return SearchResult(error="Подходящих туров пока не найдено", search_id=search_id)
         return SearchResult(offers=offers, search_id=search_id)
@@ -358,6 +402,23 @@ def display_date(value: Any) -> str:
         return raw
 
 
+def nights_label(value: Any) -> str:
+    raw = str(value or "").strip()
+    try:
+        count = int(raw)
+    except ValueError:
+        return f"{raw} ночей" if raw else ""
+    if count % 100 in (11, 12, 13, 14):
+        word = "ночей"
+    elif count % 10 == 1:
+        word = "ночь"
+    elif count % 10 in (2, 3, 4):
+        word = "ночи"
+    else:
+        word = "ночей"
+    return f"{count} {word}"
+
+
 def is_all_inclusive(value: Any) -> bool:
     normalised = meal_label(value).casefold().replace("ё", "е")
     return (
@@ -380,10 +441,12 @@ def format_client_message(
         place = f" · {offer.region}" if offer.region else ""
         lines.append(f"{index}. {offer.hotel}{stars}{place}")
         details = []
+        if offer.departure:
+            details.append(f"вылет из {offer.departure}")
         if offer.date:
             details.append(display_date(offer.date))
         if offer.nights:
-            details.append(f"{offer.nights} ночей")
+            details.append(nights_label(offer.nights))
         if offer.meal:
             details.append(meal_label(offer.meal))
         if details:

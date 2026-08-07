@@ -37,6 +37,8 @@ from shared.constants import (
     STATE_CONSENT,
     STATE_CONTACT,
     STATE_DATES,
+    STATE_NIGHTS,
+    STATE_HOTEL,
     STATE_DESTINATION,
     STATE_ORIGIN,
     STATE_PEOPLE,
@@ -280,6 +282,7 @@ ORIGIN_PRESETS: List[Tuple[str, str]] = [
     ("Архангельск", "Архангельск"),
     ("Москва", "Москва"),
     ("Петербург", "Санкт-Петербург"),
+    ("Челябинск / Екб", "Челябинск / Екатеринбург"),
     ("Другой город", "Другой город"),
 ]
 BUDGET_PRESETS: List[Tuple[str, int]] = [
@@ -289,6 +292,13 @@ BUDGET_PRESETS: List[Tuple[str, int]] = [
     ("до 400 000 ₽", 400000),
 ]
 DATE_CUSTOM_LABEL = "✏️ Свои даты"
+NIGHTS_PRESETS: List[Tuple[str, str]] = [
+    ("6–7 ночей", "6-7"),
+    ("8–9 ночей", "8-9"),
+    ("10–12 ночей", "10-12"),
+    ("13–14 ночей", "13-14"),
+]
+NIGHTS_CUSTOM_LABEL = "✏️ Своя длительность"
 BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
 CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
@@ -304,6 +314,8 @@ TOUR_SIMILAR_TEXT = "🏨 Похожие отели"
 TOUR_COMPARE_TEXT = "⚖️ Сравнить варианты"
 TOUR_EDIT_DATES_TEXT = "📅 Даты"
 TOUR_EDIT_BUDGET_TEXT = "💰 Бюджет"
+TOUR_SHOW_OVER_BUDGET_TEXT = "Показать дороже"
+REVIEW_HOTEL_TEXT = "🏨 Указать отель"
 REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
 REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
 NEW_SELECTION_BUTTON_TEXT = "🧳 Новый подбор"
@@ -413,6 +425,9 @@ def init_db() -> None:
                 destination TEXT,
                 origin TEXT,
                 dates TEXT,
+                nights TEXT,
+                dates_are_trip INTEGER,
+                hotel_query TEXT,
                 people TEXT,
                 kids INTEGER,
                 infants INTEGER,
@@ -433,6 +448,9 @@ def init_db() -> None:
                 destination TEXT,
                 origin TEXT,
                 dates TEXT,
+                nights TEXT,
+                dates_are_trip INTEGER,
+                hotel_query TEXT,
                 people TEXT,
                 kids INTEGER,
                 infants INTEGER,
@@ -450,6 +468,12 @@ def init_db() -> None:
             _cols = {r[1] for r in cur.fetchall()}
             if "origin" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN origin TEXT")
+            if "nights" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN nights TEXT")
+            if "dates_are_trip" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN dates_are_trip INTEGER")
+            if "hotel_query" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN hotel_query TEXT")
             if "kids_ages" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN kids_ages TEXT")
             for _c in ("kids", "infants"):
@@ -489,14 +513,18 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     now = int(time.time())
     with _db_cursor(commit=True) as cur:
         cur.execute("""
-            INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
+            INSERT INTO sessions (chat_id, state, destination, origin, dates, nights,
+                                  dates_are_trip, people,
+                                  hotel_query,
                                   kids, kids_ages, infants, budget, budget_scope, phone,
                                   needs_consultation, selected_tour, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
-                dates=excluded.dates, people=excluded.people,
+                dates=excluded.dates, nights=excluded.nights,
+                dates_are_trip=excluded.dates_are_trip, people=excluded.people,
+                hotel_query=excluded.hotel_query,
                 kids=excluded.kids, kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
                 budget=excluded.budget, budget_scope=excluded.budget_scope,
@@ -506,7 +534,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
               data.get("origin"),
-              data.get("dates"), data.get("people"),
+              data.get("dates"), data.get("nights"),
+              None if data.get("dates_are_trip") is None else int(bool(data.get("dates_are_trip"))),
+              data.get("people"), data.get("hotel_query"),
               data.get("kids"), _ages_to_db(data.get("kids_ages")),
               data.get("infants"), data.get("budget"),
               data.get("budget_scope"), data.get("phone"),
@@ -556,10 +586,11 @@ def save_lead(
         cur.execute(
             """
             INSERT INTO leads (
-                chat_id, first_name, username, destination, origin, dates,
-                people, kids, kids_ages, infants, budget, budget_scope, phone,
+                chat_id, first_name, username, destination, origin, dates, nights,
+                dates_are_trip,
+                people, hotel_query, kids, kids_ages, infants, budget, budget_scope, phone,
                 needs_consultation, selected_tour, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -568,7 +599,9 @@ def save_lead(
                 info.get("destination"),
                 info.get("origin"),
                 info.get("dates"),
-                info.get("people"),
+                info.get("nights"),
+                None if info.get("dates_are_trip") is None else int(bool(info.get("dates_are_trip"))),
+                info.get("people"), info.get("hotel_query"),
                 info.get("kids"),
                 _ages_to_db(info.get("kids_ages")),
                 info.get("infants"),
@@ -882,8 +915,10 @@ def send_tour_carousel(
         if category:
             title += f" {category}★"
         bits = [str(offer.get("region") or "").strip()]
+        if offer.get("departure"):
+            bits.append(f"из {offer['departure']}")
         if offer.get("nights"):
-            bits.append(f"{offer['nights']} ночей")
+            bits.append(_tourvisor.nights_label(offer["nights"]))
         if offer.get("meal"):
             bits.append(_tourvisor.meal_label(offer["meal"]))
         bits.append("от " + _compact_tour_price(offer))
@@ -1012,6 +1047,14 @@ def _dates_keyboard() -> str:
     return _keyboard(rows)
 
 
+def _nights_keyboard() -> str:
+    labels = [label for label, _ in NIGHTS_PRESETS] + [NIGHTS_CUSTOM_LABEL]
+    rows = _chunk_buttons(labels, "primary", 2)
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
+    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    return _keyboard(rows)
+
+
 def _people_keyboard() -> str:
     rows = [[_btn(p, "primary") for p in PEOPLE_OPTIONS]]
     rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
@@ -1039,9 +1082,9 @@ def _review_keyboard() -> str:
     else:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.extend([
+        [_btn(REVIEW_HOTEL_TEXT, "secondary")],
         [_btn(CONTACT_OTHER_TEXT, "secondary")],
-        [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
-        [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
+        [_btn(TOUR_EDIT_DATES_TEXT, "secondary"), _btn(TOUR_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
     return _keyboard(rows)
@@ -1083,6 +1126,18 @@ def _selected_tour_keyboard() -> str:
         [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
         [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
     ])
+
+
+def _no_tours_keyboard(show_over_budget: bool = False) -> str:
+    rows: List[List[Dict[str, Any]]] = []
+    if show_over_budget:
+        rows.append([_btn(TOUR_SHOW_OVER_BUDGET_TEXT, "primary")])
+    rows.extend([
+        [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
+        [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
+        [_btn(TOUR_SEND_MANAGER_TEXT, "positive")],
+    ])
+    return _keyboard(rows)
 
 
 def _contact_keyboard() -> str:
@@ -1316,6 +1371,26 @@ def _ask_dates(user_id: int) -> None:
     )
 
 
+def _ask_nights(user_id: int, dates: Optional[str] = None) -> None:
+    dates_prefix = f"📅 Вылет: {dates}\n\n" if dates else ""
+    send_message(
+        user_id,
+        dates_prefix + "Шаг 3 из 6 · длительность\n\n"
+        "🌙 На сколько ночей планируете поездку?\n\n"
+        "Кнопка или диапазон, например: 11–12:",
+        keyboard=_nights_keyboard(),
+    )
+
+
+def _ask_hotel(user_id: int) -> None:
+    send_message(
+        user_id,
+        "🏨 Напишите точное название отеля.\n\n"
+        "Если нужен любой подходящий отель — нажмите «Назад».",
+        keyboard=_nav_keyboard(),
+    )
+
+
 def _ask_people(user_id: int, dates: Optional[str] = None) -> None:
     dates_prefix = f"📅 Понял: {dates}\n\n" if dates else ""
     send_message(
@@ -1436,7 +1511,16 @@ def _step_origin(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not city:
         _ask_origin(user_id)
         return
-    if city.strip().lower() == str(info.get("destination", "")).strip().lower():
+    cities = [
+        dict(ORIGIN_PRESETS).get(part.strip(), part.strip())
+        for part in re.split(r"\s+(?:или|либо)\s+|[,;/]", city, flags=re.I)
+        if part.strip()
+    ]
+    cities = list(dict.fromkeys(cities))[:2]
+    if any(part.lower() in ("другой город", "другое") for part in cities):
+        send_message(user_id, "✍️ Напишите один или два города вылета:", keyboard=_nav_keyboard())
+        return
+    if any(part.strip().lower() == str(info.get("destination", "")).strip().lower() for part in cities):
         # Same city both ends: the search returns nothing and the client
         # silently gets fallback text instead of prices.
         send_message(
@@ -1446,7 +1530,7 @@ def _step_origin(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
             keyboard=_origin_keyboard(),
         )
         return
-    info["origin"] = city
+    info["origin"] = " / ".join(cities)
     info["state"] = STATE_DATES
     _ask_dates(user_id)
 
@@ -1463,7 +1547,8 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
         )
         return
     preset_map = {label: val for label, val in DATE_PRESETS}
-    if raw in preset_map:
+    chosen_preset = raw in preset_map
+    if chosen_preset:
         raw = preset_map[raw]
     if not raw:
         _ask_dates(user_id)
@@ -1484,8 +1569,60 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
         return
 
     info["dates"] = raw
+    human_dates = _human_dates(depart, ret)
+    try:
+        duration = (
+            datetime.strptime(ret, "%Y-%m-%d") - datetime.strptime(depart, "%Y-%m-%d")
+        ).days if ret else 0
+    except (TypeError, ValueError):
+        duration = 0
+    if duration >= 4 and not chosen_preset:
+        # A wide range such as 15–22 September is naturally a complete trip.
+        # Keep accepting it so returning clients are not forced through a new step.
+        info["nights"] = str(duration)
+        info["dates_are_trip"] = True
+        info["state"] = STATE_PEOPLE
+        _ask_people(user_id, human_dates)
+        return
+    info["dates_are_trip"] = False
+    info["state"] = STATE_NIGHTS
+    _ask_nights(user_id, human_dates)
+
+
+def _step_nights(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    raw = (text or "").strip()
+    if raw in (NIGHTS_CUSTOM_LABEL, "своя длительность"):
+        send_message(
+            user_id,
+            "✍️ Напишите количество ночей, например: 11–12:",
+            keyboard=_nav_keyboard(),
+        )
+        return
+    raw = dict(NIGHTS_PRESETS).get(raw, raw)
+    values = [int(value) for value in re.findall(r"\d+", raw)]
+    if not values or any(value < 1 or value > 28 for value in values[:2]):
+        send_message(
+            user_id,
+            "Укажите длительность от 1 до 28 ночей, например: 11–12.",
+            keyboard=_nights_keyboard(),
+        )
+        return
+    start = values[0]
+    end = values[1] if len(values) > 1 else start
+    info["nights"] = f"{min(start, end)}-{max(start, end)}" if start != end else str(start)
+    info["dates_are_trip"] = False
     info["state"] = STATE_PEOPLE
-    _ask_people(user_id, _human_dates(depart, ret))
+    _ask_people(user_id)
+
+
+def _step_hotel(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    hotel = (text or "").strip()
+    if len(hotel) < 3:
+        send_message(user_id, "Напишите название отеля полностью.", keyboard=_nav_keyboard())
+        return
+    info["hotel_query"] = hotel
+    info["state"] = STATE_REVIEW
+    _ask_review(user_id)
 
 
 def _human_dates(depart: str, ret: Optional[str] = None) -> str:
@@ -1583,24 +1720,47 @@ def _ask_review(user_id: int) -> None:
     consultation = "\n💬 Нужна консультация по направлению." if info.get("needs_consultation") else ""
     budget_prefix = "От" if info.get("budget_open_ended") else "До"
     budget_suffix = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
-    send_message(
-        user_id,
+    dates_label = "Даты поездки" if info.get("dates_are_trip") else "Вылет"
+    nights_line = (
+        f"\n🌙 Длительность: {_tourvisor.nights_label(info['nights'])}"
+        if info.get("nights") else ""
+    )
+    hotel_line = f"\n🏨 Отель: {info['hotel_query']}" if info.get("hotel_query") else ""
+    summary = (
         "Проверьте заявку:\n\n"
         f"📍 {info.get('destination', '—')}\n"
         f"🛫 Вылет: {info.get('origin', '—')}\n"
-        f"📅 Даты: {info.get('dates', '—')}\n"
+        f"📅 {dates_label}: {info.get('dates', '—')}"
+        f"{nights_line}{hotel_line}\n"
         f"👥 {_party_text(info)}\n"
         f"💰 {budget_prefix} {info.get('budget', '—')} ₽ {budget_suffix}"
         f"{consultation}\n\n"
-        "Всё верно?",
+        "Всё верно?"
+    )
+    send_message(
+        user_id,
+        summary,
         keyboard=_review_keyboard(),
     )
 
 
 def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> None:
     """Search in the background and only answer while this review is current."""
-    result = _tourvisor.search_tours(
-        _tourvisor_settings(), http_session, snapshot, log=logger,
+    origins = [part.strip() for part in str(snapshot.get("origin") or "").split("/") if part.strip()]
+    origins = origins or [str(snapshot.get("origin") or "")]
+    results = []
+    for origin in origins[:2]:
+        origin_snapshot = dict(snapshot)
+        origin_snapshot["origin"] = origin
+        results.append(_tourvisor.search_tours(
+            _tourvisor_settings(), http_session, origin_snapshot, log=logger,
+        ))
+    combined = [offer for result in results for offer in result.offers]
+    combined.sort(key=lambda offer: offer.price + offer.fuel_charge)
+    result = _tourvisor.SearchResult(
+        offers=combined[:TOURVISOR_MAX_OFFERS],
+        error="; ".join(result.error for result in results if result.error),
+        search_id=next((result.search_id for result in results if result.search_id), None),
     )
     with _lock:
         live = user_data.get(user_id)
@@ -1621,17 +1781,31 @@ def _tour_search_worker(user_id: int, marker: str, snapshot: Dict[str, Any]) -> 
             live["_tour_offers"] = list(offers)
             live["_tour_page"] = 0
             live.pop("selected_tour", None)
+        if snapshot.get("_show_over_budget"):
+            send_message(
+                user_id,
+                "⚠️ Эти варианты дороже указанного бюджета. Показываю их только по вашему запросу.",
+                keyboard=_hide_keyboard(),
+            )
         _send_tour_results_page(user_id, 0)
         return
 
     logger.info("VK Tourvisor search returned no offers for %s: %s", user_id, result.error)
-    send_message(
-        user_id,
-        "По заданным параметрам готовых вариантов сейчас не нашлось.\n\n"
-        "Можно изменить даты или бюджет, либо отправить заявку — менеджер "
-        "проверит чартеры и предложения, которых нет в автоматическом поиске.",
-        keyboard=_review_keyboard(),
+    can_show_over = bool(
+        result.search_id and snapshot.get("budget")
+        and not snapshot.get("budget_open_ended")
     )
+    if can_show_over:
+        message_text = (
+            f"До {_budget_summary(snapshot).replace('до ', '', 1)} вариантов не нашлось.\n\n"
+            "Могу отдельно показать ближайшие предложения дороже бюджета."
+        )
+    else:
+        message_text = (
+            "По заданным параметрам готовых вариантов сейчас не нашлось.\n\n"
+            "Можно изменить даты или бюджет, либо попросить помощи менеджера."
+        )
+    send_message(user_id, message_text, keyboard=_no_tours_keyboard(can_show_over))
 
 
 def _tour_results_active(user_id: int) -> bool:
@@ -1692,11 +1866,13 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
     parts = [f"🏨 {title}"]
     if offer.get("region"):
         parts.append(f"📍 {offer['region']}")
+    if offer.get("departure"):
+        parts.append(f"🛫 Вылет из {offer['departure']}")
     trip_details = []
     if offer.get("date"):
         trip_details.append(_tourvisor.display_date(offer["date"]))
     if offer.get("nights"):
-        trip_details.append(f"{offer['nights']} ночей")
+        trip_details.append(_tourvisor.nights_label(offer["nights"]))
     if trip_details:
         parts.append("📅 " + " · ".join(trip_details))
     if offer.get("meal"):
@@ -1868,7 +2044,12 @@ def _compare_tours(user_id: int) -> None:
     )
 
 
-def _start_tour_search(user_id: int, info: Dict[str, Any]) -> None:
+def _start_tour_search(
+    user_id: int,
+    info: Dict[str, Any],
+    *,
+    ignore_budget: bool = False,
+) -> None:
     if not TOURVISOR_ENABLED or not TOURVISOR_TOKEN:
         send_message(
             user_id,
@@ -1896,6 +2077,9 @@ def _start_tour_search(user_id: int, info: Dict[str, Any]) -> None:
     info["_tour_searching"] = True
     info["_tour_search_marker"] = marker
     snapshot = dict(info)
+    if ignore_budget:
+        snapshot["budget_open_ended"] = True
+        snapshot["_show_over_budget"] = True
     send_message(
         user_id,
         "🔎 Ищу актуальные туры у туроператоров. Обычно это занимает 10–20 секунд…",
@@ -1925,6 +2109,13 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         return
     if text == TOUR_MORE_BUTTON_TEXT:
         _send_tour_results_page(user_id, int(info.get("_tour_page") or 0) + 1)
+        return
+    if text == TOUR_SHOW_OVER_BUDGET_TEXT:
+        _start_tour_search(user_id, info, ignore_budget=True)
+        return
+    if text == REVIEW_HOTEL_TEXT:
+        info["state"] = STATE_HOTEL
+        _ask_hotel(user_id)
         return
     if text == TOUR_CHEAPER_TEXT:
         _apply_tour_filter(user_id, "cheaper")
@@ -2069,6 +2260,8 @@ _STATE_KEYBOARDS: Dict[str, Callable[[], str]] = {
     STATE_DESTINATION: _dest_keyboard,
     STATE_ORIGIN:      _origin_keyboard,
     STATE_DATES:       _dates_keyboard,
+    STATE_NIGHTS:      _nights_keyboard,
+    STATE_HOTEL:       _nav_keyboard,
     STATE_PEOPLE:      _people_keyboard,
     STATE_KIDS:        _kids_ages_keyboard,
     STATE_KIDS_AGES:   _kids_ages_keyboard,
@@ -2085,6 +2278,8 @@ STATE_HANDLERS: Dict[str, Callable] = {
     STATE_DESTINATION: _step_destination,
     STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
+    STATE_NIGHTS:      _step_nights,
+    STATE_HOTEL:       _step_hotel,
     STATE_PEOPLE:      _step_people,
     # Вопрос про количество детей убран; сессии на нём отвечают уже на
     # следующий вопрос — про возрасты.
@@ -2106,7 +2301,9 @@ STATE_HANDLERS: Dict[str, Callable] = {
 PREVIOUS_STATE: Dict[str, str] = {
     STATE_ORIGIN:      STATE_DESTINATION,
     STATE_DATES:       STATE_ORIGIN,
-    STATE_PEOPLE:      STATE_DATES,
+    STATE_NIGHTS:      STATE_DATES,
+    STATE_HOTEL:       STATE_REVIEW,
+    STATE_PEOPLE:      STATE_NIGHTS,
     STATE_KIDS:        STATE_PEOPLE,
     STATE_KIDS_AGES:   STATE_PEOPLE,
     STATE_INFANTS:     STATE_PEOPLE,
@@ -2130,6 +2327,10 @@ def _prompt_for_state(user_id: int, state: str) -> None:
         _ask_origin(user_id)
     elif state == STATE_DATES:
         _ask_dates(user_id)
+    elif state == STATE_NIGHTS:
+        _ask_nights(user_id)
+    elif state == STATE_HOTEL:
+        _ask_hotel(user_id)
     elif state == STATE_PEOPLE:
         _ask_people(user_id)
     elif state in (STATE_KIDS, STATE_KIDS_AGES, STATE_INFANTS):
@@ -2154,6 +2355,8 @@ def _go_back(user_id: int) -> None:
     info = user_data.get(user_id, {})
     state = info.get("state")
     previous = PREVIOUS_STATE.get(state)
+    if state == STATE_PEOPLE and info.get("dates_are_trip") is True:
+        previous = STATE_DATES
     if previous is None:
         send_message(user_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отменить».")
         return
@@ -2187,7 +2390,9 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
         f"📍 Направление: {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
         + f"📅 Даты: {info.get('dates', '?')}\n"
-        f"👥 Состав: {_party_text(info)}\n"
+        + (f"🌙 Длительность: {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
+        + (f"🏨 Отель: {info['hotel_query']}\n" if info.get("hotel_query") else "")
+        + f"👥 Состав: {_party_text(info)}\n"
         f"💰 Бюджет: {_budget_summary(info)}\n"
         f"📞 Связь: {phone}\n"
         + (f"\n🎯 Выбранный вариант:\n{selected}\n" if selected else "")
@@ -2215,7 +2420,9 @@ def _notify_admin_telegram(
         f"📍 {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
         + f"📅 {info.get('dates', '?')}\n"
-        f"👥 {_party_text(info)}\n"
+        + (f"🌙 {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
+        + (f"🏨 {info['hotel_query']}\n" if info.get("hotel_query") else "")
+        + f"👥 {_party_text(info)}\n"
         f"💰 {_budget_summary(info)}\n"
         f"📞 Связь: {phone}"
         + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else "")
@@ -2251,7 +2458,9 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             f"📍 {info.get('destination', '?')}\n"
             + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
             + f"📅 {info.get('dates', '?')}\n"
-            f"👥 {_party_text(info)}\n"
+            + (f"🌙 {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
+            + (f"🏨 {info['hotel_query']}\n" if info.get("hotel_query") else "")
+            + f"👥 {_party_text(info)}\n"
             f"💰 {_budget_summary(info)}\n"
             f"📞 Связь: {phone}"
             + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else ""),
@@ -2279,7 +2488,7 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
             _tutu_settings(), http_session,
             destination=info.get("destination", ""),
             dates_raw=info.get("dates", ""),
-            origin=info.get("origin", ""),
+            origin=str(info.get("origin", "")).split("/")[0].strip(),
             people=_adults,
             kids=_children,
             infants=_infants,
@@ -2686,6 +2895,8 @@ def load_state() -> None:
             chat_id = d.pop("chat_id")
             d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
             d["needs_consultation"] = bool(d.get("needs_consultation"))
+            if d.get("dates_are_trip") is not None:
+                d["dates_are_trip"] = bool(d["dates_are_trip"])
             d["selected_tour"] = _tour_from_db(d.get("selected_tour"))
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
