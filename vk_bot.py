@@ -282,7 +282,6 @@ ORIGIN_PRESETS: List[Tuple[str, str]] = [
     ("Архангельск", "Архангельск"),
     ("Москва", "Москва"),
     ("Петербург", "Санкт-Петербург"),
-    ("Челябинск / Екб", "Челябинск / Екатеринбург"),
     ("Другой город", "Другой город"),
 ]
 BUDGET_PRESETS: List[Tuple[str, int]] = [
@@ -1381,7 +1380,9 @@ def handle_cancel(user_id: int) -> None:
 
 
 def _origin_keyboard() -> str:
-    rows = _chunk_buttons([label for label, _ in ORIGIN_PRESETS], "primary", 2)
+    popular = [label for label, value in ORIGIN_PRESETS if value != "Другой город"]
+    rows = _chunk_buttons(popular, "primary", 2)
+    rows.append([_btn("Другой город", "secondary")])
     rows.append([_btn(BACK_BUTTON_TEXT, "secondary"),
                  _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
@@ -1542,7 +1543,13 @@ def _step_origin(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     raw_city = (text or "").strip()
     city = dict(ORIGIN_PRESETS).get(raw_city, raw_city)
     if city.lower() in ("другой город", "другое"):
-        send_message(user_id, "✍️ Напишите город вылета:", keyboard=_nav_keyboard())
+        send_message(
+            user_id,
+            "✍️ Напишите город вылета.\n\n"
+            "Можно указать два варианта через запятую, например: "
+            "Челябинск, Екатеринбург.",
+            keyboard=_nav_keyboard(),
+        )
         return
     if not city:
         _ask_origin(user_id)

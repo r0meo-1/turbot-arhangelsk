@@ -242,6 +242,12 @@ def test_vk_budget_is_total_and_review_offers_clear_contact_choice(client):
 
 def test_vk_mobile_origin_label_stores_full_city(client):
     """The compact mobile label must not degrade the city saved in the lead."""
+    labels = [label for label, _ in bot.ORIGIN_PRESETS]
+    assert labels == ["Архангельск", "Москва", "Петербург", "Другой город"]
+    keyboard_rows = json.loads(bot._origin_keyboard())["buttons"]
+    assert [button["action"]["label"] for button in keyboard_rows[-2]] == ["Другой город"]
+    assert keyboard_rows[-2][0]["color"] == "secondary"
+
     _post(client, 955, "Начать")
     _post(client, 955, bot.CONSENT_YES_TEXT)
     _post(client, 955, "Египет")
