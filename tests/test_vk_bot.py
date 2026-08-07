@@ -223,7 +223,7 @@ def test_vk_budget_presets_are_strict_total_caps(client, monkeypatch):
     assert bot._budget_summary(bot.user_data[958]) == "до 400 000 ₽ на всю поездку"
 
 
-def test_vk_budget_is_total_and_review_offers_direct_contact_choices(client):
+def test_vk_budget_is_total_and_review_offers_clear_contact_choice(client):
     _post(client, 9571, "Начать")
     _post(client, 9571, bot.CONSENT_YES_TEXT)
     for text in ["Турция", "Москва", "15-22 сентября", "2", "0", "200000"]:
@@ -235,9 +235,9 @@ def test_vk_budget_is_total_and_review_offers_direct_contact_choices(client):
         for row in json.loads(bot._review_keyboard())["buttons"]
         for button in row
     ]
-    assert bot.CONTACT_PHONE_TEXT in labels
-    assert bot.CONTACT_MAX_TEXT in labels
-    assert bot.CONTACT_OTHER_TEXT not in labels
+    assert bot.CONTACT_OTHER_TEXT in labels
+    assert bot.CONTACT_PHONE_TEXT not in labels
+    assert bot.CONTACT_MAX_TEXT not in labels
 
 
 def test_vk_mobile_origin_label_stores_full_city(client):

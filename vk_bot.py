@@ -304,9 +304,11 @@ CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
 TOUR_SEARCH_BUTTON_TEXT = "🔎 Показать варианты"
 TOUR_MORE_BUTTON_TEXT = "🔄 Ещё варианты"
-TOUR_SEND_MANAGER_TEXT = "💬 Нужна помощь"
+TOUR_SEND_MANAGER_TEXT = "💬 Отправить менеджеру"
+TOUR_SEND_MANAGER_LEGACY_TEXT = "💬 Нужна помощь"
 TOUR_SEND_SELECTED_TEXT = "✅ Отправить этот вариант"
-CONTACT_OTHER_TEXT = "📱 Телефон или MAX"
+CONTACT_OTHER_TEXT = "📞 Способ связи"
+CONTACT_OTHER_LEGACY_TEXT = "📱 Телефон или MAX"
 TOUR_CHEAPER_TEXT = "💰 Дешевле"
 TOUR_BETTER_TEXT = "⭐ Лучше"
 TOUR_ALL_INCLUSIVE_TEXT = "🍽 Всё включено"
@@ -1113,7 +1115,7 @@ def _review_keyboard() -> str:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.extend([
         [_btn(REVIEW_HOTEL_TEXT, "secondary")],
-        [_btn(CONTACT_PHONE_TEXT, "secondary"), _btn(CONTACT_MAX_TEXT, "secondary")],
+        [_btn(CONTACT_OTHER_TEXT, "secondary")],
         [_btn(TOUR_EDIT_DATES_TEXT, "secondary"), _btn(TOUR_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
@@ -2253,14 +2255,19 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if text == TOUR_COMPARE_TEXT:
         _compare_tours(user_id)
         return
-    if text in (REVIEW_CONFIRM_TEXT, TOUR_SEND_MANAGER_TEXT, TOUR_SEND_SELECTED_TEXT):
+    if text in (
+        REVIEW_CONFIRM_TEXT,
+        TOUR_SEND_MANAGER_TEXT,
+        TOUR_SEND_MANAGER_LEGACY_TEXT,
+        TOUR_SEND_SELECTED_TEXT,
+    ):
         info.pop("_tour_searching", None)
         info.pop("_tour_search_marker", None)
         info["contact_method"] = "vk"
         client_name = message.get("_user_name") or f"VK {user_id}"
         handle_completion(user_id, f"VK (чат id {user_id}) · {client_name}", message)
         return
-    if text == CONTACT_OTHER_TEXT:
+    if text in (CONTACT_OTHER_TEXT, CONTACT_OTHER_LEGACY_TEXT):
         info["state"] = STATE_CONTACT
         _ask_contact(user_id)
         return
