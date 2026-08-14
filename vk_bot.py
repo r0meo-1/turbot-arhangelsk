@@ -302,6 +302,7 @@ NIGHTS_PRESETS: List[Tuple[str, str]] = [
     ("13–14 ночей", "13-14"),
 ]
 NIGHTS_CUSTOM_LABEL = "✏️ Своя длительность"
+BUDGET_ANY_LABEL = "🤷 Любой бюджет"
 BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
 CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
@@ -1106,23 +1107,22 @@ def _kids_ages_keyboard() -> str:
 
 
 def _budget_keyboard() -> str:
-    labels = [label for label, _ in BUDGET_PRESETS] + [BUDGET_CUSTOM_LABEL]
+    labels = [label for label, _ in BUDGET_PRESETS]
     rows = _chunk_buttons(labels, "primary", 2)
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows.append([_btn(BUDGET_ANY_LABEL, "secondary"), _btn(BUDGET_CUSTOM_LABEL, "secondary")])
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
 def _review_keyboard() -> str:
     rows: List[List[Dict[str, Any]]] = []
     if TOURVISOR_ENABLED:
-        rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "positive")])
-        rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "secondary")])
+        rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "positive")])
+        rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "primary")])
     else:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.extend([
-        [_btn(REVIEW_HOTEL_TEXT, "secondary")],
-        [_btn(CONTACT_OTHER_TEXT, "secondary")],
+        [_btn(CONTACT_OTHER_TEXT, "secondary"), _btn(REVIEW_HOTEL_TEXT, "secondary")],
         [_btn(TOUR_EDIT_DATES_TEXT, "secondary"), _btn(TOUR_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
@@ -1793,6 +1793,13 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
             keyboard=_nav_keyboard(),
         )
         return
+    if raw in (BUDGET_ANY_LABEL, "любой", "любой бюджет", "любая", "не знаю", "предложите", "предложите варианты"):
+        info["budget"] = None
+        info["budget_open_ended"] = True
+        info["budget_scope"] = "total"
+        info["state"] = STATE_REVIEW
+        _ask_review(user_id)
+        return
     budget_map = {label: val for label, val in BUDGET_PRESETS}
     if raw in budget_map:
         info["budget"] = budget_map[raw]
@@ -1821,8 +1828,12 @@ def _ask_review(user_id: int) -> None:
     consultation = "\n💬 Нужна консультация по направлению." if info.get("needs_consultation") else ""
     budget_prefix = "от" if info.get("budget_open_ended") else "до"
     budget_suffix = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
-    raw_budget = info.get("budget", 0)
-    budget_formatted = f"{raw_budget:,}".replace(",", " ") if isinstance(raw_budget, (int, float)) else str(raw_budget)
+    if info.get("budget") is None or str(info.get("budget")).lower() in ("любой", "none"):
+        budget_line = "💰 Бюджет: предложите варианты"
+    else:
+        raw_budget = info.get("budget", 0)
+        budget_formatted = f"{raw_budget:,}".replace(",", " ") if isinstance(raw_budget, (int, float)) else str(raw_budget)
+        budget_line = f"💰 Бюджет: {budget_prefix} {budget_formatted} ₽ {budget_suffix}"
     nights_line = (
         f"\n🌙 Длительность: {_tourvisor.nights_label(info['nights'])}"
         if info.get("nights") else ""
@@ -1835,7 +1846,7 @@ def _ask_review(user_id: int) -> None:
         f"📅 Даты: {info.get('dates', '—')}"
         f"{nights_line}{hotel_line}\n"
         f"👥 Состав: {_party_text(info)}\n"
-        f"💰 Бюджет: {budget_prefix} {budget_formatted} ₽ {budget_suffix}"
+        f"{budget_line}"
         f"{consultation}\n\n"
         "Всё верно?"
     )
@@ -2056,6 +2067,8 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
 
 
 def _budget_summary(info: Dict[str, Any]) -> str:
+    if info.get("budget") is None or str(info.get("budget")).lower() in ("любой", "none"):
+        return "любой (предложить варианты)"
     suffix = " на всю поездку" if info.get("budget_scope") == "total" else ""
     prefix = "от " if info.get("budget_open_ended") else "до "
     try:
@@ -2621,17 +2634,20 @@ def _notify_admin_telegram(
     if not bot_token or not LEAD_NOTIFY_IDS:
         return
     selected = _selected_tour_summary(info)
+    vk_chat_link = f"https://vk.com/gim{VK_GROUP_ID}?sel={user_id}" if VK_GROUP_ID else f"https://vk.com/im?sel={user_id}"
+    vk_profile_link = f"https://vk.com/id{user_id}"
     text = (
         "🔔 Новая заявка (VK)!\n\n"
         f"От: {client_name or 'без имени'}\n"
-        f"VK ID: {user_id}\n"
-        f"📍 {info.get('destination', '?')}\n"
+        f"💬 Диалог: {vk_chat_link}\n"
+        f"👤 Профиль: {vk_profile_link}\n\n"
+        f"📍 Направление: {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
-        + f"📅 {info.get('dates', '?')}\n"
-        + (f"🌙 {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
-        + (f"🏨 {info['hotel_query']}\n" if info.get("hotel_query") else "")
-        + f"👥 {_party_text(info)}\n"
-        f"💰 {_budget_summary(info)}\n"
+        + f"📅 Даты: {info.get('dates', '?')}\n"
+        + (f"🌙 Ночи: {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
+        + (f"🏨 Отель: {info['hotel_query']}\n" if info.get("hotel_query") else "")
+        + f"👥 Состав: {_party_text(info)}\n"
+        f"💰 Бюджет: {_budget_summary(info)}\n"
         f"📞 Связь: {phone}"
         + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else "")
     )
