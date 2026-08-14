@@ -3134,6 +3134,7 @@ def index() -> str:
 
 
 @app.route("/health")
+@app.route("/vk/health")
 def health() -> Any:
     return jsonify({
         "status": "ok",

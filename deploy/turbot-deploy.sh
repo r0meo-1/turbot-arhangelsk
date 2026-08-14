@@ -21,12 +21,14 @@ rollback() {
   git reset --hard "$previous"
   "$venv/pip" install --requirement requirements.txt
   systemctl restart turbot
+  systemctl restart vk-turbot 2>/dev/null || true
 }
 trap rollback ERR
 
 git reset --hard "$target"
 "$venv/pip" install --requirement requirements.txt
 systemctl restart turbot
+systemctl restart vk-turbot 2>/dev/null || true
 
 for _ in {1..12}; do
   if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/health >/dev/null; then
