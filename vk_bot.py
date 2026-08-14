@@ -1054,7 +1054,7 @@ def _dest_keyboard() -> str:
     rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 2)
     rows.append([_btn(DEST_HOT_TOURS_LABEL, "positive"), _btn(DEST_DIRECT_FLIGHTS_LABEL, "primary")])
     rows.append([_btn(DIRECTION_UNDECIDED_LABEL, "secondary")])
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
