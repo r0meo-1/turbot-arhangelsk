@@ -464,17 +464,12 @@ def test_vk_more_tours_pages_existing_results_without_new_search(monkeypatch):
             for i in range(1, 5)
         ],
     }
-    monkeypatch.setattr(
-        bot, "send_tour_carousel",
-        lambda uid, offers, offset, **kwargs: pages.append(
-            (offset, [o["hotel"] for o in offers])
-        ) or True,
-    )
-    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
+    captured = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
 
     bot._step_review(959, bot.TOUR_MORE_BUTTON_TEXT, {}, bot.user_data[959])
 
-    assert pages == [(3, ["Hotel 4"])]
+    assert any("Hotel 4" in text for text in captured)
     assert bot.user_data[959]["_tour_page"] == 1
 
 

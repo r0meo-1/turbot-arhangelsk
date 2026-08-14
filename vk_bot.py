@@ -1538,7 +1538,6 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         info["nights"] = 7
         info["people"] = "2"
         info["state"] = STATE_REVIEW
-        send_message(user_id, f"🔥 Нашёл самые выгодные горящие спецпредложения с вылетом из {origin}:", keyboard=_hide_keyboard())
         _send_tour_results_page(user_id, 0)
         return
 
@@ -2034,29 +2033,16 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         offset = page * 3
         offers = pool[offset:offset + 3]
         live["_tour_page"] = page
+        selected = bool(live.get("selected_tour"))
 
-    active_check = lambda: _tour_results_active(user_id)
-    carousel_sent = send_tour_carousel(user_id, offers, offset, active_check=active_check)
-    if not active_check():
-        return
-    with _lock:
-        selected = bool((user_data.get(user_id) or {}).get("selected_tour"))
-    numbers = [] if carousel_sent else list(range(offset + 1, offset + len(offers) + 1))
+    numbers = list(range(offset + 1, offset + len(offers) + 1))
     keyboard = _tour_results_keyboard(numbers, selected=selected)
-    if not carousel_sent:
-        fallback = _tourvisor.SearchResult(
-            offers=[_tourvisor.TourOffer(**offer) for offer in offers]
-        )
-        send_message(
-            user_id,
-            _tourvisor.format_client_message(fallback, start_index=offset + 1),
-            keyboard=keyboard,
-        )
-        return
+    result = _tourvisor.SearchResult(
+        offers=[_tourvisor.TourOffer(**offer) for offer in offers]
+    )
     send_message(
         user_id,
-        f"Показаны варианты {offset + 1}–{offset + len(offers)} из {len(pool)}.\n"
-        "Выберите тур или передайте подборку менеджеру.",
+        _tourvisor.format_client_message(result, start_index=offset + 1),
         keyboard=keyboard,
     )
 
