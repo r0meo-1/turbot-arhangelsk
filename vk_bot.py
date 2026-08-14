@@ -1170,8 +1170,6 @@ def _selected_tour_keyboard() -> str:
     return _keyboard([
         [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
         [_btn(TOUR_HOTEL_INFO_TEXT, "primary")],
-        [_btn(TOUR_SIMILAR_TEXT, "secondary"), _btn(TOUR_COMPARE_TEXT, "secondary")],
-        [_btn(REVIEW_HOTEL_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
 

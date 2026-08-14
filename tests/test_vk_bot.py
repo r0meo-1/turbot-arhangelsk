@@ -503,7 +503,7 @@ def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
         for button in row
     ]
     assert bot.TOUR_SEND_SELECTED_TEXT in labels
-    assert bot.REVIEW_HOTEL_TEXT in labels
+    assert bot.TOUR_HOTEL_INFO_TEXT in labels
     assert bot.BACK_BUTTON_TEXT in labels
 
 
