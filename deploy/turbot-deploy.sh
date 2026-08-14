@@ -33,6 +33,8 @@ systemctl restart vk-turbot 2>/dev/null || true
 systemctl restart turbot-vk 2>/dev/null || true
 systemctl restart vk_turbot 2>/dev/null || true
 pkill -f "vk_bot" 2>/dev/null || true
+cp "$repo/deploy/turbot-deploy.sh" /usr/local/sbin/turbot-deploy 2>/dev/null || true
+chmod 755 /usr/local/sbin/turbot-deploy 2>/dev/null || true
 cp "$repo/deploy/turbot-deploy.sh" /root/turbot-deploy.sh 2>/dev/null || true
 
 for _ in {1..12}; do
