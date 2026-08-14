@@ -1127,7 +1127,6 @@ def _review_keyboard() -> str:
     else:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.append([
-        _btn(CONTACT_PHONE_TEXT, "secondary"),
         _btn(REVIEW_HOTEL_TEXT, "secondary"),
         _btn(TOUR_EDIT_DATES_TEXT, "secondary"),
         _btn(TOUR_EDIT_BUDGET_TEXT, "secondary"),
@@ -1172,7 +1171,7 @@ def _selected_tour_keyboard() -> str:
         [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
         [_btn(TOUR_HOTEL_INFO_TEXT, "primary")],
         [_btn(TOUR_SIMILAR_TEXT, "secondary"), _btn(TOUR_COMPARE_TEXT, "secondary")],
-        [_btn(CONTACT_PHONE_TEXT, "secondary"), _btn(REVIEW_HOTEL_TEXT, "secondary")],
+        [_btn(REVIEW_HOTEL_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
 
