@@ -1,0 +1,1 @@
+restrict,command="/usr/local/sbin/turbot-deploy" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMBO+CX7UP0FmZMp2AIo4lxvBVAlpULAOvzuU1uHcWz6 github-actions-turbot-deploy
