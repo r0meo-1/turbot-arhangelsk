@@ -223,7 +223,7 @@ def test_vk_budget_presets_are_strict_total_caps(client, monkeypatch):
 
     assert bot.user_data[958]["budget_open_ended"] is False
     assert any(f"До {bot.BUDGET_PRESETS[-1][1]} ₽" in text for text in captured)
-    assert bot._budget_summary(bot.user_data[958]) == "до 400 000 ₽ на всю поездку"
+    assert bot._budget_summary(bot.user_data[958]) == "до 300 000 ₽ на всю поездку"
 
 
 def test_vk_budget_is_total_and_review_offers_clear_contact_choice(client):

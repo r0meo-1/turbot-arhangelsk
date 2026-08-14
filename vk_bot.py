@@ -270,10 +270,8 @@ DIRECTION_UNDECIDED_LABEL = "🌴 Не определился"
 UNDECIDED_DESTINATION = "Не определился — нужна консультация"
 STATE_REVIEW = "review"
 
-# Quick picks (label on keyboard → value stored in lead). Short labels are
-# deliberate: VK's Android client clips two-column inline buttons aggressively.
 DATE_PRESETS: List[Tuple[str, str]] = [
-    ("🏖 Выходные", "ближайшие выходные"),
+    ("🔥 Ближ. 2 недели", "ближайшие 2 недели"),
     ("📅 Этот месяц", "в этом месяце"),
     ("🗓 След. месяц", "следующий месяц"),
     ("🤷 Гибкие даты", "даты гибкие"),
@@ -285,10 +283,10 @@ ORIGIN_PRESETS: List[Tuple[str, str]] = [
     ("Другой город", "Другой город"),
 ]
 BUDGET_PRESETS: List[Tuple[str, int]] = [
+    ("до 100 000 ₽", 100000),
     ("до 150 000 ₽", 150000),
     ("до 200 000 ₽", 200000),
     ("до 300 000 ₽", 300000),
-    ("до 400 000 ₽", 400000),
 ]
 PARTY_PRESET_2_ADULTS = "👫 2 взрослых"
 PARTY_PRESET_1_ADULT = "👤 1 взрослый"
@@ -1364,10 +1362,10 @@ def _begin_destination(user_id: int, first_name: str = "") -> None:
     name = f", {first_name}" if first_name else ""
     send_message(
         user_id,
-        f"🌴 Отлично{name}! Давайте подберём тур.\n"
-        "Шаг 1 из 6 · направление\n\n"
+        f"🌴 Отлично{name}! Давайте подберём тур ✨\n\n"
+        "Шаг 1 из 5 · направление\n\n"
         "📍 Куда хотите поехать?\n\n"
-        "Жмите кнопку — или напишите своё направление:",
+        "Выберите популярное направление кнопкой или напишите своё:",
         keyboard=_dest_keyboard(),
     )
 
@@ -1401,9 +1399,9 @@ def _origin_keyboard() -> str:
 def _ask_origin(user_id: int) -> None:
     send_message(
         user_id,
-        "Шаг 2 из 6 · город вылета\n\n"
-        "🛫 Откуда вылетаете?\n\n"
-        "Нужно, чтобы посчитать перелёт — цена сильно зависит от города.",
+        "Шаг 2 из 5 · город вылета\n\n"
+        "🛫 Откуда удобнее вылетать?\n\n"
+        "Выберите город кнопкой или напишите свой:",
         keyboard=_origin_keyboard(),
     )
 
@@ -1411,9 +1409,9 @@ def _ask_origin(user_id: int) -> None:
 def _ask_dates(user_id: int) -> None:
     send_message(
         user_id,
-        "Шаг 3 из 6 · даты\n\n"
-        "📅 Когда планируете поездку?\n\n"
-        "Кнопка или свои даты (например: 15-22 июня):",
+        "Шаг 3 из 5 · даты поездки\n\n"
+        "📅 Когда планируете отпуск?\n\n"
+        "Выберите период кнопкой или напишите свои даты (например: 15-22 сентября):",
         keyboard=_dates_keyboard(),
     )
 
@@ -1422,9 +1420,9 @@ def _ask_nights(user_id: int, dates: Optional[str] = None) -> None:
     dates_prefix = f"📅 Вылет: {dates}\n\n" if dates else ""
     send_message(
         user_id,
-        dates_prefix + "Шаг 3 из 6 · длительность\n\n"
+        dates_prefix + "Шаг 3 из 5 · длительность\n\n"
         "🌙 На сколько ночей планируете поездку?\n\n"
-        "Кнопка или диапазон, например: 11–12:",
+        "Выберите вариант кнопкой или напишите число/диапазон:",
         keyboard=_nights_keyboard(),
     )
 
@@ -1442,7 +1440,7 @@ def _ask_people(user_id: int, dates: Optional[str] = None) -> None:
     dates_prefix = f"📅 Понял: {dates}\n\n" if dates else ""
     send_message(
         user_id,
-        dates_prefix + "Шаг 4 из 6 · состав туристов\n\n"
+        dates_prefix + "Шаг 4 из 5 · состав туристов\n\n"
         "👥 Кто поедет отдыхать?\n\n"
         "Выберите готовый состав кнопкой или укажите число взрослых (1–50):",
         keyboard=_people_keyboard(),
@@ -1457,11 +1455,9 @@ def _ask_kids_ages(user_id: int) -> None:
     """
     send_message(
         user_id,
-        "Шаг 4 из 6 · состав туристов\n\n"
-        "🎂 Напишите возраст каждого ребёнка\n\n"
-        "Возраст детей укажите через запятую: 5, 9.\n"
-        "Малыша можно указать словами «до года».\n"
-        "Если детей нет — нажмите кнопку ниже.",
+        "Шаг 4 из 5 · состав туристов\n\n"
+        "🎂 Возраст детей укажите через запятую (например: 5, 9):\n\n"
+        "Если детей нет — нажмите кнопку ниже 👇",
         keyboard=_kids_ages_keyboard(),
     )
 
@@ -1470,8 +1466,9 @@ def _ask_budget(user_id: int, party: Optional[str] = None) -> None:
     party_prefix = f"👥 Записал: {party}\n\n" if party else ""
     send_message(
         user_id,
-        party_prefix + "Шаг 5 из 6 · бюджет\n\n"
-        "💰 Общий бюджет на всю поездку (примерно, ₽)\nКнопка или своя сумма:",
+        party_prefix + "Шаг 5 из 5 · бюджет\n\n"
+        "💰 Примерный бюджет на всю поездку (₽)?\n\n"
+        "Выберите комфортную планку или введите свою сумму:",
         keyboard=_budget_keyboard(),
     )
 
@@ -1479,10 +1476,8 @@ def _ask_budget(user_id: int, party: Optional[str] = None) -> None:
 def _ask_contact(user_id: int) -> None:
     send_message(
         user_id,
-        "Шаг 6 из 6 · способ связи\n\n"
-        "📞 Как удобнее связаться?\n\n"
-        "Можно просто VK (этот чат) — телефон не обязателен.\n"
-        "Или телефон / MAX.",
+        "📞 Как удобнее связаться с вами?\n\n"
+        "Можно продолжить в VK (этот чат) или указать телефон / MAX:",
         keyboard=_contact_keyboard(),
     )
 
