@@ -1154,3 +1154,16 @@ def test_vk_direct_flights_button_shows_destinations(client, monkeypatch):
     _post(client, 974, bot.DEST_DIRECT_FLIGHTS_LABEL)
     assert any("Прямые чартерные рейсы" in text for text in captured)
 
+
+def test_vk_hotel_info_button_shows_tophotels_details(client, monkeypatch):
+    """Кнопка «Об отеле и пляже» присылает карточку с рейтингом и описанием пляжа."""
+    captured = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
+    bot.user_data[975] = {
+        "state": bot.STATE_REVIEW,
+        "selected_tour": {"hotel": "Rixos Premium", "category": 5, "region": "Белек"},
+    }
+    bot._step_review(975, bot.TOUR_HOTEL_INFO_TEXT, {}, bot.user_data[975])
+    assert any("Рейтинг TopHotels" in text for text in captured)
+    assert any("Пляж:" in text for text in captured)
+

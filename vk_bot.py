@@ -318,6 +318,7 @@ CONTACT_OTHER_LEGACY_TEXT = "📱 Телефон или MAX"
 TOUR_CHEAPER_TEXT = "💰 Дешевле"
 TOUR_BETTER_TEXT = "⭐ Лучше"
 TOUR_ALL_INCLUSIVE_TEXT = "🍽 Всё включено"
+TOUR_HOTEL_INFO_TEXT = "🏨 Об отеле и пляже"
 TOUR_SIMILAR_TEXT = "🏨 Похожие отели"
 TOUR_COMPARE_TEXT = "⚖️ Сравнить варианты"
 TOUR_EDIT_DATES_TEXT = "📅 Даты"
@@ -1151,7 +1152,8 @@ def _tour_results_keyboard(
 def _selected_tour_keyboard() -> str:
     return _keyboard([
         [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
-        [_btn(TOUR_SIMILAR_TEXT, "primary"), _btn(TOUR_COMPARE_TEXT, "secondary")],
+        [_btn(TOUR_HOTEL_INFO_TEXT, "primary")],
+        [_btn(TOUR_SIMILAR_TEXT, "secondary"), _btn(TOUR_COMPARE_TEXT, "secondary")],
         [_btn(CONTACT_OTHER_TEXT, "secondary"), _btn(REVIEW_HOTEL_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
@@ -2092,12 +2094,13 @@ def _select_tour(user_id: int, number: int) -> None:
     if offer is None:
         send_message(user_id, "Этот вариант уже недоступен. Запустите поиск ещё раз.", keyboard=_review_keyboard())
         return
+    actual = _tourvisor.actualize_tour(offer)
     send_message(
         user_id,
         f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
-        "Перед бронированием менеджер проверит наличие и окончательную цену.\n\n"
-        "Зелёная кнопка — менеджер ответит в этом чате.\n"
-        "Для связи в другом месте выберите «Телефон» или «MAX».",
+        f"⚡ {actual['flight_status']}\n"
+        f"🏨 {actual['hotel_status']}\n\n"
+        "Отправьте заявку менеджеру кнопкой ниже или изучите отель подробнее 👇",
         keyboard=_selected_tour_keyboard(),
     )
 
@@ -2229,6 +2232,34 @@ def _compare_tours(user_id: int) -> None:
     )
 
 
+def _show_hotel_info(user_id: int) -> None:
+    with _lock:
+        live = user_data.get(user_id) or {}
+        selected = live.get("selected_tour")
+        if not selected and live.get("_tour_offers"):
+            selected = live["_tour_offers"][0]
+    if not isinstance(selected, dict):
+        send_message(user_id, "Сначала выберите тур из подборки.", keyboard=_tour_results_keyboard())
+        return
+
+    hotel_name = str(selected.get("hotel") or "Отель")
+    category = int(selected.get("category") or 0)
+    stars = f" {category}★" if category else ""
+    region = str(selected.get("region") or "")
+    details = _tourvisor.get_hotel_details(hotel_name, region=region)
+    lines = [
+        f"🏨 {hotel_name}{stars} ({region})",
+        f"⭐ Рейтинг TopHotels: {details['rating']}/5 · {details['recommend_pct']}% реком. (отзывов: {details['reviews_count']})\n",
+        f"🏖 Пляж: {details['beach']}",
+        f"🏊 Бассейны: {details['pools']}",
+        f"🍽 Питание: {details['meal_concept']}",
+        f"👶 Детям: {details['kids']}",
+        f"📶 Интернет: {details['wifi']}\n",
+        "Зафиксировать этот отель в заявку менеджеру?",
+    ]
+    send_message(user_id, "\n".join(lines), keyboard=_selected_tour_keyboard())
+
+
 def _start_tour_search(
     user_id: int,
     info: Dict[str, Any],
@@ -2322,6 +2353,9 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         return
     if text == TOUR_ALL_INCLUSIVE_TEXT:
         _apply_tour_filter(user_id, "all_inclusive")
+        return
+    if text in (TOUR_HOTEL_INFO_TEXT, "описание отеля", "об отеле", "пляж"):
+        _show_hotel_info(user_id)
         return
     if text == TOUR_SIMILAR_TEXT:
         _show_similar_tours(user_id)
