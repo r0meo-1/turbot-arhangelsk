@@ -47,6 +47,9 @@ def clean_state(monkeypatch):
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
     monkeypatch.setattr(bot, "save_state", lambda: None)
     monkeypatch.setattr(bot, "get_user_name", lambda uid: f"TestUser{uid}")
+    monkeypatch.setattr(bot, "_notify_admin", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "send_lead_to_mdt", lambda *a, **k: None)
+    monkeypatch.setattr(bot._tutu, "mcp_call", lambda *a, **k: None)
 
 
 @pytest.fixture
@@ -1108,3 +1111,45 @@ def test_completed_lead_does_not_interrupt_manager_dialog(client, monkeypatch):
 
     _post(client, user_id, "Начать")
     assert bot.user_data[user_id]["state"] == bot.STATE_DESTINATION
+
+
+def test_vk_party_preset_two_adults_skips_kids_step(client):
+    """Выбор «2 взрослых» сразу переходит к бюджету без лишнего вопроса про детей."""
+    _vk_consent(client, 970)
+    for text in ["Турция", "Архангельск", "15-22 сентября"]:
+        _post(client, 970, text)
+    assert bot.user_data[970]["state"] == bot.STATE_PEOPLE
+
+    _post(client, 970, bot.PARTY_PRESET_2_ADULTS)
+    assert bot.user_data[970]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[970]["people"] == "2"
+    assert bot.user_data[970]["kids_ages"] == []
+    assert bot.user_data[970]["kids"] == 0
+
+
+def test_vk_party_preset_one_adult_skips_kids_step(client):
+    """Выбор «1 взрослый» сразу переходит к бюджету."""
+    _vk_consent(client, 971)
+    for text in ["Египет", "Москва", "1-8 октября"]:
+        _post(client, 971, text)
+
+    _post(client, 971, bot.PARTY_PRESET_1_ADULT)
+    assert bot.user_data[971]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[971]["people"] == "1"
+    assert bot.user_data[971]["kids_ages"] == []
+
+
+def test_vk_party_preset_family_with_kids_asks_age(client):
+    """Выбор «2 взр. + 1 реб.» переходит к вопросу о возрасте ребёнка."""
+    _vk_consent(client, 972)
+    for text in ["ОАЭ", "Москва", "15-22 ноября"]:
+        _post(client, 972, text)
+
+    _post(client, 972, bot.PARTY_PRESET_2_PLUS_1)
+    assert bot.user_data[972]["state"] == bot.STATE_KIDS_AGES
+    assert bot.user_data[972]["people"] == "2"
+
+    _post(client, 972, "6")
+    assert bot.user_data[972]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[972]["kids_ages"] == [6]
+

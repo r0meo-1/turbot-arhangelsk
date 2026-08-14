@@ -290,6 +290,12 @@ BUDGET_PRESETS: List[Tuple[str, int]] = [
     ("до 300 000 ₽", 300000),
     ("до 400 000 ₽", 400000),
 ]
+PARTY_PRESET_2_ADULTS = "👫 2 взрослых"
+PARTY_PRESET_1_ADULT = "👤 1 взрослый"
+PARTY_PRESET_2_PLUS_1 = "👨‍👩‍👧 2 взр. + 1 реб."
+PARTY_PRESET_2_PLUS_2 = "👨‍👩‍👧‍👦 2 взр. + 2 дет."
+PARTY_PRESET_OTHER = "👥 Другой состав"
+
 DATE_CUSTOM_LABEL = "✏️ Свои даты"
 NIGHTS_PRESETS: List[Tuple[str, str]] = [
     ("6–7 ночей", "6-7"),
@@ -1087,9 +1093,12 @@ def _nights_keyboard() -> str:
 
 
 def _people_keyboard() -> str:
-    rows = [[_btn(p, "primary") for p in PEOPLE_OPTIONS]]
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows = [
+        [_btn(PARTY_PRESET_2_ADULTS, "primary"), _btn(PARTY_PRESET_1_ADULT, "primary")],
+        [_btn(PARTY_PRESET_2_PLUS_1, "primary"), _btn(PARTY_PRESET_2_PLUS_2, "primary")],
+        [_btn(PARTY_PRESET_OTHER, "secondary")],
+        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
+    ]
     return _keyboard(rows)
 
 
@@ -1690,11 +1699,65 @@ def _human_dates(depart: str, ret: Optional[str] = None) -> str:
 
 
 def _step_people(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    raw = (text or "").strip()
+
+    if raw in (PARTY_PRESET_2_ADULTS, "2 взрослых", "2 взр", "вдвоем", "вдвоём", "пара"):
+        info["people"] = "2"
+        info["kids_ages"] = []
+        info["kids"] = 0
+        info["infants"] = 0
+        info["state"] = STATE_BUDGET
+        _ask_budget(user_id, _party_text(info))
+        return
+
+    if raw in (PARTY_PRESET_1_ADULT, "1 взрослый", "1 взр", "один", "одна", "я один", "я одна"):
+        info["people"] = "1"
+        info["kids_ages"] = []
+        info["kids"] = 0
+        info["infants"] = 0
+        info["state"] = STATE_BUDGET
+        _ask_budget(user_id, _party_text(info))
+        return
+
+    if raw in (PARTY_PRESET_2_PLUS_1, "2+1", "2 взр + 1 реб", "2 взр. + 1 реб."):
+        info["people"] = "2"
+        info["state"] = STATE_KIDS_AGES
+        send_message(
+            user_id,
+            "Шаг 4 из 6 · состав туристов\n\n"
+            "🎂 Сколько лет ребёнку?\n\n"
+            "Возраст ребёнка укажите числом: 5 (или «до года»):\n"
+            "Если детей нет — нажмите «👶 Детей нет».",
+            keyboard=_kids_ages_keyboard(),
+        )
+        return
+
+    if raw in (PARTY_PRESET_2_PLUS_2, "2+2", "2 взр + 2 дет", "2 взр. + 2 дет."):
+        info["people"] = "2"
+        info["state"] = STATE_KIDS_AGES
+        send_message(
+            user_id,
+            "Шаг 4 из 6 · состав туристов\n\n"
+            "🎂 Напишите возраст каждого ребёнка\n\n"
+            "Возраст детей укажите через запятую: 5, 9.\n"
+            "Если детей нет — нажмите «👶 Детей нет».",
+            keyboard=_kids_ages_keyboard(),
+        )
+        return
+
+    if raw in (PARTY_PRESET_OTHER, "другой", "другой состав"):
+        send_message(
+            user_id,
+            "✍️ Напишите количество взрослых числом (1–50):",
+            keyboard=_nav_keyboard(),
+        )
+        return
+
     ok, value = validate_people(text)
     if not ok:
         send_message(
             user_id,
-            "Сколько ВЗРОСЛЫХ? Число от 1 до 50 или «5+» — удобнее кнопкой.",
+            "Сколько ВЗРОСЛЫХ? Число от 1 до 50 или кнопка с составом.",
             keyboard=_people_keyboard(),
         )
         return
