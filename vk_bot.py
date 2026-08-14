@@ -311,7 +311,7 @@ TOUR_MORE_BUTTON_TEXT = "🔄 Ещё варианты"
 TOUR_SEND_MANAGER_TEXT = "💬 Отправить менеджеру"
 TOUR_SEND_MANAGER_LEGACY_TEXT = "💬 Нужна помощь"
 TOUR_SEND_SELECTED_TEXT = "✅ Отправить этот вариант"
-CONTACT_OTHER_TEXT = "📞 Способ связи"
+CONTACT_OTHER_TEXT = "📞 Связь"
 CONTACT_OTHER_LEGACY_TEXT = "📱 Телефон или MAX"
 TOUR_CHEAPER_TEXT = "💰 Дешевле"
 TOUR_BETTER_TEXT = "⭐ Лучше"
@@ -321,7 +321,7 @@ TOUR_COMPARE_TEXT = "⚖️ Сравнить варианты"
 TOUR_EDIT_DATES_TEXT = "📅 Даты"
 TOUR_EDIT_BUDGET_TEXT = "💰 Бюджет"
 TOUR_SHOW_OVER_BUDGET_TEXT = "Показать дороже"
-REVIEW_HOTEL_TEXT = "🏨 Указать отель"
+REVIEW_HOTEL_TEXT = "🏨 Отель"
 REVIEW_EDIT_DATES_TEXT = "✏️ Изменить даты"
 REVIEW_EDIT_BUDGET_TEXT = "✏️ Изменить бюджет"
 NEW_SELECTION_BUTTON_TEXT = "🧳 Новый подбор"
@@ -2346,7 +2346,7 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         client_name = message.get("_user_name") or f"VK {user_id}"
         handle_completion(user_id, f"VK (чат id {user_id}) · {client_name}", message)
         return
-    if text in (CONTACT_OTHER_TEXT, CONTACT_OTHER_LEGACY_TEXT):
+    if text in (CONTACT_OTHER_TEXT, CONTACT_OTHER_LEGACY_TEXT, "📞 Способ связи", "📞 Связь", "связь"):
         info["state"] = STATE_CONTACT
         _ask_contact(user_id)
         return
