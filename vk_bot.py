@@ -2065,9 +2065,11 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
     result = _tourvisor.SearchResult(
         offers=[_tourvisor.TourOffer(**offer) for offer in offers]
     )
+    header = f"📄 Страница {page + 1} из {page_count} (варианты {offset + 1}–{offset + len(offers)} из {len(pool)}):\n\n"
+    content = _tourvisor.format_client_message(result, start_index=offset + 1)
     send_message(
         user_id,
-        _tourvisor.format_client_message(result, start_index=offset + 1),
+        header + content,
         keyboard=keyboard,
     )
 
@@ -2173,19 +2175,19 @@ def _apply_tour_filter(user_id: int, mode: str) -> None:
     with _lock:
         live = user_data.get(user_id)
         base = _base_tour_offers(live or {})
+        prev_mode = (live or {}).get("_tour_filter_mode")
+        current_page = int((live or {}).get("_tour_page") or 0)
     if not base:
         send_message(user_id, "Сначала нажмите «Показать варианты».", keyboard=_review_keyboard())
         return
 
     if mode == "cheaper":
         offers = sorted(base, key=_offer_total_price)
-        intro = "💰 Сначала показываю самые доступные варианты."
     elif mode == "better":
         offers = sorted(
             base,
-            key=lambda offer: (-int(offer.get("category") or 0), _offer_total_price(offer)),
+            key=lambda offer: (-int(offer.get("category") or 0), -float(offer.get("rating") or 0), _offer_total_price(offer)),
         )
-        intro = "⭐ Сначала показываю отели с более высокой категорией."
     else:
         offers = [offer for offer in base if _tourvisor.is_all_inclusive(offer.get("meal"))]
         if not offers:
@@ -2197,8 +2199,22 @@ def _apply_tour_filter(user_id: int, mode: str) -> None:
             )
             return
         offers.sort(key=_offer_total_price)
-        intro = "🍽 Оставил только варианты с питанием «всё включено»."
-    _show_tour_view(user_id, offers, intro)
+
+    with _lock:
+        live = user_data.get(user_id)
+        if live is None or live.get("state") != STATE_REVIEW:
+            return
+        page_count = max(1, (len(offers) + 2) // 3)
+        if prev_mode == mode:
+            target_page = (current_page + 1) % page_count
+        else:
+            target_page = 0
+        live["_tour_filter_mode"] = mode
+        live["_tour_offers"] = list(offers)
+        live["_tour_page"] = target_page
+        live.pop("selected_tour", None)
+
+    _send_tour_results_page(user_id, target_page)
 
 
 def _show_similar_tours(user_id: int) -> None:
