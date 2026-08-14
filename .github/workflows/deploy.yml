@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - uses: actions/checkout@v5
       - name: Load restricted deploy key
         uses: webfactory/ssh-agent@v0.9.1
         with:
