@@ -1209,5 +1209,4 @@ def format_client_message(
         if offer.operator:
             lines.append(f"   Туроператор: {offer.operator}")
         lines.append("")
-    lines.append("Цены актуальны на момент поиска. Менеджер зафиксирует стоимость перед бронированием ✨")
-    return "\n".join(lines)[:max_len]
+    return "\n".join(lines).strip()[:max_len]
