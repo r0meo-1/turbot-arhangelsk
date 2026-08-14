@@ -2602,14 +2602,32 @@ def _prompt_for_state(user_id: int, state: str) -> None:
         send_message(user_id, "Продолжите ввод:", keyboard=_nav_keyboard())
 
 
+def _get_previous_state(info: Dict[str, Any]) -> Optional[str]:
+    state = info.get("state")
+    if state == STATE_REVIEW:
+        if info.get("destination") == "🔥 Горящие туры":
+            return STATE_DESTINATION
+        return STATE_BUDGET
+    if state == STATE_BUDGET:
+        # If user has kids in party, go back to kids ages; otherwise skip back directly to people!
+        if info.get("kids_ages") or info.get("kids"):
+            return STATE_KIDS_AGES
+        return STATE_PEOPLE
+    if state in (STATE_KIDS_AGES, STATE_KIDS, STATE_INFANTS):
+        return STATE_PEOPLE
+    if state == STATE_PEOPLE:
+        if info.get("dates_are_trip") is True:
+            return STATE_DATES
+        return STATE_NIGHTS
+    return PREVIOUS_STATE.get(state)
+
+
 def _go_back(user_id: int) -> None:
     info = user_data.get(user_id, {})
     state = info.get("state")
-    previous = PREVIOUS_STATE.get(state)
-    if state == STATE_PEOPLE and info.get("dates_are_trip") is True:
-        previous = STATE_DATES
-    if previous is None:
-        send_message(user_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отменить».")
+    previous = _get_previous_state(info)
+    if previous is None or state == STATE_DESTINATION:
+        send_message(user_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отмена».", keyboard=_dest_keyboard())
         return
     info["state"] = previous
     _mark_dirty(user_id, user=False)
