@@ -40,12 +40,7 @@ jobs:
         uses: webfactory/ssh-agent@v0.9.1
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
-      - name: Pin server host key
-        run: |
-          install -d -m 700 ~/.ssh
-          cp deploy/ssh-known_hosts ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
       - name: Trigger restricted server deploy
         run: >
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new
           root@${{ secrets.DEPLOY_HOST }} true
