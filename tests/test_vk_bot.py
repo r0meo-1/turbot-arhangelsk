@@ -239,9 +239,8 @@ def test_vk_budget_is_total_and_review_offers_clear_contact_choice(client):
         for row in json.loads(bot._review_keyboard())["buttons"]
         for button in row
     ]
-    assert bot.CONTACT_OTHER_TEXT in labels
-    assert bot.CONTACT_PHONE_TEXT not in labels
-    assert bot.CONTACT_MAX_TEXT not in labels
+    assert bot.CONTACT_PHONE_TEXT in labels
+    assert bot.REVIEW_HOTEL_TEXT in labels
 
 
 def test_vk_mobile_origin_label_stores_full_city(client):
@@ -504,7 +503,7 @@ def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
         for button in row
     ]
     assert bot.TOUR_SEND_SELECTED_TEXT in labels
-    assert bot.CONTACT_OTHER_TEXT in labels
+    assert bot.CONTACT_PHONE_TEXT in labels
     assert bot.BACK_BUTTON_TEXT in labels
 
 

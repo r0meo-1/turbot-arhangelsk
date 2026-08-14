@@ -313,7 +313,7 @@ TOUR_MORE_BUTTON_TEXT = "🔄 Ещё варианты"
 TOUR_SEND_MANAGER_TEXT = "💬 Отправить менеджеру"
 TOUR_SEND_MANAGER_LEGACY_TEXT = "💬 Нужна помощь"
 TOUR_SEND_SELECTED_TEXT = "✅ Отправить этот вариант"
-CONTACT_OTHER_TEXT = "📞 Связь"
+CONTACT_OTHER_TEXT = "📞 Способ связи"
 CONTACT_OTHER_LEGACY_TEXT = "📱 Телефон или MAX"
 TOUR_CHEAPER_TEXT = "💰 Дешевле"
 TOUR_BETTER_TEXT = "⭐ Лучше"
@@ -1127,7 +1127,7 @@ def _review_keyboard() -> str:
     else:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.append([
-        _btn(CONTACT_OTHER_TEXT, "secondary"),
+        _btn(CONTACT_PHONE_TEXT, "secondary"),
         _btn(REVIEW_HOTEL_TEXT, "secondary"),
         _btn(TOUR_EDIT_DATES_TEXT, "secondary"),
         _btn(TOUR_EDIT_BUDGET_TEXT, "secondary"),
@@ -1172,7 +1172,7 @@ def _selected_tour_keyboard() -> str:
         [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
         [_btn(TOUR_HOTEL_INFO_TEXT, "primary")],
         [_btn(TOUR_SIMILAR_TEXT, "secondary"), _btn(TOUR_COMPARE_TEXT, "secondary")],
-        [_btn(CONTACT_OTHER_TEXT, "secondary"), _btn(REVIEW_HOTEL_TEXT, "secondary")],
+        [_btn(CONTACT_PHONE_TEXT, "secondary"), _btn(REVIEW_HOTEL_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
 
@@ -2410,11 +2410,7 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         client_name = message.get("_user_name") or f"VK {user_id}"
         handle_completion(user_id, f"VK (чат id {user_id}) · {client_name}", message)
         return
-    if text in (CONTACT_OTHER_TEXT, CONTACT_OTHER_LEGACY_TEXT, "📞 Способ связи", "📞 Связь", "связь"):
-        info["state"] = STATE_CONTACT
-        _ask_contact(user_id)
-        return
-    if text == CONTACT_PHONE_TEXT:
+    if text in (CONTACT_PHONE_TEXT, "телефон", "phone", "📱 телефон"):
         info["contact_method"] = "phone"
         info["state"] = STATE_PHONE
         send_message(
@@ -2422,6 +2418,10 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
             "📱 Укажите номер телефона (+7…):",
             keyboard=_nav_keyboard(),
         )
+        return
+    if text in (CONTACT_OTHER_TEXT, CONTACT_OTHER_LEGACY_TEXT, "📞 Способ связи", "📞 Связь", "связь", "способ связи"):
+        info["state"] = STATE_CONTACT
+        _ask_contact(user_id)
         return
     if text == CONTACT_MAX_TEXT:
         info["contact_method"] = "max"
