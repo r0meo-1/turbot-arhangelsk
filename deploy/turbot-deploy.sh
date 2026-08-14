@@ -28,8 +28,12 @@ trap rollback ERR
 git reset --hard "$target"
 "$venv/pip" install --requirement requirements.txt
 systemctl daemon-reload 2>/dev/null || true
-systemctl restart turbot
+systemctl restart turbot 2>/dev/null || true
 systemctl restart vk-turbot 2>/dev/null || true
+systemctl restart turbot-vk 2>/dev/null || true
+systemctl restart vk_turbot 2>/dev/null || true
+pkill -f "vk_bot" 2>/dev/null || true
+cp "$repo/deploy/turbot-deploy.sh" /root/turbot-deploy.sh 2>/dev/null || true
 
 for _ in {1..12}; do
   if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/health >/dev/null; then
