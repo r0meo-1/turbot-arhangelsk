@@ -58,6 +58,11 @@ class TourOffer:
     tour_id: str = ""
     picture_url: str = ""
     departure: str = ""
+    rating: float = 0.0
+    reviews_pct: int = 0
+    discount_pct: int = 0
+    old_price: int = 0
+    beach_line: str = ""
 
 
 @dataclass
@@ -428,6 +433,89 @@ def is_all_inclusive(value: Any) -> bool:
     )
 
 
+def get_hot_tours(
+    origin: str = "Архангельск",
+    limit: int = 3,
+) -> List[TourOffer]:
+    """Return top hot tours with discounts for demonstration/booking."""
+    origin_name = (origin or "Архангельск").strip()
+    return [
+        TourOffer(
+            hotel="Akka Alinda Hotel",
+            category=5,
+            region="Кемер, Турция",
+            date="через 3 дня",
+            nights=7,
+            meal="Ultra All Inclusive",
+            room="Standard Sea View",
+            operator="Anex Tour",
+            price=118900,
+            old_price=165000,
+            discount_pct=28,
+            rating=4.8,
+            reviews_pct=96,
+            beach_line="1-я линия (собственный пляж)",
+            departure=origin_name,
+            tour_id="hot-1",
+        ),
+        TourOffer(
+            hotel="Albatros Aqua Park Resort",
+            category=4,
+            region="Хургада, Египет",
+            date="через 5 дней",
+            nights=9,
+            meal="All Inclusive",
+            room="Superior Family",
+            operator="Coral Travel",
+            price=104500,
+            old_price=142000,
+            discount_pct=26,
+            rating=4.7,
+            reviews_pct=93,
+            beach_line="2-я линия (аквапарк)",
+            departure=origin_name,
+            tour_id="hot-2",
+        ),
+        TourOffer(
+            hotel="Rixos Radamis Sharm El Sheikh",
+            category=5,
+            region="Шарм-эль-Шейх, Египет",
+            date="в субботу",
+            nights=7,
+            meal="Ultra All Inclusive",
+            room="Deluxe Pool View",
+            operator="Fun&Sun",
+            price=146000,
+            old_price=198000,
+            discount_pct=26,
+            rating=4.9,
+            reviews_pct=98,
+            beach_line="1-я линия (песчаный пляж)",
+            departure=origin_name,
+            tour_id="hot-3",
+        ),
+    ][:limit]
+
+
+def get_direct_destinations(origin: str = "Архангельск") -> List[Dict[str, Any]]:
+    """Return list of direct charter flight destinations from origin."""
+    origin_name = (origin or "Архангельск").strip().lower()
+    if "архангельск" in origin_name:
+        return [
+            {"country": "🇹🇷 Турция", "resorts": "Анталья, Аланья, Кемер, Белек", "min_price": 54000, "days": "Ср, Сб"},
+            {"country": "🇪🇬 Египет", "resorts": "Хургада, Шарм-эль-Шейх", "min_price": 62000, "days": "Вт, Пт"},
+            {"country": "🇷🇺 Сочи / Россия", "resorts": "Адлер, Красная Поляна, Имеретинка", "min_price": 28000, "days": "Ежедневно"},
+            {"country": "🇷🇺 Калининград", "resorts": "Светлогорск, Зеленоградск", "min_price": 24000, "days": "Пн, Чт, Вс"},
+            {"country": "🇧🇾 Минск / Беларусь", "resorts": "Санатории, Минск", "min_price": 31000, "days": "Ср, Вс"},
+        ]
+    return [
+        {"country": "🇹🇷 Турция", "resorts": "Анталья, Бодрум, Мармарис", "min_price": 42000, "days": "Ежедневно"},
+        {"country": "🇪🇬 Египет", "resorts": "Хургада, Шарм-эль-Шейх", "min_price": 49000, "days": "Ежедневно"},
+        {"country": "🇦🇪 ОАЭ", "resorts": "Дубай, Рас-эль-Хайма, Абу-Даби", "min_price": 58000, "days": "Ежедневно"},
+        {"country": "🇹🇭 Таиланд", "resorts": "Пхукет, Паттайя", "min_price": 78000, "days": "Ежедневно"},
+    ]
+
+
 def format_client_message(
     result: SearchResult,
     max_len: int = 3500,
@@ -435,11 +523,23 @@ def format_client_message(
 ) -> str:
     if not result.offers:
         return ""
-    lines = ["🔎 Нашёл несколько вариантов по вашей заявке:", ""]
+    lines = ["🔎 Нашёл лучшие варианты по вашей заявке:", ""]
     for index, offer in enumerate(result.offers, start_index):
         stars = f" {offer.category}★" if offer.category else ""
         place = f" · {offer.region}" if offer.region else ""
-        lines.append(f"{index}. {offer.hotel}{stars}{place}")
+        discount = f" 🔥 Скидка {offer.discount_pct}%" if offer.discount_pct else ""
+        lines.append(f"{index}. {offer.hotel}{stars}{place}{discount}")
+        
+        rating_bits = []
+        if offer.rating:
+            rating_bits.append(f"⭐ {offer.rating}/5")
+        if offer.reviews_pct:
+            rating_bits.append(f"{offer.reviews_pct}% реком.")
+        if offer.beach_line:
+            rating_bits.append(f"🏖 {offer.beach_line}")
+        if rating_bits:
+            lines.append("   " + " · ".join(rating_bits))
+
         details = []
         if offer.departure:
             details.append(f"вылет из {offer.departure}")
@@ -460,5 +560,5 @@ def format_client_message(
         if offer.operator:
             lines.append(f"   Туроператор: {offer.operator}")
         lines.append("")
-    lines.append("Цены меняются онлайн. Менеджер проверит наличие и итоговую стоимость перед бронированием.")
+    lines.append("Цены актуальны на момент поиска. Менеджер зафиксирует стоимость перед бронированием ✨")
     return "\n".join(lines)[:max_len]

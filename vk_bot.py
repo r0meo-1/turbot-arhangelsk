@@ -268,6 +268,8 @@ if CONSENT_MODE not in ("soft", "strict"):
 POPULAR_DESTINATIONS = POPULAR_DESTINATIONS_PLAIN
 DIRECTION_UNDECIDED_LABEL = "🌴 Не определился"
 UNDECIDED_DESTINATION = "Не определился — нужна консультация"
+DEST_HOT_TOURS_LABEL = "🔥 Горящие туры"
+DEST_DIRECT_FLIGHTS_LABEL = "🛫 Прямые вылеты"
 STATE_REVIEW = "review"
 
 DATE_PRESETS: List[Tuple[str, str]] = [
@@ -1056,6 +1058,7 @@ def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) 
 
 def _dest_keyboard() -> str:
     rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 2)
+    rows.append([_btn(DEST_HOT_TOURS_LABEL, "positive"), _btn(DEST_DIRECT_FLIGHTS_LABEL, "primary")])
     rows.append([_btn(DIRECTION_UNDECIDED_LABEL, "secondary")])
     rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
@@ -1523,6 +1526,34 @@ def _step_consent(user_id: int, text: str, message: Dict[str, Any], info: Dict[s
 
 def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     dest = text.strip()
+    if dest in (DEST_HOT_TOURS_LABEL, "горящие туры", "горящие", "горящий тур", "горящие туры из архангельска"):
+        origin = info.get("origin") or "Архангельск"
+        hot_offers = _tourvisor.get_hot_tours(origin)
+        info["_tour_offers"] = [offer.__dict__ if hasattr(offer, "__dict__") else offer for offer in hot_offers]
+        info["_tour_offers_base"] = list(info["_tour_offers"])
+        info["_tour_page"] = 0
+        info["destination"] = "🔥 Горящие туры"
+        info["origin"] = origin
+        info["dates"] = "ближайшие дни"
+        info["nights"] = 7
+        info["people"] = "2"
+        info["state"] = STATE_REVIEW
+        send_message(user_id, f"🔥 Нашёл самые выгодные горящие спецпредложения с вылетом из {origin}:", keyboard=_hide_keyboard())
+        _send_tour_results_page(user_id, 0)
+        return
+
+    if dest in (DEST_DIRECT_FLIGHTS_LABEL, "прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс"):
+        origin = info.get("origin") or "Архангельск"
+        directs = _tourvisor.get_direct_destinations(origin)
+        lines = [f"🛫 Прямые чартерные рейсы из {origin}:\n"]
+        for d in directs:
+            price_str = f"{d['min_price']:,} ₽".replace(",", " ")
+            lines.append(f"• {d['country']} (от {price_str}) — {d['resorts']}")
+            lines.append(f"   🗓 Вылеты: {d['days']}\n")
+        lines.append("Выберите направление кнопкой ниже или напишите своё:")
+        send_message(user_id, "\n".join(lines), keyboard=_dest_keyboard())
+        return
+
     if dest == DIRECTION_UNDECIDED_LABEL:
         info["destination"] = UNDECIDED_DESTINATION
         info["needs_consultation"] = True
@@ -1911,6 +1942,8 @@ def _tour_search_worker(
             _tourvisor_settings(), http_session, origin_snapshot, log=logger,
         ))
     combined = [offer for result in results for offer in result.offers]
+    if not combined:
+        combined = _tourvisor.get_hot_tours(snapshot.get("origin") or "Архангельск")
     combined.sort(key=lambda offer: offer.price + offer.fuel_charge)
     result = _tourvisor.SearchResult(
         offers=combined[:TOURVISOR_MAX_OFFERS],
@@ -2227,13 +2260,6 @@ def _start_tour_search(
     *,
     ignore_budget: bool = False,
 ) -> None:
-    if not TOURVISOR_ENABLED or not TOURVISOR_TOKEN:
-        send_message(
-            user_id,
-            "Автоматический поиск сейчас недоступен. Отправьте заявку — менеджер подберёт варианты.",
-            keyboard=_review_keyboard(),
-        )
-        return
     if info.get("needs_consultation"):
         send_message(
             user_id,

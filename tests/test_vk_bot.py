@@ -1141,3 +1141,21 @@ def test_vk_party_preset_family_with_kids_asks_age(client):
     assert bot.user_data[972]["state"] == bot.STATE_BUDGET
     assert bot.user_data[972]["kids_ages"] == [6]
 
+
+def test_vk_hot_tours_button_shows_hot_deals(client):
+    """Кнопка «Горящие туры» сразу выдает варианты горящих туров."""
+    _vk_consent(client, 973)
+    _post(client, 973, bot.DEST_HOT_TOURS_LABEL)
+    assert bot.user_data[973]["state"] == bot.STATE_REVIEW
+    assert bot.user_data[973]["_tour_offers"]
+    assert len(bot.user_data[973]["_tour_offers"]) > 0
+
+
+def test_vk_direct_flights_button_shows_destinations(client, monkeypatch):
+    """Кнопка «Прямые вылеты» выдает список направлений из города вылета."""
+    captured = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
+    _vk_consent(client, 974)
+    _post(client, 974, bot.DEST_DIRECT_FLIGHTS_LABEL)
+    assert any("Прямые чартерные рейсы" in text for text in captured)
+
