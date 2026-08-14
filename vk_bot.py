@@ -233,7 +233,7 @@ TOURVISOR_BASE_URL = os.getenv(
 TOURVISOR_TIMEOUT = _env_int("TOURVISOR_TIMEOUT", 15)
 TOURVISOR_POLL_INTERVAL = _env_int("TOURVISOR_POLL_INTERVAL", 3)
 TOURVISOR_MAX_WAIT = _env_int("TOURVISOR_MAX_WAIT", 30)
-TOURVISOR_MAX_OFFERS = _env_int("TOURVISOR_MAX_OFFERS", 9)
+TOURVISOR_MAX_OFFERS = _env_int("TOURVISOR_MAX_OFFERS", 15)
 TOURVISOR_CAROUSEL_IMAGES = os.getenv(
     "VK_TOURVISOR_CAROUSEL_IMAGES", "true"
 ).lower().strip() in ("1", "true", "yes")
@@ -1965,7 +1965,12 @@ def _tour_search_worker(
         ))
     combined = [offer for result in results for offer in result.offers]
     if not combined:
-        combined = _tourvisor.get_hot_tours(snapshot.get("origin") or "Архангельск")
+        dest_val = snapshot.get("destination") or ""
+        combined = _tourvisor.get_hot_tours(
+            snapshot.get("origin") or "Архангельск",
+            destination=dest_val,
+            limit=TOURVISOR_MAX_OFFERS,
+        )
     combined.sort(key=lambda offer: offer.price + offer.fuel_charge)
     result = _tourvisor.SearchResult(
         offers=combined[:TOURVISOR_MAX_OFFERS],
