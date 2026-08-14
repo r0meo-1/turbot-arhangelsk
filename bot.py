@@ -3220,7 +3220,7 @@ def _process_update(data: Dict[str, Any]) -> None:
         )
         return
 
-    if text == "/cancel" or text == CANCEL_BUTTON_TEXT:
+    if text in ("/cancel", CANCEL_BUTTON_TEXT, "❌ Отмена", "❌ Отменить"):
         handle_cancel(chat_id)
         return
 

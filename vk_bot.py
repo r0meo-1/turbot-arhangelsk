@@ -1819,9 +1819,10 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
 def _ask_review(user_id: int) -> None:
     info = user_data.get(user_id, {})
     consultation = "\n💬 Нужна консультация по направлению." if info.get("needs_consultation") else ""
-    budget_prefix = "От" if info.get("budget_open_ended") else "До"
+    budget_prefix = "от" if info.get("budget_open_ended") else "до"
     budget_suffix = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
-    dates_label = "Даты поездки" if info.get("dates_are_trip") else "Вылет"
+    raw_budget = info.get("budget", 0)
+    budget_formatted = f"{raw_budget:,}".replace(",", " ") if isinstance(raw_budget, (int, float)) else str(raw_budget)
     nights_line = (
         f"\n🌙 Длительность: {_tourvisor.nights_label(info['nights'])}"
         if info.get("nights") else ""
@@ -1829,12 +1830,12 @@ def _ask_review(user_id: int) -> None:
     hotel_line = f"\n🏨 Отель: {info['hotel_query']}" if info.get("hotel_query") else ""
     summary = (
         "Проверьте заявку:\n\n"
-        f"📍 {info.get('destination', '—')}\n"
+        f"📍 Направление: {info.get('destination', '—')}\n"
         f"🛫 Вылет: {info.get('origin', '—')}\n"
-        f"📅 {dates_label}: {info.get('dates', '—')}"
+        f"📅 Даты: {info.get('dates', '—')}"
         f"{nights_line}{hotel_line}\n"
-        f"👥 {_party_text(info)}\n"
-        f"💰 {budget_prefix} {info.get('budget', '—')} ₽ {budget_suffix}"
+        f"👥 Состав: {_party_text(info)}\n"
+        f"💰 Бюджет: {budget_prefix} {budget_formatted} ₽ {budget_suffix}"
         f"{consultation}\n\n"
         "Всё верно?"
     )

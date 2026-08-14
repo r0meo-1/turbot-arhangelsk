@@ -27,7 +27,7 @@ PEOPLE_OPTIONS = ["1", "2", "3", "4", "5+"]
 # what the ages already say, and the ages decide the band.
 
 BACK_BUTTON_TEXT = "◀️ Назад"
-CANCEL_BUTTON_TEXT = "❌ Отменить"
+CANCEL_BUTTON_TEXT = "❌ Отмена"
 CONSENT_YES_TEXT = "✅ Согласен"
 CONSENT_NO_TEXT = "❌ Отказаться"
 START_BUTTON_TEXT = "🚀 Начать подбор"
