@@ -308,7 +308,7 @@ BUDGET_ANY_LABEL = "🤷 Любой бюджет"
 BUDGET_CUSTOM_LABEL = "✏️ Свой бюджет"
 CONTACT_VK_CHAT_LABEL = "💙 VK (этот чат)"
 REVIEW_CONFIRM_TEXT = "✅ Отправить заявку"
-TOUR_SEARCH_BUTTON_TEXT = "🔎 Показать варианты"
+TOUR_SEARCH_BUTTON_TEXT = "🔎 Показать отели и цены"
 TOUR_MORE_BUTTON_TEXT = "🔄 Ещё варианты"
 TOUR_SEND_MANAGER_TEXT = "💬 Отправить менеджеру"
 TOUR_SEND_MANAGER_LEGACY_TEXT = "💬 Нужна помощь"
@@ -1122,8 +1122,8 @@ def _budget_keyboard() -> str:
 def _review_keyboard() -> str:
     rows: List[List[Dict[str, Any]]] = []
     if TOURVISOR_ENABLED:
-        rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "positive")])
-        rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "primary")])
+        rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "positive")])
+        rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "secondary")])
     else:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
     rows.append([
@@ -1897,7 +1897,7 @@ def _ask_review(user_id: int) -> None:
         f"👥 Состав: {_party_text(info)}\n"
         f"{budget_line}"
         f"{consultation}\n\n"
-        "Всё верно?"
+        "✨ Нажмите кнопку «🔎 Показать отели и цены», чтобы мгновенно увидеть доступные варианты со скидками и рейтингом 👇"
     )
     response = send_message(
         user_id,
@@ -2374,7 +2374,16 @@ def _start_tour_search(
 
 
 def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    if text == TOUR_SEARCH_BUTTON_TEXT:
+    if text in (
+        TOUR_SEARCH_BUTTON_TEXT,
+        "🔎 Показать отели и цены",
+        "Показать отели и цены",
+        "🔎 Показать варианты",
+        "Показать варианты",
+        "показать варианты",
+        "показать туры",
+        "показать отели",
+    ):
         _start_tour_search(user_id, info)
         return
     selected_match = re.fullmatch(
