@@ -1052,10 +1052,9 @@ def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) 
 
 
 def _dest_keyboard() -> str:
-    rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 2)
+    rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 3)
     rows.append([_btn(DEST_HOT_TOURS_LABEL, "positive"), _btn(DEST_DIRECT_FLIGHTS_LABEL, "primary")])
-    rows.append([_btn(DIRECTION_UNDECIDED_LABEL, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows.append([_btn(DIRECTION_UNDECIDED_LABEL, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
@@ -1110,11 +1109,13 @@ def _review_keyboard() -> str:
         rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "primary")])
     else:
         rows.append([_btn(REVIEW_CONFIRM_TEXT, "positive")])
-    rows.extend([
-        [_btn(CONTACT_OTHER_TEXT, "secondary"), _btn(REVIEW_HOTEL_TEXT, "secondary")],
-        [_btn(TOUR_EDIT_DATES_TEXT, "secondary"), _btn(TOUR_EDIT_BUDGET_TEXT, "secondary")],
-        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
+    rows.append([
+        _btn(CONTACT_OTHER_TEXT, "secondary"),
+        _btn(REVIEW_HOTEL_TEXT, "secondary"),
+        _btn(TOUR_EDIT_DATES_TEXT, "secondary"),
+        _btn(TOUR_EDIT_BUDGET_TEXT, "secondary"),
     ])
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
