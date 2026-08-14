@@ -1052,10 +1052,27 @@ def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) 
 
 
 def _dest_keyboard() -> str:
-    rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 3)
-    rows.append([_btn(DEST_HOT_TOURS_LABEL, "positive"), _btn(DEST_DIRECT_FLIGHTS_LABEL, "primary")])
-    rows.append([_btn(DIRECTION_UNDECIDED_LABEL, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
-    return _keyboard(rows)
+    return _keyboard([
+        [_btn("Турция", "primary"), _btn("Египет", "primary"), _btn("ОАЭ", "primary")],
+        [_btn(DEST_HOT_TOURS_LABEL, "positive"), _btn(DEST_DIRECT_FLIGHTS_LABEL, "primary"), _btn("🌍 Другие", "secondary")],
+        [_btn(DIRECTION_UNDECIDED_LABEL, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
+    ])
+
+
+def _dest_more_keyboard() -> str:
+    return _keyboard([
+        [_btn("Таиланд", "primary"), _btn("Мальдивы", "primary"), _btn("Сочи", "primary")],
+        [_btn("Калининград", "primary"), _btn("Абхазия", "primary"), _btn("✍️ Свой вариант", "secondary")],
+        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
+    ])
+
+
+def _dest_direct_keyboard() -> str:
+    return _keyboard([
+        [_btn("Турция", "primary"), _btn("Египет", "primary"), _btn("Сочи", "primary")],
+        [_btn("Калининград", "primary"), _btn("Минск", "primary"), _btn("✍️ Свой вариант", "secondary")],
+        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
+    ])
 
 
 def _nav_keyboard(extra_top: Optional[List[Dict]] = None) -> str:
@@ -1542,7 +1559,23 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
             lines.append(f"• {d['country']} (от {price_str}) — {d['resorts']}")
             lines.append(f"   🗓 Вылеты: {d['days']}\n")
         lines.append("Выберите направление кнопкой ниже или напишите своё:")
-        send_message(user_id, "\n".join(lines), keyboard=_dest_keyboard())
+        send_message(user_id, "\n".join(lines), keyboard=_dest_direct_keyboard())
+        return
+
+    if dest in ("🌍 другие", "другие", "ещё", "другие направления", "ещё направления"):
+        send_message(
+            user_id,
+            "🌍 Выберите популярное направление или укажите своё:",
+            keyboard=_dest_more_keyboard(),
+        )
+        return
+
+    if dest in ("✍️ свой вариант", "свой вариант", "своё", "другое", "написать своё"):
+        send_message(
+            user_id,
+            "✍️ Напишите страну, курорт или город, куда хотите поехать:",
+            keyboard=_nav_keyboard(),
+        )
         return
 
     if dest == DIRECTION_UNDECIDED_LABEL:
@@ -1550,9 +1583,6 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         info["needs_consultation"] = True
         info["state"] = STATE_ORIGIN
         _ask_origin(user_id)
-        return
-    if dest.lower() == "другое":
-        send_message(user_id, "✍️ Напишите ваше направление:", keyboard=_nav_keyboard())
         return
     info["destination"] = dest
     info["state"] = STATE_ORIGIN
