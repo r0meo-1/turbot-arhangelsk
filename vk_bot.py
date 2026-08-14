@@ -265,11 +265,11 @@ if CONSENT_MODE not in ("soft", "strict"):
 # Constants
 # ---------------------------------------------------------------------------
 
-POPULAR_DESTINATIONS = POPULAR_DESTINATIONS_PLAIN
+POPULAR_DESTINATIONS = ["Турция", "Египет", "ОАЭ"]
 DIRECTION_UNDECIDED_LABEL = "🌴 Не определился"
 UNDECIDED_DESTINATION = "Не определился — нужна консультация"
 DEST_HOT_TOURS_LABEL = "🔥 Горящие туры"
-DEST_DIRECT_FLIGHTS_LABEL = "🛫 Прямые вылеты"
+DEST_DIRECT_FLIGHTS_LABEL = "🛫 Прямые"
 STATE_REVIEW = "review"
 
 DATE_PRESETS: List[Tuple[str, str]] = [
@@ -1533,7 +1533,7 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         _send_tour_results_page(user_id, 0)
         return
 
-    if dest in (DEST_DIRECT_FLIGHTS_LABEL, "прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс"):
+    if dest in (DEST_DIRECT_FLIGHTS_LABEL, "прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс", "прямые", "🛫 прямые вылеты", "🛫 прямые"):
         origin = info.get("origin") or "Архангельск"
         directs = _tourvisor.get_direct_destinations(origin)
         lines = [f"🛫 Прямые чартерные рейсы из {origin}:\n"]
