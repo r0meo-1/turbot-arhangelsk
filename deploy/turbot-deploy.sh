@@ -27,6 +27,7 @@ trap rollback ERR
 
 git reset --hard "$target"
 "$venv/pip" install --requirement requirements.txt
+systemctl daemon-reload 2>/dev/null || true
 systemctl restart turbot
 systemctl restart vk-turbot 2>/dev/null || true
 
