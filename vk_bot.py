@@ -1023,11 +1023,6 @@ def _keyboard(
     one_time: bool = False,
     inline: bool = False,
 ) -> str:
-    """Собрать JSON клавиатуры VK (по умолчанию в нижней панели под полем ввода).
-    
-    При inline=False клавиатура закреплена внизу экрана и не дублируется
-    под каждым отдельным сообщением в истории чата.
-    """
     return json.dumps({
         "one_time": one_time,
         "inline": inline,
@@ -1036,7 +1031,6 @@ def _keyboard(
 
 
 def _btn(label: str, color: str = "secondary", payload: Optional[Dict] = None) -> Dict[str, Any]:
-    """Create a single VK keyboard button."""
     action: Dict[str, Any] = {"type": "text", "label": label}
     if payload:
         action["payload"] = json.dumps(payload, ensure_ascii=False)
@@ -1060,7 +1054,7 @@ def _dest_keyboard() -> str:
     rows = _chunk_buttons(list(POPULAR_DESTINATIONS), "primary", 2)
     rows.append([_btn(DEST_HOT_TOURS_LABEL, "positive"), _btn(DEST_DIRECT_FLIGHTS_LABEL, "primary")])
     rows.append([_btn(DIRECTION_UNDECIDED_LABEL, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
@@ -1068,24 +1062,21 @@ def _nav_keyboard(extra_top: Optional[List[Dict]] = None) -> str:
     rows: List[List[Dict[str, Any]]] = []
     if extra_top:
         rows.append(extra_top)
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
 def _dates_keyboard() -> str:
     labels = [label for label, _ in DATE_PRESETS] + [DATE_CUSTOM_LABEL]
     rows = _chunk_buttons(labels, "primary", 2)
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
 def _nights_keyboard() -> str:
     labels = [label for label, _ in NIGHTS_PRESETS] + [NIGHTS_CUSTOM_LABEL]
     rows = _chunk_buttons(labels, "primary", 2)
-    rows.append([_btn(BACK_BUTTON_TEXT, "secondary")])
-    rows.append([_btn(CANCEL_BUTTON_TEXT, "negative")])
+    rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
 
@@ -1151,8 +1142,8 @@ def _tour_results_keyboard(
     send_label = TOUR_SEND_SELECTED_TEXT if selected else TOUR_SEND_MANAGER_TEXT
     rows.append([_btn(send_label, "positive")])
     rows.append([
-        _btn(TOUR_EDIT_DATES_TEXT, "secondary"),
-        _btn(TOUR_EDIT_BUDGET_TEXT, "secondary"),
+        _btn(BACK_BUTTON_TEXT, "secondary"),
+        _btn(CANCEL_BUTTON_TEXT, "negative"),
     ])
     return _keyboard(rows)
 
@@ -1160,11 +1151,9 @@ def _tour_results_keyboard(
 def _selected_tour_keyboard() -> str:
     return _keyboard([
         [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
-        [_btn(TOUR_SIMILAR_TEXT, "primary")],
-        [_btn(TOUR_COMPARE_TEXT, "secondary")],
-        [_btn(CONTACT_PHONE_TEXT, "secondary"), _btn(CONTACT_MAX_TEXT, "secondary")],
-        [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
-        [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
+        [_btn(TOUR_SIMILAR_TEXT, "primary"), _btn(TOUR_COMPARE_TEXT, "secondary")],
+        [_btn(CONTACT_OTHER_TEXT, "secondary"), _btn(REVIEW_HOTEL_TEXT, "secondary")],
+        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
 
 
@@ -1173,9 +1162,9 @@ def _no_tours_keyboard(show_over_budget: bool = False) -> str:
     if show_over_budget:
         rows.append([_btn(TOUR_SHOW_OVER_BUDGET_TEXT, "primary")])
     rows.extend([
-        [_btn(REVIEW_EDIT_DATES_TEXT, "secondary")],
-        [_btn(REVIEW_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(TOUR_SEND_MANAGER_TEXT, "positive")],
+        [_btn(TOUR_EDIT_DATES_TEXT, "secondary"), _btn(TOUR_EDIT_BUDGET_TEXT, "secondary")],
+        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
     return _keyboard(rows)
 

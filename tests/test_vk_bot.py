@@ -504,8 +504,8 @@ def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
         for button in row
     ]
     assert bot.TOUR_SEND_SELECTED_TEXT in labels
-    assert bot.CONTACT_PHONE_TEXT in labels
-    assert bot.CONTACT_MAX_TEXT in labels
+    assert bot.CONTACT_OTHER_TEXT in labels
+    assert bot.BACK_BUTTON_TEXT in labels
 
 
 def test_vk_selected_tour_can_choose_phone_without_extra_contact_step(monkeypatch):
