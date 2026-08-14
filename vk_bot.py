@@ -1534,8 +1534,10 @@ def _step_consent(user_id: int, text: str, message: Dict[str, Any], info: Dict[s
 
 
 def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
-    dest = text.strip()
-    if dest in (DEST_HOT_TOURS_LABEL, "горящие туры", "горящие", "горящий тур", "горящие туры из архангельска"):
+    dest = (text or "").strip()
+    dest_lower = dest.lower()
+
+    if dest == DEST_HOT_TOURS_LABEL or dest_lower in ("горящие туры", "горящие", "горящий тур", "горящие туры из архангельска", "🔥 горящие туры", "🔥 горящие"):
         origin = info.get("origin") or "Архангельск"
         hot_offers = _tourvisor.get_hot_tours(origin)
         info["_tour_offers"] = [offer.__dict__ if hasattr(offer, "__dict__") else offer for offer in hot_offers]
@@ -1550,7 +1552,7 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         _send_tour_results_page(user_id, 0)
         return
 
-    if dest in (DEST_DIRECT_FLIGHTS_LABEL, "прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс", "прямые", "🛫 прямые вылеты", "🛫 прямые"):
+    if dest == DEST_DIRECT_FLIGHTS_LABEL or dest_lower in ("прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс", "прямые", "🛫 прямые вылеты", "🛫 прямые"):
         origin = info.get("origin") or "Архангельск"
         directs = _tourvisor.get_direct_destinations(origin)
         lines = [f"🛫 Прямые чартерные рейсы из {origin}:\n"]
@@ -1562,15 +1564,16 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         send_message(user_id, "\n".join(lines), keyboard=_dest_direct_keyboard())
         return
 
-    if dest in ("🌍 другие", "другие", "ещё", "другие направления", "ещё направления"):
+    if dest_lower in ("🌍 другие", "другие", "другое", "ещё", "другие направления", "ещё направления", "популярные", "еще"):
         send_message(
             user_id,
-            "🌍 Выберите популярное направление или укажите своё:",
+            "🌍 Другие популярные направления:\n\n"
+            "Выберите вариант кнопкой ниже или напишите своё направление:",
             keyboard=_dest_more_keyboard(),
         )
         return
 
-    if dest in ("✍️ свой вариант", "свой вариант", "своё", "другое", "написать своё"):
+    if dest_lower in ("✍️ свой вариант", "свой вариант", "своё", "написать своё", "свой", "свое направление", "своё направление", "напишите своё"):
         send_message(
             user_id,
             "✍️ Напишите страну, курорт или город, куда хотите поехать:",
@@ -1578,12 +1581,13 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         )
         return
 
-    if dest == DIRECTION_UNDECIDED_LABEL:
+    if dest == DIRECTION_UNDECIDED_LABEL or dest_lower in ("не определился", "не знаю", "консультация", "🌴 не определился"):
         info["destination"] = UNDECIDED_DESTINATION
         info["needs_consultation"] = True
         info["state"] = STATE_ORIGIN
         _ask_origin(user_id)
         return
+
     info["destination"] = dest
     info["state"] = STATE_ORIGIN
     _ask_origin(user_id)
