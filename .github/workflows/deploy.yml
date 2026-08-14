@@ -35,11 +35,16 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     steps:
-      - name: Trigger restricted server deploy
-        uses: appleboy/ssh-action@v1.2.1
+      - name: Load restricted deploy key
+        uses: webfactory/ssh-agent@v0.9.1
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: root
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
-          script: true
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Pin server host key
+        run: |
+          install -d -m 700 ~/.ssh
+          cp deploy/ssh-known_hosts ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Trigger restricted server deploy
+        run: >
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes
+          root@${{ secrets.DEPLOY_HOST }} true
