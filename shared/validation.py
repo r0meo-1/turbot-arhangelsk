@@ -175,11 +175,23 @@ def validate_people(text: str) -> Tuple[bool, Optional[str]]:
 
 
 def validate_budget(text: str) -> Tuple[bool, Optional[int]]:
-    """Parse budget as a positive integer. Returns (ok, value)."""
-    try:
-        value = int(re.sub(r"[^\d]", "", text))
-        if value > 0:
-            return True, value
-    except (ValueError, TypeError):
-        pass
-    return False, None
+    """Parse one rouble amount; never concatenate ranges or unrelated numbers.
+
+    A range is ambiguous for the integer budget used by CRM and tour search.
+    Ask for one upper limit instead of silently turning 100000–120000 into
+    100000120000. Accept common thousand abbreviations and grouped digits.
+    """
+    if not isinstance(text, str) or len(text) > 100:
+        return False, None
+    match = re.fullmatch(
+        r"\s*(?:до\s+)?([0-9]+|[0-9]{1,3}(?:[ \u00a0\u202f][0-9]{3})+)"
+        r"\s*(тыс\.?|тысяч(?:а|и)?|[кk])?\s*(?:₽|руб\.?|рублей|рубля|рубль|р\.?)?\s*",
+        text, re.I,
+    )
+    if not match:
+        return False, None
+    value = int(re.sub(r"\s", "", match[1]))
+    if match[2]:
+        value *= 1000
+    # Stay within SQLite's signed INTEGER range rather than fail when saving.
+    return (True, value) if 0 < value <= 2**63 - 1 else (False, None)

@@ -1,6 +1,7 @@
 """Unit tests for shared package (validators, dates, templates, MDT helpers)."""
 
 from shared.validation import validate_phone, validate_people, validate_budget
+import pytest
 from shared.templates import template_selection
 from shared.dates import parse_russian_dates
 from shared.privacy import consent_text, privacy_text
@@ -25,6 +26,25 @@ def test_validate_people_and_budget():
     assert validate_people("0") == (False, None)
     assert validate_budget("60 000") == (True, 60000)
     assert validate_budget("0") == (False, None)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("100000", 100000), ("100 000 ₽", 100000), ("100\u00a0000 руб.", 100000),
+    ("100\u202f000 рублей", 100000), ("до 120 тыс.", 120000), ("120к", 120000),
+    ("120 K", 120000), ("120 тысяч рублей", 120000),
+])
+def test_budget_accepts_one_amount(text, expected):
+    assert validate_budget(text) == (True, expected)
+
+
+@pytest.mark.parametrize("text", [
+    "100000–120000", "100000-120000", "100000—120000", "от 100000 до 120000",
+    "100/120 тыс", "100,120", "100.50", "-60000", "+60000", "0", "0 тыс",
+    "100000 на 2 человека", "1e5", "abc123", "60 00", "120000 USD", "", None,
+    "9" * 30, "9" * 101,
+])
+def test_budget_rejects_ambiguous_or_invalid_amount(text):
+    assert validate_budget(text) == (False, None)
 
 
 def test_template_selection():

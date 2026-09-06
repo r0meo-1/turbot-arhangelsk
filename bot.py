@@ -9,6 +9,7 @@ import sqlite3
 import time
 import logging
 import threading
+import secrets
 from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime
@@ -25,6 +26,7 @@ from shared.constants import (
     STATE_BUDGET,
     STATE_CONSENT,
     STATE_CONTACT,
+    STATE_REVIEW,
     STATE_DATES,
     STATE_DESTINATION,
     STATE_ORIGIN,
@@ -322,14 +324,16 @@ SHARE_CONTACT_TEXT = "📱 Отправить номер"
 BOT_DISPLAY_NAME = os.getenv("BOT_DISPLAY_NAME", "АПРЕЛЬ тур · Подбор туров").strip()[:64]
 BOT_SHORT_DESCRIPTION = os.getenv(
     "BOT_SHORT_DESCRIPTION",
-    "Туры из Архангельска · заявка за 1–2 минуты · перезвоним",
+    "Подбор туров из Архангельска и других городов. Оставьте пожелания — менеджер поможет с выбором.",
 ).strip()[:120]
 BOT_DESCRIPTION = os.getenv(
     "BOT_DESCRIPTION",
-    "Официальный бот турагентства «АПРЕЛЬ тур» (Архангельск).\n\n"
-    "Помогу подобрать тур: направление, даты, число гостей и бюджет. "
-    "Заявка уходит менеджеру — перезвоним с вариантами.\n\n"
-    "Команды: /start — начать, /help — справка, /privacy — ПДн.",
+    "🌴 Подберём ваш следующий отдых!\n\n"
+    "«АПРЕЛЬ тур», Архангельск. Укажите направление, город вылета, даты и состав туристов. "
+    "Бюджет — одной суммой на человека, например 100000 ₽ или 100 тыс.\n\n"
+    "Выберите связь: Telegram, телефон или VK. Проверьте заявку и нажмите «Отправить менеджеру».\n\n"
+    "/start — подбор тура\n/cancel — отмена заполнения\n/help — помощь\n"
+    "/privacy — персональные данные\n/delete — удалить мои данные",
 ).strip()[:512]
 
 USER_HELP = (
@@ -350,7 +354,8 @@ WELCOME_BODY = (
     "<b>Как это работает</b>\n"
     "1) несколько вопросов (куда, когда, кто, бюджет)\n"
     "2) удобный способ связи: Telegram, телефон или VK\n"
-    "3) менеджер напишет или позвонит\n\n"
+    "3) проверка заявки и отправка менеджеру\n"
+    "4) менеджер напишет или позвонит\n\n"
     "Около минуты. Данные — только чтобы связаться по заявке "
     "(подробнее: /privacy)."
 )
@@ -387,6 +392,7 @@ CB_CONTACT_PHONE = "ct:phone"
 CB_CONTACT_VK = "ct:vk"
 CB_BACK = "nav:back"
 CB_CANCEL = "nav:cancel"
+CB_REVIEW_PREFIX = "rv:"
 
 # Quick picks (callback suffix → value stored in the lead)
 DATE_PRESETS: List[Tuple[str, str]] = [
@@ -625,6 +631,9 @@ def init_db() -> None:
             # actually get debugged from.
             if "kids_ages" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN kids_ages TEXT")
+        cur.execute("PRAGMA table_info(sessions)")
+        if "review_token" not in {row[1] for row in cur.fetchall()}:
+            cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)"
         )
@@ -669,8 +678,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
         cur.execute(
             """
             INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
-                                  kids, kids_ages, infants, budget, phone, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  kids, kids_ages, infants, budget, phone, review_token, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
@@ -682,6 +691,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 infants=excluded.infants,
                 budget=excluded.budget,
                 phone=excluded.phone,
+                review_token=excluded.review_token,
                 updated_at=excluded.updated_at
             """,
             (
@@ -696,6 +706,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("infants"),
                 data.get("budget"),
                 data.get("phone"),
+                data.get("review_token"),
                 data.get("updated_at", now),
             ),
         )
@@ -704,7 +715,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
 def update_session(chat_id: int, **kwargs) -> None:
     """Update specific fields of an existing session."""
     allowed = {"state", "destination", "origin", "dates", "people", "kids",
-               "kids_ages", "infants", "budget", "phone", "updated_at"}
+               "kids_ages", "infants", "budget", "phone", "review_token", "updated_at"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -2171,7 +2182,7 @@ def _ask_budget(chat_id: int) -> None:
     send_message(
         chat_id,
         "💰 <b>Бюджет на человека</b> (примерно, в рублях)\n\n"
-        "Выберите кнопку или введите свою сумму.",
+        "Выберите кнопку или укажите одну максимальную сумму: 100000 ₽ или 100 тыс.",
         reply_markup=kb_budget(),
         parse_mode="HTML",
     )
@@ -2395,7 +2406,8 @@ def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not ok:
         send_message(
             chat_id,
-            "Нужна сумма числом или кнопка с бюджетом ниже.",
+            "Укажите одну максимальную сумму на человека, например 120000 ₽ или 120 тыс. "
+            "Если бюджет 100000–120000 ₽, введите 120000. Можно выбрать кнопку ниже.",
             reply_markup=kb_budget(),
         )
         return
@@ -2416,7 +2428,7 @@ def _step_contact(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
         else:
             contact = f"Telegram (чат id {chat_id})"
         info["contact_method"] = "telegram"
-        handle_completion(chat_id, contact, message)
+        _prepare_review(chat_id, contact, info)
         return
 
     if t in (CONTACT_PHONE_TEXT, CB_CONTACT_PHONE, "телефон", "phone"):
@@ -2445,7 +2457,7 @@ def _step_contact(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
     ok, phone = validate_phone(t)
     if ok and phone:
         info["contact_method"] = "phone"
-        handle_completion(chat_id, phone, message)
+        _prepare_review(chat_id, phone, info)
         return
 
     send_message(
@@ -2467,7 +2479,7 @@ def _step_phone(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
         )
         return
     info["contact_method"] = "phone"
-    handle_completion(chat_id, phone, message)
+    _prepare_review(chat_id, phone, info)
 
 
 def _step_vk(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
@@ -2488,7 +2500,76 @@ def _step_vk(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, A
     else:
         contact = f"VK {raw}"
     info["contact_method"] = "vk"
-    handle_completion(chat_id, contact, message)
+    _prepare_review(chat_id, contact, info)
+
+
+def _prepare_review(chat_id: int, contact: str, info: Dict[str, Any]) -> None:
+    """Save a draft contact; lead creation only follows a matching send button."""
+    previous = info.get("state")
+    info["phone"] = mask_phone(contact) if DEMO_MODE and info.get("contact_method") == "phone" else contact
+    info["state"] = STATE_REVIEW
+    info["review_token"] = secrets.token_hex(8)
+    _mark_dirty(chat_id, user=False)
+    if previous == STATE_PHONE:
+        send_message(chat_id, "Номер записан. Осталось проверить заявку.", reply_markup=hide_keyboard())
+    _ask_review(chat_id, info)
+
+
+def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
+    token = info["review_token"]
+    budget = f"{int(info['budget']):,}".replace(",", " ")
+    send_message(
+        chat_id,
+        "📝 <b>Проверьте заявку</b>\n\n"
+        f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
+        f"🛫 Откуда: {_esc(info.get('origin', '?'))}\n"
+        f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
+        f"👥 Состав: {_esc(_party_text(info))}\n"
+        f"💰 Бюджет: до {budget} ₽ на человека\n"
+        f"📞 Связь: {_esc(info.get('phone', '?'))}\n\n"
+        "Заявка ещё не отправлена. Если всё верно, нажмите «Отправить менеджеру».",
+        parse_mode="HTML",
+        reply_markup=inline_keyboard([
+            [_inline_btn("✅ Отправить менеджеру", f"{CB_REVIEW_PREFIX}send:{token}")],
+            [_inline_btn("✏️ Изменить", f"{CB_REVIEW_PREFIX}edit:{token}")],
+            [_inline_btn(CANCEL_BUTTON_TEXT, f"{CB_REVIEW_PREFIX}cancel:{token}")],
+        ]),
+    )
+
+
+def _step_review(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    # Plain text never submits a draft accidentally. Buttons identify its version.
+    _ask_review(chat_id, info)
+
+
+def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    parts = data.split(":")
+    if (len(parts) != 3 or info.get("state") != STATE_REVIEW
+            or not info.get("review_token") or parts[2] != info["review_token"]):
+        send_message(chat_id, "Эта кнопка устарела. Продолжите текущий шаг заявки.")
+        return
+    action = parts[1]
+    if action == "send":
+        handle_completion(chat_id, info["phone"], message, review_token=parts[2])
+    elif action == "cancel":
+        handle_cancel(chat_id)
+    elif action == "edit":
+        fields = [("Направление", STATE_DESTINATION), ("Город вылета", STATE_ORIGIN),
+                  ("Даты", STATE_DATES), ("Туристы", STATE_PEOPLE),
+                  ("Бюджет", STATE_BUDGET), ("Способ связи", STATE_CONTACT)]
+        send_message(chat_id, "Что изменить? Затем пройдём оставшиеся шаги и снова проверим заявку.",
+                     reply_markup=inline_keyboard([
+                         [_inline_btn(label, f"{CB_REVIEW_PREFIX}{state}:{parts[2]}")]
+                         for label, state in fields
+                     ] + [[_inline_btn("◀️ К заявке", f"{CB_REVIEW_PREFIX}show:{parts[2]}")]]))
+    elif action == "show":
+        _ask_review(chat_id, info)
+    elif action in (STATE_DESTINATION, STATE_ORIGIN, STATE_DATES, STATE_PEOPLE,
+                    STATE_BUDGET, STATE_CONTACT):
+        info["review_token"] = None
+        info["phone"] = None
+        info["state"] = action
+        _prompt_for_state(chat_id, action)
 
 
 # state -> step handler
@@ -2510,6 +2591,7 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
     STATE_CONTACT:     _step_contact,
     STATE_PHONE:       _step_phone,
     STATE_VK:          _step_vk,
+    STATE_REVIEW:      _step_review,
 }
 
 PREVIOUS_STATE: Dict[str, str] = {
@@ -2523,6 +2605,7 @@ PREVIOUS_STATE: Dict[str, str] = {
     STATE_CONTACT:     STATE_BUDGET,
     STATE_PHONE:       STATE_CONTACT,
     STATE_VK:          STATE_CONTACT,
+    STATE_REVIEW:      STATE_CONTACT,
 }
 
 
@@ -2548,6 +2631,8 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
         _ask_budget(chat_id)
     elif state == STATE_CONTACT:
         _ask_contact(chat_id)
+    elif state == STATE_REVIEW:
+        _ask_review(chat_id, user_data[chat_id])
     elif state == STATE_PHONE:
         send_message(
             chat_id,
@@ -2578,6 +2663,7 @@ def _go_back(chat_id: int) -> None:
     if state == STATE_PHONE:
         send_message(chat_id, "◀️ Назад", reply_markup=hide_keyboard())
     info["state"] = previous
+    info["review_token"] = None
     _mark_dirty(chat_id, user=False)
     _prompt_for_state(chat_id, previous)
 
@@ -2615,7 +2701,7 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         + (f"🛫 Откуда: {_esc(info['origin'])}\n" if info.get("origin") else "")
         + f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
         f"👥 Состав: {_esc(_party_text(info))}\n"
-        f"💰 Бюджет: {_esc(info.get('budget', '?'))}₽\n"
+        f"💰 Бюджет: до {_esc(info.get('budget', '?'))} ₽ на человека\n"
         f"📞 Связь: {_esc(phone)}\n\n"
         "Спасибо, что выбрали нас 🌺",
         reply_markup=hide_keyboard(),
@@ -2801,7 +2887,7 @@ def _post_completion_side_effects(
         _alert_admin_error("Post-completion side effects failed", exc)
 
 
-def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None:
+def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, review_token: Optional[str] = None) -> None:
     """Finalise the request: confirm, notify admin, persist lead; defer MDT/AI.
 
     Guarded against concurrent completion. With ``--threads 2`` two distinct
@@ -2816,6 +2902,10 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None
         live = user_data.get(chat_id)
         if live is None or live.get("_completing"):
             logger.info("Concurrent completion ignored for chat_id=%s", chat_id)
+            return
+        if review_token is not None and (
+            live.get("state") != STATE_REVIEW or live.get("review_token") != review_token
+        ):
             return
         live["_completing"] = True
         info = dict(live)
@@ -2832,6 +2922,12 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any]) -> None
     except Exception as exc:
         logger.error("Failed to save lead for %s: %s", chat_id, exc)
         _alert_admin_error("Failed to save lead", exc)
+        with _lock:
+            live.pop("_completing", None)
+        send_message(chat_id, "Не удалось сохранить заявку. Она ещё не отправлена. Попробуйте ещё раз.")
+        if live.get("state") == STATE_REVIEW:
+            _ask_review(chat_id, live)
+        return
 
     _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
     # 2. Notify bot creator / admins in Telegram (sync — ops must see it)
@@ -3072,6 +3168,11 @@ def _process_callback(data: Dict[str, Any]) -> None:
 
     # Synthetic message so step handlers can read from/user fields.
     synthetic = {"from": from_info, "chat": chat}
+
+    if cb_data.startswith(CB_REVIEW_PREFIX):
+        _process_review(chat_id, cb_data, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
 
     if cb_data in (CB_CONSENT_YES, CB_CONSENT_NO, CB_START):
         _step_consent(chat_id, cb_data, synthetic, info)

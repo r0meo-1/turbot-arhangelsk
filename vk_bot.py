@@ -1859,7 +1859,8 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not ok:
         send_message(
             user_id,
-            "Нужна сумма числом или кнопка с бюджетом.",
+            "Укажите одну максимальную сумму на всю поездку: например 120000 ₽ или 120 тыс. "
+            "Если бюджет 100000–120000 ₽, введите 120000. Можно выбрать кнопку ниже.",
             keyboard=_budget_keyboard(),
         )
         return
