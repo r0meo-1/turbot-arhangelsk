@@ -15,6 +15,7 @@ STATE_KIDS_AGES = "kids_ages"    # their exact ages — the fare depends on them
 STATE_INFANTS = "infants"
 STATE_BUDGET = "budget"
 STATE_CONTACT = "contact"  # choose how to be reached
+STATE_REVIEW = "review"  # review the draft before sending it to the agency
 STATE_PHONE = "phone"
 STATE_VK = "vk"
 STATE_MAX = "max_contact"   # номер телефона или ссылка на профиль MAX

@@ -183,6 +183,132 @@ def _consent(client, chat_id):
     _callback(client, chat_id, bot.CB_CONSENT_YES)
 
 
+def _confirm_draft(client, chat_id):
+    info = bot.user_data[chat_id]
+    assert info["state"] == bot.STATE_REVIEW
+    return _callback(client, chat_id, f"{bot.CB_REVIEW_PREFIX}send:{info['review_token']}")
+
+
+def _reach_contact(client, chat_id):
+    _consent(client, chat_id)
+    for text in ["Турция", "Москва", "15–22 октября 2030", "2", "5, 9", "120 тыс"]:
+        _post(client, chat_id, text)
+    assert bot.user_data[chat_id]["state"] == bot.STATE_CONTACT
+
+
+@pytest.mark.parametrize("channel", ["telegram", "phone", "shared_phone", "vk"])
+def test_contact_only_creates_draft_until_confirmed(client, monkeypatch, channel):
+    sent, side_effects = [], []
+    monkeypatch.setattr(bot, "send_message", lambda cid, text, **kw: sent.append((cid, text)) or _OkResp())
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **kw: side_effects.append(a))
+    chat = 6001
+    _reach_contact(client, chat)
+    if channel == "telegram":
+        _callback(client, chat, bot.CB_CONTACT_TG)
+    elif channel == "phone":
+        _callback(client, chat, bot.CB_CONTACT_PHONE)
+        _post(client, chat, "+79161234567")
+    elif channel == "shared_phone":
+        _post(client, chat, contact={"phone_number": "79161234567", "user_id": chat})
+    else:
+        _callback(client, chat, bot.CB_CONTACT_VK)
+        _post(client, chat, "vk.com/test_profile")
+    assert bot.user_data[chat]["state"] == bot.STATE_REVIEW
+    assert bot.count_leads() == 0
+    assert not side_effects
+    assert not any(cid == bot.ADMIN_ID for cid, _ in sent)
+    summary = sent[-1][1]
+    assert "120 000 ₽ на человека" in summary
+    assert "5 и 9 лет" in summary
+    assert "Заявка ещё не отправлена" in summary
+    token = bot.user_data[chat]["review_token"]
+    _confirm_draft(client, chat)
+    assert bot.count_leads() == 1
+    assert len(side_effects) == 1
+    _callback(client, chat, f"{bot.CB_REVIEW_PREFIX}send:{token}")
+    assert bot.count_leads() == 1
+    assert len(side_effects) == 1
+
+
+def test_budget_range_keeps_client_on_budget_step(client):
+    _reach_contact(client, 6002)
+    _callback(client, 6002, bot.CB_BACK)
+    _post(client, 6002, "100000–120000")
+    assert bot.user_data[6002]["state"] == bot.STATE_BUDGET
+    assert bot.user_data[6002]["budget"] == 120000
+    assert bot.count_leads() == 0
+    _post(client, 6002, "до 100 тыс.")
+    assert bot.user_data[6002]["budget"] == 100000
+    assert bot.user_data[6002]["state"] == bot.STATE_CONTACT
+
+
+def test_review_edit_invalidates_old_send_button(client):
+    chat = 6003
+    _reach_contact(client, chat)
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    old = bot.user_data[chat]["review_token"]
+    _callback(client, chat, f"{bot.CB_REVIEW_PREFIX}edit:{old}")
+    _callback(client, chat, f"{bot.CB_REVIEW_PREFIX}budget:{old}")
+    assert bot.user_data[chat]["state"] == bot.STATE_BUDGET
+    _post(client, chat, "90000")
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    assert bot.user_data[chat]["review_token"] != old
+    _callback(client, chat, f"{bot.CB_REVIEW_PREFIX}send:{old}")
+    _post(client, chat, "да, отправить")
+    assert bot.count_leads() == 0
+    _confirm_draft(client, chat)
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT budget FROM leads WHERE chat_id = ?", (chat,))
+        assert cur.fetchone()[0] == 90000
+
+
+def test_review_cancel_does_not_send_lead(client):
+    chat = 6004
+    _reach_contact(client, chat)
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    token = bot.user_data[chat]["review_token"]
+    _callback(client, chat, f"{bot.CB_REVIEW_PREFIX}cancel:{token}")
+    assert chat not in bot.user_data
+    assert bot.count_leads() == 0
+
+
+def test_review_survives_session_reload(client):
+    chat = 6005
+    _reach_contact(client, chat)
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    draft = dict(bot.user_data[chat])
+    bot.set_session(chat, draft)
+    restored = bot.get_session(chat)
+    restored["kids_ages"] = bot._ages_from_db(restored["kids_ages"])
+    bot.user_data[chat] = restored
+    assert restored["review_token"] == draft["review_token"]
+    assert restored["phone"] == draft["phone"]
+    _confirm_draft(client, chat)
+    assert bot.count_leads() == 1
+
+
+def test_failed_lead_save_preserves_review_for_retry(client, monkeypatch):
+    chat = 6006
+    _reach_contact(client, chat)
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    real_save = bot.save_lead
+    notified = []
+    monkeypatch.setattr(bot, "_notify_admin", lambda *a, **kw: notified.append(a))
+    monkeypatch.setattr(bot, "_alert_admin_error", lambda *a, **kw: None)
+    def broken_save(*args, **kwargs):
+        raise RuntimeError("disk unavailable")
+    monkeypatch.setattr(bot, "save_lead", broken_save)
+    _confirm_draft(client, chat)
+    assert bot.user_data[chat]["state"] == bot.STATE_REVIEW
+    assert not bot.user_data[chat].get("_completing")
+    assert bot.count_leads() == 0
+    assert not notified
+    monkeypatch.setattr(bot, "save_lead", real_save)
+    _confirm_draft(client, chat)
+    assert bot.count_leads() == 1
+    assert len(notified) == 1
+
+
 def test_start_asks_for_consent_first(client):
     resp = _post(client, 111, "/start")
     assert resp.status_code == 200
@@ -235,6 +361,7 @@ def test_delete_command_erases_leads(client):
     for text in ["🏖 Египет", "Москва", "15-22 июня", "2", "Без детей", "60000"]:
         _post(client, 115, text)
     _post(client, 115, contact={"phone_number": "79161234567", "user_id": 115})
+    _confirm_draft(client, 115)
     assert bot.count_leads() == 1
     _post(client, 115, "/delete")
     assert bot.count_leads() == 0
@@ -253,6 +380,8 @@ def test_dialog_completion_with_contact(client):
     # Finish by sharing a contact (accepted on contact-choice step too).
     resp = _post(client, 222, contact={"phone_number": "79161234567", "user_id": 222})
     assert resp.status_code == 200
+    assert bot.count_leads() == 0
+    _confirm_draft(client, 222)
     assert 222 not in bot.user_data
     # Completed lead is stored for /export and /analytics.
     assert bot.count_leads() == 1
@@ -294,6 +423,7 @@ def test_dialog_completion_via_inline_buttons(client):
     assert bot.user_data[223]["state"] == bot.STATE_PHONE
 
     _post(client, 223, "+79161234567")
+    _confirm_draft(client, 223)
     assert 223 not in bot.user_data
     assert bot.count_leads() == 1
 
@@ -327,6 +457,7 @@ def test_soft_mode_start_and_telegram_contact(client, monkeypatch):
         headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"},
         json=payload,
     )
+    _confirm_draft(client, 901)
     assert 901 not in bot.user_data
     assert bot.count_leads() == 1
     with bot._db_cursor() as cur:
@@ -417,6 +548,7 @@ def test_full_flow_all_buttons(client):
     assert bot.user_data[910]["state"] == bot.STATE_CONTACT
     assert bot.user_data[910]["budget"] == bot.BUDGET_PRESETS[1][1]
     _callback(client, 910, bot.CB_CONTACT_TG)
+    _confirm_draft(client, 910)
     assert 910 not in bot.user_data
     assert bot.count_leads() == 1
 
@@ -790,6 +922,7 @@ def test_html_escape_in_notify(client):
     _post(client, 802, "50000")
     # send phone to complete
     _post(client, 802, "+79161234567")
+    _confirm_draft(client, 802)
     # If we got here without crashing, HTML was escaped properly
     assert 802 not in bot.user_data
     bot.delete_user_data(802)
@@ -814,6 +947,7 @@ def test_lead_is_sent_to_admin_telegram(client, monkeypatch):
     for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 903, text)
     _post(client, 903, "+79161234567")
+    _confirm_draft(client, 903)
 
     assert 903 not in bot.user_data
     assert bot.count_leads() == 1
@@ -860,6 +994,7 @@ def test_demo_mode_stores_masked_phone(client, monkeypatch):
     for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 5001, text)
     _post(client, 5001, "+79161234567")
+    _confirm_draft(client, 5001)
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (5001,))
         stored = cur.fetchone()[0]
@@ -873,6 +1008,7 @@ def test_real_mode_stores_real_phone(client, monkeypatch):
     for text in ["Турция", "Москва", "1-7 августа", "2", "Без детей", "70000"]:
         _post(client, 5002, text)
     _post(client, 5002, "+79161234567")
+    _confirm_draft(client, 5002)
     with bot._db_cursor() as cur:
         cur.execute("SELECT phone FROM leads WHERE chat_id = ?", (5002,))
         assert cur.fetchone()[0] == "+79161234567"
@@ -1211,6 +1347,7 @@ def test_family_with_children_is_priced_by_age_band(client, monkeypatch):
     assert bot.user_data[6001]["state"] == bot.STATE_BUDGET
     _post(client, 6001, "70000")
     _post(client, 6001, "+79161234567")
+    _confirm_draft(client, 6001)
 
     assert seen.get("people") == 2, "adults"
     assert seen.get("kids") == 2, "children 2–11 must reach the search"
@@ -1232,6 +1369,7 @@ def test_a_twelve_year_old_is_searched_as_an_adult(client, monkeypatch):
         _post(client, 6005, text)
     _post(client, 6005, "70000")
     _post(client, 6005, "+79161234567")
+    _confirm_draft(client, 6005)
 
     assert seen.get("people") == 3, "the 14-year-old counts toward adults"
     assert seen.get("kids") == 0
@@ -1273,6 +1411,7 @@ def test_age_bands_persisted_with_lead(client):
     for text in ["Турция", "Москва", "15-22 сентября", "2", "9", "70000"]:
         _post(client, 6003, text)
     _post(client, 6003, "+79161234567")
+    _confirm_draft(client, 6003)
     with bot._db_cursor() as cur:
         cur.execute(
             "SELECT people, kids, kids_ages, infants FROM leads WHERE chat_id = ?",
