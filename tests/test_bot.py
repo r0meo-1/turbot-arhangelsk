@@ -1347,6 +1347,7 @@ def test_family_with_children_is_priced_by_age_band(client, monkeypatch):
     assert bot.user_data[6001]["state"] == bot.STATE_BUDGET
     _post(client, 6001, "70000")
     _post(client, 6001, "+79161234567")
+    _confirm_draft(client, 6001)
 
     assert seen.get("people") == 2, "adults"
     assert seen.get("kids") == 2, "children 2–11 must reach the search"
@@ -1368,6 +1369,7 @@ def test_a_twelve_year_old_is_searched_as_an_adult(client, monkeypatch):
         _post(client, 6005, text)
     _post(client, 6005, "70000")
     _post(client, 6005, "+79161234567")
+    _confirm_draft(client, 6005)
 
     assert seen.get("people") == 3, "the 14-year-old counts toward adults"
     assert seen.get("kids") == 0
@@ -1409,6 +1411,7 @@ def test_age_bands_persisted_with_lead(client):
     for text in ["Турция", "Москва", "15-22 сентября", "2", "9", "70000"]:
         _post(client, 6003, text)
     _post(client, 6003, "+79161234567")
+    _confirm_draft(client, 6003)
     with bot._db_cursor() as cur:
         cur.execute(
             "SELECT people, kids, kids_ages, infants FROM leads WHERE chat_id = ?",
