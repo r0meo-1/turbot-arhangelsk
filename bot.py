@@ -2525,7 +2525,7 @@ def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
         f"🛫 Откуда: {_esc(info.get('origin', '?'))}\n"
         f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
         f"👥 Состав: {_esc(_party_text(info))}\n"
-        f"💰 Бюджет: до {budget} ₽ на человека\n"
+        f"💰 Бюджет: {'от' if info.get('budget_open_ended') else 'до'} {budget} ₽ на человека\n"
         f"📞 Связь: {_esc(info.get('phone', '?'))}\n\n"
         "Заявка ещё не отправлена. Если всё верно, нажмите «Отправить менеджеру».",
         parse_mode="HTML",
