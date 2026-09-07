@@ -52,7 +52,7 @@ function showQuestion() {
 function showResult() {
   bar.style.width = '100%';
   const text = leadText();
-  const tgUrl = 'https://t.me/share/url?url=' + encodeURIComponent(location.href.split('?')[0]) + '&text=' + encodeURIComponent(text);
+  const tgUrl = 'https://t.me/apreltour_bot';
   const vkUrl = 'https://vk.me/club240310110';
 
   quiz.innerHTML = [
@@ -72,9 +72,9 @@ function showResult() {
     '</div>',
     '<div class="cta-actions" style="margin-top:14px">',
     '<a class="btn btn-vk" href="' + vkUrl + '" target="_blank" rel="noopener">Написать менеджеру в VK</a>',
-    '<a class="btn btn-ghost" href="' + tgUrl + '" target="_blank" rel="noopener">Отправить через Telegram</a>',
+    '<a class="btn btn-ghost" id="tgBot" href="' + tgUrl + '" target="_blank" rel="noopener">Открыть TurBot в Telegram</a>',
     '</div>',
-    '<p style="margin:14px 0 0;color:#718397;font-size:12px">Telegram откроет окно отправки готового текста. Прямая ссылка на Telegram-бота будет подключена отдельно, когда появится его публичный username.</p>',
+    '<p style="margin:14px 0 0;color:#718397;font-size:12px">Официальный Telegram-бот: <b>@apreltour_bot</b>. При открытии бот запускает собственный диалог подбора тура; готовая заявка выше остаётся доступна для копирования.</p>',
     '</div>'
   ].join('');
 
@@ -91,6 +91,12 @@ function showResult() {
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(range);
+    }
+  });
+
+  document.getElementById('tgBot').addEventListener('click', function () {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(function () {});
     }
   });
 
