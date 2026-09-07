@@ -62,6 +62,9 @@ Creative → tracked landing → 3 questions → generated lead → VK / Telegra
 ## Mobile safe-zone review
 Approved and saved in Canva. The headline was moved down from the top UI area, and the CTA block was moved up from the bottom Story controls while preserving the original copy and visual style.
 
+## Telegram identity follow-up
+Production deploy now resolves the public Telegram bot username with `getMe` and prints only the public `@username`; the bot token stays server-side and is never written to the campaign files or frontend.
+
 ## Tracking
 Linear: `R0M-6` — TurBot: viral AI avatar campaign
 GitHub: `#18` — Produce TurBot viral AI avatar social assets
