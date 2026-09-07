@@ -125,6 +125,11 @@ PORT                 = _env_int("PORT", 5000)
 STATE_FILE           = os.getenv("STATE_FILE", "bot_state.json")
 DATABASE_PATH        = os.getenv("DATABASE_PATH", "bot_state.sqlite")
 TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", "")
+# HTTPS URL opened by Telegram as the bot Web App menu button.
+MINI_APP_URL = os.getenv(
+    "MINI_APP_URL",
+    "https://apreltour-mini-app.r0meo1.chatgpt.site/",
+).strip()
 DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
@@ -1205,11 +1210,19 @@ def ensure_bot_profile() -> None:
         "setMyDescription", {"description": BOT_DESCRIPTION},
     ):
         logger.info("Bot description set (%s chars)", len(BOT_DESCRIPTION))
-    # Menu button opens the command list (familiar «☰» UX).
-    _tg_api_ok(
-        "setChatMenuButton",
-        {"menu_button": {"type": "commands"}},
+    # Open the deployed Mini App from the Telegram chat menu. Keep the
+    # commands fallback for environments that intentionally omit MINI_APP_URL.
+    menu_button = (
+        {
+            "type": "web_app",
+            "text": "🌐 Открыть приложение",
+            "web_app": {"url": MINI_APP_URL},
+        }
+        if MINI_APP_URL
+        else {"type": "commands"}
     )
+    if not _tg_api_ok("setChatMenuButton", {"menu_button": menu_button}):
+        _tg_api_ok("setChatMenuButton", {"menu_button": {"type": "commands"}})
     ensure_bot_commands()
 
 
