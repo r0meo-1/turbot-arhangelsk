@@ -2395,7 +2395,7 @@ def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         if key.isdigit():
             idx = int(key)
             if 0 <= idx < len(BUDGET_PRESETS):
-                info["budget"] = BUDGET_PRESETS[idx][1]
+                info["budget"] = BUDGET_PRESETS[idx][1]; info["budget_open_ended"] = idx == len(BUDGET_PRESETS) - 1
                 info["state"] = STATE_CONTACT
                 _ask_contact(chat_id)
                 return
@@ -2411,7 +2411,7 @@ def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
             reply_markup=kb_budget(),
         )
         return
-    info["budget"] = value
+    info["budget"] = value; info["budget_open_ended"] = False
     info["state"] = STATE_CONTACT
     _ask_contact(chat_id)
 
