@@ -54,10 +54,13 @@ Creative → tracked landing → 3 questions → generated lead → VK / Telegra
 - [x] Build Canva master design from the generated avatar
 - [x] Create vertical social variation
 - [x] Create feed variation
-- [ ] Check text safe-zones on mobile
-- [ ] Add final Telegram bot username when confirmed
+- [x] Check text safe-zones on mobile
+- [ ] Add final Telegram bot username when confirmed (non-blocking follow-up)
 - [x] Final CTA destination defined
 - [x] Publish-ready UTM campaign URL defined
+
+## Mobile safe-zone review
+Approved and saved in Canva. The headline was moved down from the top UI area, and the CTA block was moved up from the bottom Story controls while preserving the original copy and visual style.
 
 ## Tracking
 Linear: `R0M-6` — TurBot: viral AI avatar campaign
