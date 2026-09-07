@@ -1402,11 +1402,11 @@ def send_lead_to_mdt(
     )
 
 
-def _inline_btn(text: str, callback_data: str) -> Dict[str, str]:
+def _inline_btn(text: str, callback_data: str) -> Dict[str, Any]:
     return {"text": text, "callback_data": callback_data}
 
 
-def inline_keyboard(rows: List[List[Dict[str, str]]]) -> str:
+def inline_keyboard(rows: List[List[Dict[str, Any]]]) -> str:
     """Build an InlineKeyboardMarkup JSON string (buttons under the message)."""
     return json.dumps({"inline_keyboard": rows})
 
@@ -1455,8 +1455,8 @@ def kb_contact_methods() -> str:
 
 def kb_destinations() -> str:
     """Inline: popular destinations in two columns + cancel."""
-    rows: List[List[Dict[str, str]]] = []
-    row: List[Dict[str, str]] = []
+    rows: List[List[Dict[str, Any]]] = []
+    row: List[Dict[str, Any]] = []
     for i, label in enumerate(POPULAR_DESTINATIONS):
         row.append(_inline_btn(label, f"{CB_DEST_PREFIX}{i}"))
         if len(row) == 2:
@@ -1464,6 +1464,11 @@ def kb_destinations() -> str:
             row = []
     if row:
         rows.append(row)
+    if MINI_APP_URL:
+        rows.append([{
+            "text": "🌐 Открыть приложение",
+            "web_app": {"url": MINI_APP_URL},
+        }])
     rows.append([_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)])
     return inline_keyboard(rows)
 
