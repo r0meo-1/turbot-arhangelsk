@@ -15,6 +15,10 @@ https://r0meo-1.github.io/turbot-arhangelsk/turbot/
 ## Tracked campaign landing
 https://r0meo-1.github.io/turbot-arhangelsk/turbot/?utm_source=canva&utm_medium=social&utm_campaign=viral_ai_avatar
 
+## Telegram
+- Bot username: `@apreltour_bot`
+- Direct link: https://t.me/apreltour_bot
+
 ## Channels
 - VK Clips / VK Stories
 - Instagram Reels / Stories
@@ -55,15 +59,15 @@ Creative → tracked landing → 3 questions → generated lead → VK / Telegra
 - [x] Create vertical social variation
 - [x] Create feed variation
 - [x] Check text safe-zones on mobile
-- [ ] Add final Telegram bot username when confirmed (non-blocking follow-up)
+- [x] Add final Telegram bot username
 - [x] Final CTA destination defined
 - [x] Publish-ready UTM campaign URL defined
 
 ## Mobile safe-zone review
 Approved and saved in Canva. The headline was moved down from the top UI area, and the CTA block was moved up from the bottom Story controls while preserving the original copy and visual style.
 
-## Telegram identity follow-up
-Production deploy now resolves the public Telegram bot username with `getMe` and prints only the public `@username`; the bot token stays server-side and is never written to the campaign files or frontend.
+## Telegram identity verification
+Production deploy resolved the public bot identity with Telegram `getMe`: `@apreltour_bot`. Only the public username was emitted; the bot token remained server-side. The landing now links directly to the verified bot.
 
 ## Tracking
 Linear: `R0M-6` — TurBot: viral AI avatar campaign
