@@ -12,6 +12,9 @@ Use the new TurBot travel avatar as a high-energy social creative that drives us
 ## Landing
 https://r0meo-1.github.io/turbot-arhangelsk/turbot/
 
+## Tracked campaign landing
+https://r0meo-1.github.io/turbot-arhangelsk/turbot/?utm_source=canva&utm_medium=social&utm_campaign=viral_ai_avatar
+
 ## Channels
 - VK Clips / VK Stories
 - Instagram Reels / Stories
@@ -45,7 +48,7 @@ https://r0meo-1.github.io/turbot-arhangelsk/turbot/
 3. «Ваш отпуск начинается с одного сообщения»
 
 ## Conversion flow
-Creative → landing → 3 questions → generated lead → VK / Telegram / manager
+Creative → tracked landing → 3 questions → generated lead → VK / Telegram / manager
 
 ## Production checklist
 - [x] Build Canva master design from the generated avatar
@@ -53,10 +56,12 @@ Creative → landing → 3 questions → generated lead → VK / Telegram / mana
 - [x] Create feed variation
 - [ ] Check text safe-zones on mobile
 - [ ] Add final Telegram bot username when confirmed
-- [ ] Publish and track UTM source
+- [x] Final CTA destination defined
+- [x] Publish-ready UTM campaign URL defined
 
 ## Tracking
 Linear: `R0M-6` — TurBot: viral AI avatar campaign
 GitHub: `#18` — Produce TurBot viral AI avatar social assets
+UTM campaign: `viral_ai_avatar`
 
 Generated campaign visual is stored in the ChatGPT working session as `turbot-viral-ai-avatar.png` and was used as the visual reference for Canva production.
