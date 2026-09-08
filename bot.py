@@ -59,6 +59,9 @@ from shared import tutu as _tutu
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
+from shared.telegram_webapp import (
+    MiniAppValidationError, validate_init_data, validate_trip_request,
+)
 
 load_dotenv()
 
@@ -128,8 +131,11 @@ TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", "")
 # HTTPS URL opened by Telegram as the bot Web App menu button.
 MINI_APP_URL = os.getenv(
     "MINI_APP_URL",
-    "https://apreltour-mini-app.r0meo1.chatgpt.site/",
+    "https://r0meo-1.github.io/turbot-arhangelsk/miniapp/",
 ).strip()
+MINI_APP_ORIGIN = os.getenv(
+    "MINI_APP_ORIGIN", "https://r0meo-1.github.io"
+).strip().rstrip("/")
 DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
@@ -2973,6 +2979,51 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MB — Telegram updates are well under this
 
 
+def _miniapp_json(body: Dict[str, Any], status: int = 200) -> Response:
+    """JSON response with narrowly scoped CORS for the GitHub Pages Mini App."""
+    response = jsonify(body)
+    response.status_code = status
+    origin = request.headers.get("Origin", "")
+    if origin and origin == MINI_APP_ORIGIN:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    return response
+
+
+@app.route("/miniapp/submit", methods=["POST", "OPTIONS"])
+def miniapp_submit() -> Response:
+    """Accept a menu-button Mini App request after Telegram initData validation."""
+    origin = request.headers.get("Origin", "")
+    if not MINI_APP_ORIGIN or origin != MINI_APP_ORIGIN:
+        return _miniapp_json({"ok": False, "error": "Origin is not allowed"}, 403)
+    if request.method == "OPTIONS":
+        return _miniapp_json({"ok": True}, 204)
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _miniapp_json({"ok": False, "error": "Invalid JSON body"}, 400)
+    try:
+        telegram_user = validate_init_data(
+            str(body.get("initData") or ""), BOT_TOKEN, max_age=3600
+        )
+    except MiniAppValidationError as exc:
+        logger.info("Rejected Mini App initData: %s", exc)
+        return _miniapp_json({"ok": False, "error": "Telegram authorization failed"}, 401)
+
+    try:
+        info = _accept_miniapp_trip(
+            int(telegram_user["id"]), telegram_user, body.get("payload")
+        )
+    except MiniAppValidationError as exc:
+        return _miniapp_json({"ok": False, "error": str(exc)}, 400)
+    except Exception:
+        logger.exception("Mini App submission failed")
+        return _miniapp_json({"ok": False, "error": "Could not save the request"}, 500)
+    return _miniapp_json({"ok": True, "state": info.get("state")})
+
+
 @app.route("/")
 def index() -> str:
     return "TurBot is running!"
@@ -3264,6 +3315,40 @@ def _process_callback(data: Dict[str, Any]) -> None:
     send_message(chat_id, "Неизвестная кнопка. /start — начать заново.")
 
 
+
+def _accept_miniapp_trip(
+    chat_id: int, from_info: Dict[str, Any], payload: Any
+) -> Dict[str, Any]:
+    """Validate a Mini App request and continue at the existing contact step."""
+    info = validate_trip_request(payload)
+    first_name = str(from_info.get("first_name") or "").strip()
+    username = str(from_info.get("username") or "").strip()
+    _touch_user(chat_id, first_name, username)
+
+    # The form has a required consent checkbox. Keep the same consent marker
+    # as the conversational funnel and retain its review/send gate.
+    set_consent(chat_id)
+    info["state"] = STATE_CONTACT
+    info["updated_at"] = int(time.time())
+    _, info["kids"], info["infants"] = party_bands(info)
+    with _lock:
+        user_data[chat_id] = info
+    _mark_dirty(chat_id, user=False)
+    save_state()
+
+    direct_note = (
+        "\n✈️ Перелёт: только прямой, если доступен."
+        if info.get("direct_only") else ""
+    )
+    send_message(
+        chat_id,
+        "✅ Параметры поездки получены из Mini App.\n"
+        "Теперь выберите способ связи — после этого покажу заявку для проверки."
+        + direct_note,
+    )
+    _ask_contact(chat_id)
+    return info
+
 def _process_update(data: Dict[str, Any]) -> None:
     """Parse one Telegram message update and route it to the right handler."""
     if not _remember_update_id(data):
@@ -3276,6 +3361,20 @@ def _process_update(data: Dict[str, Any]) -> None:
     username = from_info.get("username", "")
 
     _touch_user(chat_id, first_name, username)
+
+    # Reply-keyboard Mini Apps may return web_app_data directly.
+    web_app_data = message.get("web_app_data") or {}
+    raw_web_app_data = web_app_data.get("data")
+    if raw_web_app_data is not None:
+        try:
+            if not isinstance(raw_web_app_data, str) or len(raw_web_app_data) > 8192:
+                raise MiniAppValidationError("Mini App payload is invalid")
+            payload = json.loads(raw_web_app_data)
+            _accept_miniapp_trip(chat_id, from_info, payload)
+        except (json.JSONDecodeError, MiniAppValidationError) as exc:
+            logger.info("Rejected Telegram web_app_data for chat %s: %s", chat_id, exc)
+            send_message(chat_id, "Не удалось проверить данные Mini App. Откройте форму ещё раз.")
+        return
 
     # Shared contact (e.g. phone button)
     contact = message.get("contact")
