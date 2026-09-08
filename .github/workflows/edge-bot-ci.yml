@@ -40,16 +40,16 @@ jobs:
       - name: Smoke import test
         run: |
           python - <<'PY'
-import importlib, sys
-mods = ['telegram','playwright','dotenv','edge_bot_playwright','edge_bot_bot']
-errors = []
-for m in mods:
-    try:
-        importlib.import_module(m)
-    except Exception as e:
-        errors.append(f"{m}: {e}")
-if errors:
-    print('\n'.join(errors))
-    sys.exit(2)
-print('smoke: ok')
-PY
+          import importlib, sys
+          mods = ['telegram','playwright','dotenv','edge_bot_playwright','edge_bot_bot']
+          errors = []
+          for m in mods:
+              try:
+                  importlib.import_module(m)
+              except Exception as e:
+                  errors.append(f"{m}: {e}")
+          if errors:
+              print('\n'.join(errors))
+              sys.exit(2)
+          print('smoke: ok')
+          PY
