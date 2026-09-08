@@ -1,8 +1,16 @@
 import os
 import asyncio
+import logging
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from edge_bot_playwright import run_search
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# load environment file if present
+load_dotenv('edge_bot.env')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -16,10 +24,15 @@ async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args)
     await update.message.reply_text(f"Searching for: {query}")
     try:
-        title = await run_search(query)
+        # Add a timeout to prevent long-running Playwright calls
+        title = await asyncio.wait_for(run_search(query), timeout=30)
         await update.message.reply_text(f"Page title: {title}")
-    except Exception as e:
-        await update.message.reply_text(f"Error running Playwright: {e}")
+    except asyncio.TimeoutError:
+        logger.exception("Playwright search timed out")
+        await update.message.reply_text("Search timed out. Try again later.")
+    except Exception:
+        logger.exception("Error running Playwright")
+        await update.message.reply_text("Error running Playwright. See bot logs for details.")
 
 def main():
     token = os.getenv("TELEGRAM_TOKEN")
