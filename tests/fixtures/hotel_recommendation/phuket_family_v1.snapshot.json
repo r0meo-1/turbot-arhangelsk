@@ -1,0 +1,127 @@
+{
+  "provider": "tripadvisor",
+  "provider_request_id": "fixture_ta_phuket_family_v1",
+  "provider_snapshot_at": "2026-09-09T00:00:00Z",
+  "candidates": [
+    {
+      "hotel_id": "1634352",
+      "hotel_name": "Renaissance Phuket Resort & Spa",
+      "price_total": 225000,
+      "currency": "RUB",
+      "beach_distance_m": 120,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.8,
+      "tripadvisor_review_count": 5811,
+      "signals": {"budget": 93, "beach_location": 90, "service": 93, "reviews": 87, "traveler_fit": 90, "preferences": 100}
+    },
+    {
+      "hotel_id": "2337076",
+      "hotel_name": "The Naka Island, a Luxury Collection Resort & Spa, Phuket",
+      "price_total": 258000,
+      "currency": "RUB",
+      "beach_distance_m": 80,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.7,
+      "tripadvisor_review_count": 2224,
+      "signals": {"budget": 87, "beach_location": 95, "service": 93, "reviews": 87, "traveler_fit": 90, "preferences": 80}
+    },
+    {
+      "hotel_id": "634706",
+      "hotel_name": "Kantary Bay Hotel Phuket",
+      "price_total": 190000,
+      "currency": "RUB",
+      "beach_distance_m": 400,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.8,
+      "tripadvisor_review_count": 2543,
+      "signals": {"budget": 100, "beach_location": 80, "service": 87, "reviews": 80, "traveler_fit": 90, "preferences": 80}
+    },
+    {
+      "hotel_id": "fixture-004",
+      "hotel_name": "Fixture Phuket Beach Resort",
+      "price_total": 205000,
+      "currency": "RUB",
+      "beach_distance_m": 350,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.5,
+      "tripadvisor_review_count": 1400,
+      "signals": {"budget": 90, "beach_location": 80, "service": 80, "reviews": 80, "traveler_fit": 80, "preferences": 80}
+    },
+    {
+      "hotel_id": "fixture-005",
+      "hotel_name": "Fixture Family Lagoon",
+      "price_total": 215000,
+      "currency": "RUB",
+      "beach_distance_m": 650,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.4,
+      "tripadvisor_review_count": 900,
+      "signals": {"budget": 85, "beach_location": 75, "service": 80, "reviews": 73, "traveler_fit": 90, "preferences": 80}
+    },
+    {
+      "hotel_id": "fixture-006",
+      "hotel_name": "Fixture Quiet Sands",
+      "price_total": 240000,
+      "currency": "RUB",
+      "beach_distance_m": 900,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.6,
+      "tripadvisor_review_count": 1100,
+      "signals": {"budget": 80, "beach_location": 75, "service": 87, "reviews": 80, "traveler_fit": 80, "preferences": 70}
+    },
+    {
+      "hotel_id": "fixture-007",
+      "hotel_name": "Fixture Over Budget",
+      "price_total": 310000,
+      "currency": "RUB",
+      "beach_distance_m": 100,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.9,
+      "tripadvisor_review_count": 5000,
+      "signals": {"budget": 40, "beach_location": 100, "service": 100, "reviews": 100, "traveler_fit": 100, "preferences": 100}
+    },
+    {
+      "hotel_id": "fixture-008",
+      "hotel_name": "Fixture Adults Only",
+      "price_total": 180000,
+      "currency": "RUB",
+      "beach_distance_m": 200,
+      "family_friendly": false,
+      "breakfast": true,
+      "tripadvisor_rating": 4.8,
+      "tripadvisor_review_count": 1800,
+      "signals": {"budget": 100, "beach_location": 95, "service": 90, "reviews": 90, "traveler_fit": 20, "preferences": 80}
+    },
+    {
+      "hotel_id": "fixture-009",
+      "hotel_name": "Fixture No Breakfast",
+      "price_total": 170000,
+      "currency": "RUB",
+      "beach_distance_m": 300,
+      "family_friendly": true,
+      "breakfast": false,
+      "tripadvisor_rating": 4.5,
+      "tripadvisor_review_count": 700,
+      "signals": {"budget": 100, "beach_location": 90, "service": 80, "reviews": 75, "traveler_fit": 85, "preferences": 70}
+    },
+    {
+      "hotel_id": "fixture-010",
+      "hotel_name": "Fixture Far From Beach",
+      "price_total": 160000,
+      "currency": "RUB",
+      "beach_distance_m": 2600,
+      "family_friendly": true,
+      "breakfast": true,
+      "tripadvisor_rating": 4.6,
+      "tripadvisor_review_count": 1200,
+      "signals": {"budget": 100, "beach_location": 30, "service": 85, "reviews": 80, "traveler_fit": 85, "preferences": 75}
+    }
+  ]
+}

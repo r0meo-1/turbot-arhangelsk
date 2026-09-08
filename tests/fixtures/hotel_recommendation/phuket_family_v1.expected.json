@@ -1,0 +1,220 @@
+{
+  "provider_trace": {
+    "provider": "tripadvisor",
+    "provider_request_id": "fixture_ta_phuket_family_v1",
+    "provider_response_hash": "6af12fb3e2fc58aaee643a09a2595df816b6076ec9d754d7f569bc9bd58d9491",
+    "provider_snapshot_at": "2026-09-09T00:00:00Z"
+  },
+  "qualified_lead": {
+    "hotel_id": "1634352",
+    "hotel_name": "Renaissance Phuket Resort & Spa",
+    "lead_id": "lead_ff0d47db607c92f5",
+    "match_score": 92,
+    "provider": "tripadvisor",
+    "provider_response_hash": "6af12fb3e2fc58aaee643a09a2595df816b6076ec9d754d7f569bc9bd58d9491",
+    "provider_snapshot_at": "2026-09-09T00:00:00Z",
+    "reason_selected": "family_beach",
+    "recommendation_id": "rec_e28d4a375a3651e9",
+    "score_breakdown": {
+      "beach_location": 18,
+      "budget": 28,
+      "preferences": 10,
+      "reviews": 13,
+      "service": 14,
+      "traveler_fit": 9
+    },
+    "scoring_version": "hotel-v1.0",
+    "search_request": {
+      "adults": 2,
+      "budget_total": 270000,
+      "children_ages": [
+        5
+      ],
+      "currency": "RUB",
+      "destination": "Phuket",
+      "preferences": [
+        "beach",
+        "pool",
+        "breakfast",
+        "family"
+      ],
+      "request_id": "req_phuket_family_v1"
+    },
+    "selection_role": "best_match",
+    "source": "thailand",
+    "tripadvisor_rating": 4.8,
+    "tripadvisor_review_count": 5811
+  },
+  "recommendations": [
+    {
+      "currency": "RUB",
+      "explanation": {
+        "best_for": "Семья с ребёнком",
+        "mode": "fallback",
+        "recommendation_reason": "Сильнее всего совпадает по: пожелания, бюджет, сервис.",
+        "strengths": [
+          "пожелания",
+          "бюджет",
+          "сервис"
+        ],
+        "watch_out": []
+      },
+      "hotel_id": "1634352",
+      "hotel_name": "Renaissance Phuket Resort & Spa",
+      "match_score": 92,
+      "price_total": 225000,
+      "recommendation_id": "rec_e28d4a375a3651e9",
+      "role": "best_match",
+      "score_breakdown": {
+        "beach_location": 18,
+        "budget": 28,
+        "preferences": 10,
+        "reviews": 13,
+        "service": 14,
+        "traveler_fit": 9
+      },
+      "tripadvisor_rating": 4.8,
+      "tripadvisor_review_count": 5811
+    },
+    {
+      "currency": "RUB",
+      "explanation": {
+        "best_for": "Семья с ребёнком",
+        "mode": "fallback",
+        "recommendation_reason": "Сильнее всего совпадает по: бюджет, состав туристов, сервис.",
+        "strengths": [
+          "бюджет",
+          "состав туристов",
+          "сервис"
+        ],
+        "watch_out": []
+      },
+      "hotel_id": "634706",
+      "hotel_name": "Kantary Bay Hotel Phuket",
+      "match_score": 88,
+      "price_total": 190000,
+      "recommendation_id": "rec_e28d4a375a3651e9",
+      "role": "best_value",
+      "score_breakdown": {
+        "beach_location": 16,
+        "budget": 30,
+        "preferences": 8,
+        "reviews": 12,
+        "service": 13,
+        "traveler_fit": 9
+      },
+      "tripadvisor_rating": 4.8,
+      "tripadvisor_review_count": 2543
+    },
+    {
+      "currency": "RUB",
+      "explanation": {
+        "best_for": "Семья с ребёнком",
+        "mode": "fallback",
+        "recommendation_reason": "Сильнее всего совпадает по: пляж и локация, сервис, состав туристов.",
+        "strengths": [
+          "пляж и локация",
+          "сервис",
+          "состав туристов"
+        ],
+        "watch_out": []
+      },
+      "hotel_id": "2337076",
+      "hotel_name": "The Naka Island, a Luxury Collection Resort & Spa, Phuket",
+      "match_score": 89,
+      "price_total": 258000,
+      "recommendation_id": "rec_e28d4a375a3651e9",
+      "role": "alternative",
+      "score_breakdown": {
+        "beach_location": 19,
+        "budget": 26,
+        "preferences": 8,
+        "reviews": 13,
+        "service": 14,
+        "traveler_fit": 9
+      },
+      "tripadvisor_rating": 4.7,
+      "tripadvisor_review_count": 2224
+    }
+  ],
+  "request": {
+    "adults": 2,
+    "budget_total": 270000,
+    "children_ages": [
+      5
+    ],
+    "currency": "RUB",
+    "destination": "Phuket",
+    "mandatory_requirements": {
+      "breakfast": true,
+      "family": true,
+      "max_beach_distance_m": 1500
+    },
+    "preferences": [
+      "beach",
+      "pool",
+      "breakfast",
+      "family"
+    ],
+    "reason_selected": "family_beach",
+    "request_id": "req_phuket_family_v1",
+    "source": "thailand"
+  },
+  "scoring_version": "hotel-v1.0",
+  "selected_hotel_id": "1634352",
+  "selected_recommendation_id": "rec_e28d4a375a3651e9",
+  "trace": {
+    "eligible_candidate_ids": [
+      "1634352",
+      "2337076",
+      "634706",
+      "fixture-004",
+      "fixture-005",
+      "fixture-006"
+    ],
+    "filtered_out": [
+      {
+        "failed_filters": [
+          "OVER_BUDGET"
+        ],
+        "hotel_id": "fixture-007"
+      },
+      {
+        "failed_filters": [
+          "FAMILY_NOT_SUPPORTED"
+        ],
+        "hotel_id": "fixture-008"
+      },
+      {
+        "failed_filters": [
+          "REQUIRED_BREAKFAST_MISSING"
+        ],
+        "hotel_id": "fixture-009"
+      },
+      {
+        "failed_filters": [
+          "BEACH_TOO_FAR"
+        ],
+        "hotel_id": "fixture-010"
+      }
+    ],
+    "normalized_candidate_ids": [
+      "1634352",
+      "2337076",
+      "634706",
+      "fixture-004",
+      "fixture-005",
+      "fixture-006",
+      "fixture-007",
+      "fixture-008",
+      "fixture-009",
+      "fixture-010"
+    ],
+    "tie_break": [
+      "total_score DESC",
+      "reviews_score DESC",
+      "tripadvisor_review_count DESC",
+      "hotel_id ASC"
+    ]
+  }
+}

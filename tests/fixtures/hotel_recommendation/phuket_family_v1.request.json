@@ -1,0 +1,16 @@
+{
+  "request_id": "req_phuket_family_v1",
+  "source": "thailand",
+  "destination": "Phuket",
+  "adults": 2,
+  "children_ages": [5],
+  "budget_total": 270000,
+  "currency": "RUB",
+  "preferences": ["beach", "pool", "breakfast", "family"],
+  "mandatory_requirements": {
+    "family": true,
+    "breakfast": true,
+    "max_beach_distance_m": 1500
+  },
+  "reason_selected": "family_beach"
+}
