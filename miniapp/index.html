@@ -1,650 +1,112 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ru">
 <head>
-  <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
-  />
-  <title>Апрель Тур / TurBot</title>
-
-  <!-- Official Telegram Mini Apps bridge -->
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <title>TurBot — подбор тура</title>
+  <link rel="stylesheet" href="./styles.css">
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-
-  <style>
-    :root {
-      --bg-color: var(--tg-theme-bg-color, #ffffff);
-      --text-color: var(--tg-theme-text-color, #111111);
-      --hint-color: var(--tg-theme-hint-color, #777777);
-      --secondary-bg: var(--tg-theme-secondary-bg-color, #f4f4f7);
-      --accent-color: var(--tg-theme-button-color, #2481cc);
-      --accent-text: var(--tg-theme-button-text-color, #ffffff);
-      --separator: color-mix(in srgb, var(--hint-color) 22%, transparent);
-    }
-
-    * {
-      box-sizing: border-box;
-      -webkit-tap-highlight-color: transparent;
-    }
-
-    html,
-    body {
-      margin: 0;
-      min-height: 100%;
-      background: var(--secondary-bg);
-      color: var(--text-color);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-
-    body {
-      display: flex;
-      justify-content: center;
-    }
-
-    button {
-      font: inherit;
-      color: inherit;
-    }
-
-    .app-container {
-      width: 100%;
-      max-width: 390px;
-      min-height: 100vh;
-      padding:
-        calc(16px + env(safe-area-inset-top))
-        16px
-        calc(24px + env(safe-area-inset-bottom));
-      background: var(--bg-color);
-      display: flex;
-      flex-direction: column;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 24px;
-    }
-
-    .brand-mark {
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
-      display: grid;
-      place-items: center;
-      background: var(--accent-color);
-      color: var(--accent-text);
-      font-weight: 800;
-    }
-
-    .brand-title {
-      font-size: 15px;
-      font-weight: 700;
-      line-height: 1.2;
-    }
-
-    .brand-subtitle {
-      margin-top: 2px;
-      color: var(--hint-color);
-      font-size: 12px;
-    }
-
-    .screen {
-      display: none;
-      flex: 1;
-      flex-direction: column;
-      animation: fade-in 160ms ease-out;
-    }
-
-    .screen.active {
-      display: flex;
-    }
-
-    @keyframes fade-in {
-      from {
-        opacity: 0;
-        transform: translateY(4px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .screen {
-        animation: none;
-      }
-    }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: 26px;
-      line-height: 1.15;
-      font-weight: 750;
-      letter-spacing: -0.4px;
-    }
-
-    .subtitle {
-      margin: 0 0 24px;
-      color: var(--hint-color);
-      font-size: 14px;
-      line-height: 1.45;
-    }
-
-    .grid-cards {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 12px;
-    }
-
-    .card,
-    .option-item {
-      border: 2px solid transparent;
-      background: var(--secondary-bg);
-      cursor: pointer;
-      transition:
-        border-color 120ms ease,
-        background-color 120ms ease,
-        transform 100ms ease;
-    }
-
-    .card:active,
-    .option-item:active {
-      transform: scale(0.985);
-    }
-
-    .card:focus-visible,
-    .option-item:focus-visible {
-      outline: 3px solid color-mix(in srgb, var(--accent-color) 35%, transparent);
-      outline-offset: 2px;
-    }
-
-    .card.selected,
-    .option-item.selected {
-      border-color: var(--accent-color);
-      background: var(--bg-color);
-    }
-
-    .card {
-      min-height: 132px;
-      padding: 20px 14px;
-      border-radius: 16px;
-      text-align: center;
-    }
-
-    .card-emoji {
-      margin-bottom: 8px;
-      font-size: 34px;
-      line-height: 1;
-    }
-
-    .card-title {
-      font-size: 16px;
-      font-weight: 700;
-    }
-
-    .list-options {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-    }
-
-    .option-item {
-      width: 100%;
-      min-height: 58px;
-      padding: 15px 16px;
-      border-radius: 14px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      text-align: left;
-      font-weight: 600;
-    }
-
-    .option-meta {
-      flex: 0 0 auto;
-      color: var(--hint-color);
-      font-size: 13px;
-      font-weight: 500;
-      text-align: right;
-    }
-
-    .summary-box {
-      padding: 6px 18px;
-      border-radius: 18px;
-      background: var(--secondary-bg);
-    }
-
-    .summary-row {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
-      gap: 16px;
-      padding: 15px 0;
-      border-bottom: 1px solid var(--separator);
-    }
-
-    .summary-row:last-child {
-      border-bottom: 0;
-    }
-
-    .summary-label {
-      color: var(--hint-color);
-      font-size: 13px;
-    }
-
-    .summary-value {
-      font-size: 14px;
-      font-weight: 700;
-      text-align: right;
-      overflow-wrap: anywhere;
-    }
-
-    .source-badge {
-      align-self: flex-start;
-      margin-top: 18px;
-      padding: 7px 10px;
-      border-radius: 999px;
-      background: var(--secondary-bg);
-      color: var(--hint-color);
-      font-size: 12px;
-    }
-
-    .error-box {
-      display: none;
-      margin-top: 16px;
-      padding: 12px 14px;
-      border-radius: 12px;
-      background: var(--secondary-bg);
-      color: var(--text-color);
-      font-size: 13px;
-    }
-
-    .error-box.visible {
-      display: block;
-    }
-  </style>
 </head>
-
 <body>
-  <main class="app-container">
-    <header class="brand" aria-label="TurBot от Апрель Тур">
-      <div class="brand-mark" aria-hidden="true">T</div>
+  <main class="shell">
+    <header class="hero">
+      <div class="brand-mark" aria-hidden="true">✈</div>
       <div>
-        <div class="brand-title">TurBot</div>
-        <div class="brand-subtitle">Апрель Тур</div>
+        <p class="eyebrow">АПРЕЛЬ тур</p>
+        <h1>TurBot</h1>
       </div>
+      <span class="ai-badge">AI</span>
     </header>
 
-    <section id="screen-destination" class="screen active" aria-labelledby="title-destination">
-      <h1 id="title-destination">Куда летим?</h1>
-      <p class="subtitle">Выберите направление поездки.</p>
-
-      <div class="grid-cards">
-        <button class="card" type="button" data-destination="Таиланд">
-          <div class="card-emoji" aria-hidden="true">🇹🇭</div>
-          <div class="card-title">Таиланд</div>
-        </button>
-
-        <button class="card" type="button" data-destination="Вьетнам">
-          <div class="card-emoji" aria-hidden="true">🇻🇳</div>
-          <div class="card-title">Вьетнам</div>
-        </button>
-      </div>
+    <section class="intro">
+      <p id="welcome">Соберём параметры поездки за минуту.</p>
+      <h2>Куда летим?</h2>
     </section>
 
-    <section id="screen-duration" class="screen" aria-labelledby="title-duration">
-      <h1 id="title-duration">Когда и на сколько?</h1>
-      <p class="subtitle">Выберите подходящий ориентир по срокам.</p>
-
-      <div class="list-options">
-        <button class="option-item" type="button" data-duration="Ближайшие 2 недели (7–10 ночей)">
-          <span>Ближайшие 2 недели</span>
-          <span class="option-meta">7–10 ночей</span>
-        </button>
-
-        <button class="option-item" type="button" data-duration="Ближайший месяц (10–14 ночей)">
-          <span>Ближайший месяц</span>
-          <span class="option-meta">10–14 ночей</span>
-        </button>
-
-        <button class="option-item" type="button" data-duration="В течение 3 месяцев (7–14 ночей)">
-          <span>В течение 3 месяцев</span>
-          <span class="option-meta">7–14 ночей</span>
-        </button>
-
-        <button class="option-item" type="button" data-duration="Пока не знаю">
-          <span>Пока не знаю</span>
-          <span class="option-meta">Поможет менеджер</span>
-        </button>
-      </div>
-    </section>
-
-    <section id="screen-tourists" class="screen" aria-labelledby="title-tourists">
-      <h1 id="title-tourists">Кто летит?</h1>
-      <p class="subtitle">Выберите состав туристов.</p>
-
-      <div class="list-options">
-        <button class="option-item" type="button" data-tourists="1 взрослый">
-          <span>👤 Один</span>
-          <span class="option-meta">1 взрослый</span>
-        </button>
-
-        <button class="option-item" type="button" data-tourists="2 взрослых">
-          <span>👥 Пара</span>
-          <span class="option-meta">2 взрослых</span>
-        </button>
-
-        <button class="option-item" type="button" data-tourists="Семья с детьми">
-          <span>👨‍👩‍👧‍👦 Семья</span>
-          <span class="option-meta">С детьми</span>
-        </button>
-
-        <button class="option-item" type="button" data-tourists="Другая компания">
-          <span>🧳 Другая компания</span>
-          <span class="option-meta">Уточнит менеджер</span>
-        </button>
-      </div>
-    </section>
-
-    <section id="screen-budget" class="screen" aria-labelledby="title-budget">
-      <h1 id="title-budget">Какой бюджет?</h1>
-      <p class="subtitle">Укажите ориентир на всю поездку.</p>
-
-      <div class="list-options">
-        <button class="option-item" type="button" data-budget="До 200 000 ₽">
-          <span>До 200 000 ₽</span>
-        </button>
-
-        <button class="option-item" type="button" data-budget="200 000–350 000 ₽">
-          <span>200 000–350 000 ₽</span>
-        </button>
-
-        <button class="option-item" type="button" data-budget="От 350 000 ₽">
-          <span>От 350 000 ₽</span>
-        </button>
-
-        <button class="option-item" type="button" data-budget="Нужна помощь с бюджетом">
-          <span>Нужна помощь с бюджетом</span>
-        </button>
-      </div>
-    </section>
-
-    <section id="screen-confirmation" class="screen" aria-labelledby="title-confirmation">
-      <h1 id="title-confirmation">Всё верно?</h1>
-      <p class="subtitle">Проверьте параметры перед передачей заявки менеджеру Апрель Тур.</p>
-
-      <div class="summary-box">
-        <div class="summary-row">
-          <div class="summary-label">Направление</div>
-          <div id="sum-destination" class="summary-value">—</div>
+    <form id="trip-form" novalidate>
+      <section class="card destination-card">
+        <label for="destination">Направление</label>
+        <div class="input-wrap">
+          <span aria-hidden="true">🌴</span>
+          <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Таиланд, Вьетнам, Шри-Ланка" required>
         </div>
-
-        <div class="summary-row">
-          <div class="summary-label">Когда / длительность</div>
-          <div id="sum-duration" class="summary-value">—</div>
+        <div class="chips" aria-label="Популярные направления">
+          <button class="chip" type="button" data-destination="Таиланд">Таиланд</button>
+          <button class="chip" type="button" data-destination="Вьетнам">Вьетнам</button>
+          <button class="chip" type="button" data-destination="Шри-Ланка">Шри-Ланка</button>
         </div>
+      </section>
 
-        <div class="summary-row">
-          <div class="summary-label">Состав</div>
-          <div id="sum-tourists" class="summary-value">—</div>
+      <section class="grid two-col">
+        <label class="card field-card">
+          <span>Вылет</span>
+          <input id="departure" name="departure" type="text" maxlength="100" placeholder="Москва" value="Москва" required>
+        </label>
+        <label class="card field-card">
+          <span>Ночей</span>
+          <input id="nights" name="nights" type="number" min="3" max="30" inputmode="numeric" value="10" required>
+        </label>
+      </section>
+
+      <section class="card">
+        <div class="section-row">
+          <label for="date">Дата вылета</label>
+          <span class="hint">можно примерно</span>
         </div>
+        <input id="date" name="date" class="full-input" type="date" required>
+      </section>
 
-        <div class="summary-row">
-          <div class="summary-label">Бюджет</div>
-          <div id="sum-budget" class="summary-value">—</div>
+      <section class="grid two-col">
+        <label class="card field-card">
+          <span>Взрослых</span>
+          <input id="adults" name="adults" type="number" min="1" max="8" inputmode="numeric" value="2" required>
+        </label>
+        <label class="card field-card">
+          <span>Детей до 18</span>
+          <input id="children" name="children" type="number" min="0" max="6" inputmode="numeric" value="0" required>
+        </label>
+      </section>
+
+      <section id="children-ages-card" class="card" hidden>
+        <div class="section-row">
+          <div>
+            <strong>Возраст детей</strong>
+            <div class="hint">На дату вылета</div>
+          </div>
+          <span class="hint">0 = до года</span>
         </div>
-      </div>
+        <div id="children-ages" class="ages-grid"></div>
+      </section>
 
-      <div id="source-badge" class="source-badge">Источник: landing</div>
-      <div id="error-box" class="error-box" role="alert"></div>
-    </section>
+      <section class="card">
+        <div class="section-row">
+          <label for="budget">Бюджет до</label>
+          <output id="budget-output" for="budget">270 000 ₽</output>
+        </div>
+        <input id="budget" name="budget" type="range" min="100000" max="600000" step="10000" value="270000">
+        <div class="range-labels"><span>100 000 ₽</span><span>600 000 ₽</span></div>
+      </section>
+
+      <label class="toggle-card card">
+        <div>
+          <strong>Только прямой перелёт</strong>
+          <span>Если есть подходящие варианты</span>
+        </div>
+        <input id="direct" name="direct" type="checkbox">
+      </label>
+
+      <label class="consent-card card">
+        <input id="consent" name="consent" type="checkbox" required>
+        <span>Согласен на обработку данных заявки по <a href="https://bot.r0meo1.ru/privacy" target="_blank" rel="noopener noreferrer">политике «АПРЕЛЬ тур»</a>.</span>
+      </label>
+
+      <p id="error" class="error" role="alert" aria-live="polite"></p>
+      <button id="submit" class="primary" type="submit">Продолжить в TurBot</button>
+      <p class="privacy-note">После отправки TurBot попросит выбрать способ связи и покажет заявку перед передачей менеджеру. Оплата в Mini App не производится.</p>
+    </form>
   </main>
 
-  <script>
-    (() => {
-      const tg = window.Telegram?.WebApp;
-
-      if (!tg) {
-        document.body.innerHTML =
-          '<main style="padding:24px;font-family:system-ui">Откройте приложение внутри Telegram.</main>';
-        return;
-      }
-
-      // Replace with your real HTTPS API endpoint.
-      const API_URL = 'https://YOUR-DOMAIN.RU/api/trip-request';
-
-      tg.ready();
-      tg.expand();
-
-      const state = {
-        destination: null,
-        duration: null,
-        tourists: null,
-        budget: null,
-        start_param: tg.initDataUnsafe?.start_param || 'landing'
-      };
-
-      const steps = ['destination', 'duration', 'tourists', 'budget', 'confirmation'];
-      let currentStepIdx = 0;
-      let submitting = false;
-
-      const hapticSelection = () => {
-        try {
-          tg.HapticFeedback?.selectionChanged();
-        } catch (_) {}
-      };
-
-      const hapticNotification = (type) => {
-        try {
-          tg.HapticFeedback?.notificationOccurred(type);
-        } catch (_) {}
-      };
-
-      function setSelected(selector, value, attribute) {
-        document.querySelectorAll(selector).forEach((el) => {
-          el.classList.toggle('selected', el.getAttribute(attribute) === value);
-        });
-      }
-
-      function renderSummary() {
-        document.getElementById('sum-destination').textContent = state.destination || '—';
-        document.getElementById('sum-duration').textContent = state.duration || '—';
-        document.getElementById('sum-tourists').textContent = state.tourists || '—';
-        document.getElementById('sum-budget').textContent = state.budget || '—';
-        document.getElementById('source-badge').textContent =
-          `Источник: ${state.start_param || 'landing'}`;
-      }
-
-      function updateUI() {
-        steps.forEach((step, idx) => {
-          document
-            .getElementById(`screen-${step}`)
-            .classList.toggle('active', idx === currentStepIdx);
-        });
-
-        if (currentStepIdx > 0) {
-          tg.BackButton.show();
-        } else {
-          tg.BackButton.hide();
-        }
-
-        const isConfirmation = steps[currentStepIdx] === 'confirmation';
-
-        if (isConfirmation) {
-          renderSummary();
-
-          tg.MainButton.setParams({
-            text: 'ОСТАВИТЬ ЗАЯВКУ',
-            color: tg.themeParams.button_color || '#2481cc',
-            text_color: tg.themeParams.button_text_color || '#ffffff',
-            is_visible: true,
-            is_active: !submitting
-          });
-        } else {
-          tg.MainButton.hide();
-        }
-      }
-
-      function selectDestination(value, isAuto = false) {
-        state.destination = value;
-        setSelected('[data-destination]', value, 'data-destination');
-
-        if (!isAuto) {
-          hapticSelection();
-        }
-
-        currentStepIdx = 1;
-        updateUI();
-      }
-
-      function selectDuration(value) {
-        state.duration = value;
-        setSelected('[data-duration]', value, 'data-duration');
-        hapticSelection();
-        currentStepIdx = 2;
-        updateUI();
-      }
-
-      function selectTourists(value) {
-        state.tourists = value;
-        setSelected('[data-tourists]', value, 'data-tourists');
-        hapticSelection();
-        currentStepIdx = 3;
-        updateUI();
-      }
-
-      function selectBudget(value) {
-        state.budget = value;
-        setSelected('[data-budget]', value, 'data-budget');
-        hapticSelection();
-        currentStepIdx = 4;
-        updateUI();
-      }
-
-      document.querySelectorAll('[data-destination]').forEach((button) => {
-        button.addEventListener('click', () => {
-          selectDestination(button.dataset.destination);
-        });
-      });
-
-      document.querySelectorAll('[data-duration]').forEach((button) => {
-        button.addEventListener('click', () => {
-          selectDuration(button.dataset.duration);
-        });
-      });
-
-      document.querySelectorAll('[data-tourists]').forEach((button) => {
-        button.addEventListener('click', () => {
-          selectTourists(button.dataset.tourists);
-        });
-      });
-
-      document.querySelectorAll('[data-budget]').forEach((button) => {
-        button.addEventListener('click', () => {
-          selectBudget(button.dataset.budget);
-        });
-      });
-
-      tg.BackButton.onClick(() => {
-        if (submitting || currentStepIdx <= 0) {
-          return;
-        }
-
-        currentStepIdx -= 1;
-        hapticSelection();
-        updateUI();
-      });
-
-      tg.MainButton.onClick(async () => {
-        if (submitting || steps[currentStepIdx] !== 'confirmation') {
-          return;
-        }
-
-        const required = [
-          state.destination,
-          state.duration,
-          state.tourists,
-          state.budget
-        ];
-
-        if (required.some((value) => !value)) {
-          tg.showAlert('Не все параметры заполнены. Вернитесь назад и завершите выбор.');
-          return;
-        }
-
-        const errorBox = document.getElementById('error-box');
-        errorBox.classList.remove('visible');
-        errorBox.textContent = '';
-
-        submitting = true;
-        tg.MainButton.showProgress();
-        tg.MainButton.disable();
-
-        try {
-          if (!tg.initData) {
-            throw new Error('Telegram initData is empty');
-          }
-
-          const response = await fetch(API_URL, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Telegram-Init-Data': tg.initData
-            },
-            body: JSON.stringify({
-              destination: state.destination,
-              duration: state.duration,
-              tourists: state.tourists,
-              budget: state.budget,
-              start_param: state.start_param
-            })
-          });
-
-          if (!response.ok) {
-            throw new Error(`API ${response.status}`);
-          }
-
-          hapticNotification('success');
-          tg.close();
-        } catch (error) {
-          console.error(error);
-          hapticNotification('error');
-
-          errorBox.textContent =
-            'Не удалось отправить заявку. Проверьте соединение и попробуйте ещё раз.';
-          errorBox.classList.add('visible');
-
-          tg.showAlert(
-            'Не удалось отправить заявку. Проверьте интернет и попробуйте снова.'
-          );
-        } finally {
-          submitting = false;
-          tg.MainButton.hideProgress();
-          tg.MainButton.enable();
-        }
-      });
-
-      function applyDeepLink() {
-        if (state.start_param === 'thailand') {
-          selectDestination('Таиланд', true);
-          return;
-        }
-
-        if (state.start_param === 'vietnam') {
-          selectDestination('Вьетнам', true);
-          return;
-        }
-
-        currentStepIdx = 0;
-        updateUI();
-      }
-
-      tg.onEvent?.('themeChanged', updateUI);
-
-      applyDeepLink();
-    })();
-  </script>
+  <script src="./app.js"></script>
 </body>
 </html>
