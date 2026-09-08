@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1220">
+  <title>TurBot — подбор тура</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="brand-mark" aria-hidden="true">✈</div>
+      <div>
+        <p class="eyebrow">АПРЕЛЬ тур</p>
+        <h1>TurBot</h1>
+      </div>
+      <span class="ai-badge">AI</span>
+    </header>
+
+    <section class="intro">
+      <p id="welcome">Соберём параметры поездки за минуту.</p>
+      <h2>Куда летим?</h2>
+    </section>
+
+    <form id="trip-form" novalidate>
+      <section class="card destination-card">
+        <label for="destination">Направление</label>
+        <div class="input-wrap">
+          <span aria-hidden="true">🌴</span>
+          <input id="destination" name="destination" type="text" autocomplete="off" placeholder="Таиланд, Вьетнам, Шри-Ланка" required>
+        </div>
+        <div class="chips" aria-label="Популярные направления">
+          <button class="chip" type="button" data-destination="Таиланд">Таиланд</button>
+          <button class="chip" type="button" data-destination="Вьетнам">Вьетнам</button>
+          <button class="chip" type="button" data-destination="Шри-Ланка">Шри-Ланка</button>
+        </div>
+      </section>
+
+      <section class="grid two-col">
+        <label class="card field-card">
+          <span>Вылет</span>
+          <input id="departure" name="departure" type="text" placeholder="Москва" value="Москва" required>
+        </label>
+        <label class="card field-card">
+          <span>Ночей</span>
+          <input id="nights" name="nights" type="number" min="3" max="30" inputmode="numeric" value="10" required>
+        </label>
+      </section>
+
+      <section class="card">
+        <div class="section-row">
+          <label for="date">Дата вылета</label>
+          <span class="hint">можно примерно</span>
+        </div>
+        <input id="date" name="date" class="full-input" type="date" required>
+      </section>
+
+      <section class="grid two-col">
+        <label class="card field-card">
+          <span>Взрослых</span>
+          <input id="adults" name="adults" type="number" min="1" max="8" inputmode="numeric" value="2" required>
+        </label>
+        <label class="card field-card">
+          <span>Детей</span>
+          <input id="children" name="children" type="number" min="0" max="6" inputmode="numeric" value="0" required>
+        </label>
+      </section>
+
+      <section class="card">
+        <div class="section-row">
+          <label for="budget">Бюджет до</label>
+          <output id="budget-output" for="budget">270 000 ₽</output>
+        </div>
+        <input id="budget" name="budget" type="range" min="100000" max="600000" step="10000" value="270000">
+        <div class="range-labels"><span>100 000 ₽</span><span>600 000 ₽</span></div>
+      </section>
+
+      <label class="toggle-card card">
+        <div>
+          <strong>Только прямой перелёт</strong>
+          <span>Если есть подходящие варианты</span>
+        </div>
+        <input id="direct" name="direct" type="checkbox">
+      </label>
+
+      <p id="error" class="error" role="alert" aria-live="polite"></p>
+      <button id="submit" class="primary" type="submit">Найти туры</button>
+      <p class="privacy-note">Данные отправятся в TurBot внутри Telegram. Оплата в Mini App не производится.</p>
+    </form>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
