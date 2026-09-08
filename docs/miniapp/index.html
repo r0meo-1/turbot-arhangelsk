@@ -29,7 +29,7 @@
         <label for="destination">Направление</label>
         <div class="input-wrap">
           <span aria-hidden="true">🌴</span>
-          <input id="destination" name="destination" type="text" autocomplete="off" placeholder="Таиланд, Вьетнам, Шри-Ланка" required>
+          <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Таиланд, Вьетнам, Шри-Ланка" required>
         </div>
         <div class="chips" aria-label="Популярные направления">
           <button class="chip" type="button" data-destination="Таиланд">Таиланд</button>
@@ -41,7 +41,7 @@
       <section class="grid two-col">
         <label class="card field-card">
           <span>Вылет</span>
-          <input id="departure" name="departure" type="text" placeholder="Москва" value="Москва" required>
+          <input id="departure" name="departure" type="text" maxlength="100" placeholder="Москва" value="Москва" required>
         </label>
         <label class="card field-card">
           <span>Ночей</span>
@@ -63,9 +63,20 @@
           <input id="adults" name="adults" type="number" min="1" max="8" inputmode="numeric" value="2" required>
         </label>
         <label class="card field-card">
-          <span>Детей</span>
+          <span>Детей до 18</span>
           <input id="children" name="children" type="number" min="0" max="6" inputmode="numeric" value="0" required>
         </label>
+      </section>
+
+      <section id="children-ages-card" class="card" hidden>
+        <div class="section-row">
+          <div>
+            <strong>Возраст детей</strong>
+            <div class="hint">На дату вылета</div>
+          </div>
+          <span class="hint">0 = до года</span>
+        </div>
+        <div id="children-ages" class="ages-grid"></div>
       </section>
 
       <section class="card">
@@ -85,9 +96,14 @@
         <input id="direct" name="direct" type="checkbox">
       </label>
 
+      <label class="consent-card card">
+        <input id="consent" name="consent" type="checkbox" required>
+        <span>Согласен на обработку данных заявки по <a href="https://bot.r0meo1.ru/privacy" target="_blank" rel="noopener noreferrer">политике «АПРЕЛЬ тур»</a>.</span>
+      </label>
+
       <p id="error" class="error" role="alert" aria-live="polite"></p>
-      <button id="submit" class="primary" type="submit">Найти туры</button>
-      <p class="privacy-note">Данные отправятся в TurBot внутри Telegram. Оплата в Mini App не производится.</p>
+      <button id="submit" class="primary" type="submit">Продолжить в TurBot</button>
+      <p class="privacy-note">После отправки TurBot попросит выбрать способ связи и покажет заявку перед передачей менеджеру. Оплата в Mini App не производится.</p>
     </form>
   </main>
 
