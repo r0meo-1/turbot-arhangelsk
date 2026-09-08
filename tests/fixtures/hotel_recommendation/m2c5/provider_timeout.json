@@ -1,0 +1,31 @@
+{
+  "schema_version": "m2c5-v1",
+  "scenario": "provider_timeout",
+  "request": {
+    "budget_total": 270000,
+    "currency": "RUB",
+    "adults": 2,
+    "children_ages": [5],
+    "preferences": ["beach", "pool", "breakfast", "family"],
+    "max_beach_distance_m": 1500
+  },
+  "content_candidates": [
+    {"canonical_hotel_id": "hotel_phuket_021"},
+    {"canonical_hotel_id": "hotel_phuket_022"},
+    {"canonical_hotel_id": "hotel_phuket_023"}
+  ],
+  "pricing_provider_outcome": {
+    "provider": "commercial_price_fixture",
+    "status": "timeout"
+  },
+  "expected": {
+    "eligible_ids": [],
+    "provider_degradation": {
+      "provider": "commercial_price_fixture",
+      "code": "price_provider_timeout",
+      "affected_candidates": 3
+    },
+    "candidate_exclusions": {},
+    "pipeline_level": "blocked"
+  }
+}
