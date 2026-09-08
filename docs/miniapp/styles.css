@@ -17,6 +17,7 @@ body {
 }
 button, input { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
+a { color: var(--tg-theme-link-color, #5cc8ff); }
 .shell { width: min(100%, 560px); margin: 0 auto; padding: max(18px, env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom)); }
 .hero { display: flex; align-items: center; gap: 12px; margin-bottom: 28px; }
 .brand-mark { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 16px; background: linear-gradient(145deg, #1f9ee8, #54c5f8); box-shadow: 0 10px 28px rgba(42, 171, 238, .24); color: #fff; font-size: 24px; }
@@ -46,13 +47,22 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 72%, transparent); }
 output { color: var(--tg-theme-text-color, #f8fafc); font-weight: 800; font-size: 15px; }
 input[type="range"] { width: 100%; accent-color: var(--accent); }
 .range-labels { display: flex; justify-content: space-between; margin-top: 4px; }
+.ages-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
+.age-field { min-width: 0; }
+.age-field > span { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.age-field input { padding: 0 12px; background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 14px; }
 .toggle-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
 .toggle-card strong { display: block; font-size: 15px; }
 .toggle-card span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
 .toggle-card input { width: 22px; height: 22px; accent-color: var(--accent); }
+.consent-card { display: flex; align-items: flex-start; gap: 12px; line-height: 1.45; }
+.consent-card input { flex: 0 0 auto; width: 22px; height: 22px; margin: 1px 0 0; accent-color: var(--accent); }
+.consent-card span { color: var(--muted); font-size: 13px; }
 .primary { width: 100%; border: 0; border-radius: 16px; min-height: 54px; background: var(--accent); color: var(--accent-text); font-size: 16px; font-weight: 800; box-shadow: 0 12px 30px rgba(42, 171, 238, .22); }
 .primary:active { transform: translateY(1px); }
 .primary:disabled { opacity: .55; }
 .error { min-height: 18px; margin: -2px 2px -4px; color: #ff7b7b; font-size: 13px; }
 .privacy-note { margin: 0 8px; text-align: center; line-height: 1.45; }
-@media (max-width: 360px) { .two-col { grid-template-columns: 1fr; } }
+@media (max-width: 360px) {
+  .two-col, .ages-grid { grid-template-columns: 1fr; }
+}
