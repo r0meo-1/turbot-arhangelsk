@@ -1,0 +1,8 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+edge_bot.env
+
+# Playwright
+playwright-report/
