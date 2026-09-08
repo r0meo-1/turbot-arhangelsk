@@ -1,0 +1,23 @@
+{
+  "schema_version": "m2c5-v1",
+  "scenario": "identity_mismatch",
+  "content_ref": {
+    "provider": "tripadvisor_terra",
+    "provider_hotel_id": "ta-100"
+  },
+  "pricing_ref": {
+    "provider": "commercial_price_fixture",
+    "provider_hotel_id": "price-999"
+  },
+  "identity_snapshot": {
+    "tripadvisor_terra:ta-100": "hotel_phuket_100"
+  },
+  "expected": {
+    "content_canonical_hotel_id": "hotel_phuket_100",
+    "pricing_identity_status": "unmapped",
+    "pricing_canonical_hotel_id": null,
+    "joined": false,
+    "degradation_codes": ["identity_unmapped"],
+    "synthetic_price": false
+  }
+}
