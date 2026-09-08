@@ -1,0 +1,70 @@
+{
+  "schema_version": "m2c5-v1",
+  "scenario": "partial_pricing",
+  "request": {
+    "budget_total": 270000,
+    "currency": "RUB",
+    "adults": 2,
+    "children_ages": [5],
+    "preferences": ["beach", "pool", "breakfast", "family"],
+    "max_beach_distance_m": 1500
+  },
+  "candidates": [
+    {
+      "canonical_hotel_id": "hotel_phuket_011",
+      "total_price": 205000,
+      "currency": "RUB",
+      "beach_distance_m": 350,
+      "tripadvisor_rating": 4.5,
+      "tripadvisor_review_count": 1400,
+      "service_rating": 4.3,
+      "family_friendly": true,
+      "breakfast": true,
+      "amenities": ["pool"]
+    },
+    {
+      "canonical_hotel_id": "hotel_phuket_012",
+      "total_price": 240000,
+      "currency": "RUB",
+      "beach_distance_m": 900,
+      "tripadvisor_rating": 4.6,
+      "tripadvisor_review_count": 1100,
+      "service_rating": 4.5,
+      "family_friendly": true,
+      "breakfast": true,
+      "amenities": ["wifi"]
+    },
+    {
+      "canonical_hotel_id": "hotel_phuket_013",
+      "total_price": null,
+      "currency": null,
+      "beach_distance_m": 220,
+      "tripadvisor_rating": 4.7,
+      "tripadvisor_review_count": 900,
+      "service_rating": 4.6,
+      "family_friendly": true,
+      "breakfast": true,
+      "amenities": ["pool"]
+    },
+    {
+      "canonical_hotel_id": "hotel_phuket_014",
+      "total_price": null,
+      "currency": null,
+      "beach_distance_m": 500,
+      "tripadvisor_rating": 4.4,
+      "tripadvisor_review_count": 650,
+      "service_rating": 4.2,
+      "family_friendly": true,
+      "breakfast": true,
+      "amenities": ["pool"]
+    }
+  ],
+  "expected": {
+    "eligible_ids": ["hotel_phuket_011", "hotel_phuket_012"],
+    "excluded": {
+      "hotel_phuket_013": ["price_missing"],
+      "hotel_phuket_014": ["price_missing"]
+    },
+    "pipeline_level": "partial"
+  }
+}
