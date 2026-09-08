@@ -25,3 +25,8 @@ Commands
 Notes
 - Requires Edge installed for channel="msedge".
 - Use HEADLESS=0 in edge_bot.env for visible browser during development.
+
+## Docker
+Build image:
+`docker build -f docker/edge-bot/Dockerfile -t edge-bot .`nRun:
+`docker run -e TELEGRAM_TOKEN=... -e HEADLESS=1 edge-bot`n

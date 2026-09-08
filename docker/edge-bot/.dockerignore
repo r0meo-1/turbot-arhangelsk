@@ -1,0 +1,5 @@
+﻿# Ignore Python cache and virtual env
+__pycache__/
+.venv/
+*.pyc
+playwright-report/
