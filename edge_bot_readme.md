@@ -20,7 +20,10 @@ Setup
 Commands
 
 /start — info
+/help — show available commands
 /search <query> — open Edge, search Bing, bot replies with page title
+
+Search queries are limited to 200 characters.
 
 Notes
 - Requires Edge installed for channel="msedge".
