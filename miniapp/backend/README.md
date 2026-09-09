@@ -23,7 +23,8 @@ Production endpoint used by the Telegram Mini App:
 POST https://YOUR-DOMAIN/api/trip-request
 ```
 
-Set this same URL in `index.html` as `API_URL`.
+Set this URL in the `turbot-api-url` meta tag in `index.html`. The default
+`/api/trip-request` works when the Mini App and API share an origin.
 
 For a separately hosted Mini App, set `MINI_APP_ORIGINS` to its exact origin
 (comma-separated for multiple environments), for example:

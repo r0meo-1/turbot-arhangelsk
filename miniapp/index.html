@@ -4,8 +4,9 @@
   <meta charset="UTF-8" />
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    content="width=device-width, initial-scale=1.0, viewport-fit=cover"
   />
+  <meta name="turbot-api-url" content="/api/trip-request" />
   <title>Апрель Тур / TurBot</title>
 
   <!-- Official Telegram Mini Apps bridge -->
@@ -412,8 +413,11 @@
         return;
       }
 
-      // Replace with your real HTTPS API endpoint.
-      const API_URL = 'https://YOUR-DOMAIN.RU/api/trip-request';
+      // Use a same-origin backend by default; deployments can override this
+      // without editing the application logic by changing the meta tag above.
+      const API_URL =
+        document.querySelector('meta[name="turbot-api-url"]')?.content.trim() ||
+        '/api/trip-request';
 
       tg.ready();
       tg.expand();
