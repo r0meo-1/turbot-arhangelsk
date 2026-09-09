@@ -25,4 +25,11 @@ POST https://YOUR-DOMAIN/api/trip-request
 
 Set this same URL in `index.html` as `API_URL`.
 
+For a separately hosted Mini App, set `MINI_APP_ORIGINS` to its exact origin
+(comma-separated for multiple environments), for example:
+
+```text
+MINI_APP_ORIGINS=https://r0meo-1.github.io
+```
+
 Important: never put `BOT_TOKEN` into `index.html`. Keep it only in server environment variables.

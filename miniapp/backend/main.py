@@ -7,6 +7,7 @@ from urllib.parse import parse_qsl
 
 from aiogram import Bot
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +17,21 @@ MAX_INIT_DATA_AGE_SECONDS = int(os.getenv("MAX_INIT_DATA_AGE_SECONDS", "3600"))
 
 bot = Bot(BOT_TOKEN)
 app = FastAPI(title="TurBot API")
+
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("MINI_APP_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if not allowed_origins:
+    allowed_origins = ["https://r0meo-1.github.io"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_methods=["POST"],
+    allow_headers=["Content-Type", "X-Telegram-Init-Data"],
+)
 
 
 class TripRequest(BaseModel):

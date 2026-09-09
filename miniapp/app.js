@@ -17,13 +17,19 @@
   const setMinDate = () => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
-    const iso = now.toISOString().slice(0, 10);
+    const formatDate = (date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    const iso = formatDate(now);
     const dateInput = document.getElementById('date');
     dateInput.min = iso;
     if (!dateInput.value) {
       const defaultDate = new Date(now);
       defaultDate.setDate(defaultDate.getDate() + 30);
-      dateInput.value = defaultDate.toISOString().slice(0, 10);
+      dateInput.value = formatDate(defaultDate);
     }
   };
 
