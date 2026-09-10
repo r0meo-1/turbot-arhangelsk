@@ -1,0 +1,75 @@
+name: VK Cleanup Safe Scan
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan-and-backup:
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Verify required settings
+        shell: pwsh
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+          VK_OWNER_ID: ${{ vars.VK_OWNER_ID }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:VK_TOKEN)) {
+            throw "Missing GitHub Actions secret: VK_TOKEN"
+          }
+          if ([string]::IsNullOrWhiteSpace($env:VK_OWNER_ID)) {
+            throw "Missing GitHub Actions variable: VK_OWNER_ID"
+          }
+          Write-Host "VK_TOKEN is configured: True"
+          Write-Host "VK_OWNER_ID is configured: True"
+
+      - name: Show help
+        shell: pwsh
+        run: python .\vk_wall_cleanup.py --help
+
+      - name: Scan matching posts
+        shell: pwsh
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+          VK_OWNER_ID: ${{ vars.VK_OWNER_ID }}
+        run: python .\vk_wall_cleanup.py scan
+
+      - name: Create backup
+        shell: pwsh
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+          VK_OWNER_ID: ${{ vars.VK_OWNER_ID }}
+        run: python .\vk_wall_cleanup.py backup
+
+      - name: Show backup summary
+        shell: pwsh
+        run: |
+          $latest = Get-ChildItem .\backups -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $latest) { throw "Backup directory was not created" }
+          $jsonPath = Join-Path $latest.FullName "backup.json"
+          if (-not (Test-Path $jsonPath)) { throw "backup.json was not created" }
+          $data = Get-Content $jsonPath -Raw | ConvertFrom-Json
+          Write-Host "Backup path: $jsonPath"
+          Write-Host "Matched posts: $($data.matched_count)"
+          Write-Host "Attached photos: $($data.attached_photo_count)"
+          Write-Host "Post IDs: $($data.post_ids -join ', ')"
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vk-backup-${{ github.run_id }}
+          path: backups/
+          if-no-files-found: error
+          retention-days: 14
