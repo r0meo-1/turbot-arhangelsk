@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import requests
 
@@ -37,23 +39,41 @@ class TripadvisorResponseError(TripadvisorProviderError):
 
 @dataclass(frozen=True)
 class TripadvisorTerraSettings:
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str = "https://terra.tripadvisor.com/api"
     timeout_seconds: float = 10.0
     cache_ttl_seconds: int = 21_600
     cache_max_entries: int = 256
 
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0:
+            raise TripadvisorConfigurationError(
+                "TRIPADVISOR_TIMEOUT_SECONDS must be finite and positive"
+            )
+        if self.cache_ttl_seconds < 0:
+            raise TripadvisorConfigurationError("TRIPADVISOR_CACHE_TTL_SECONDS must be nonnegative")
+        if self.cache_max_entries < 1:
+            raise TripadvisorConfigurationError("TRIPADVISOR_CACHE_MAX_ENTRIES must be positive")
+
     @classmethod
     def from_env(cls) -> "TripadvisorTerraSettings":
+        try:
+            timeout = float(os.getenv("TRIPADVISOR_TIMEOUT_SECONDS", "10"))
+            ttl = int(os.getenv("TRIPADVISOR_CACHE_TTL_SECONDS", "21600"))
+            entries = int(os.getenv("TRIPADVISOR_CACHE_MAX_ENTRIES", "256"))
+        except ValueError:
+            raise TripadvisorConfigurationError(
+                "Tripadvisor timeout/cache environment values must be numeric"
+            ) from None
         return cls(
             api_key=os.getenv("TRIPADVISOR_API_KEY", "").strip(),
             base_url=os.getenv(
                 "TRIPADVISOR_BASE_URL",
                 "https://terra.tripadvisor.com/api",
             ).strip().rstrip("/"),
-            timeout_seconds=float(os.getenv("TRIPADVISOR_TIMEOUT_SECONDS", "10")),
-            cache_ttl_seconds=int(os.getenv("TRIPADVISOR_CACHE_TTL_SECONDS", "21600")),
-            cache_max_entries=int(os.getenv("TRIPADVISOR_CACHE_MAX_ENTRIES", "256")),
+            timeout_seconds=timeout,
+            cache_ttl_seconds=ttl,
+            cache_max_entries=entries,
         )
 
 
@@ -240,7 +260,7 @@ def _payload_items(payload: Any) -> list[dict[str, Any]]:
             value = payload.get(key)
             if isinstance(value, list):
                 return [item for item in value if isinstance(item, dict)]
-    return []
+    raise TripadvisorResponseError("Tripadvisor collection response is invalid")
 
 
 def _to_hotel_facts(raw: dict[str, Any], locale: str) -> HotelFacts:
@@ -298,8 +318,19 @@ class TripadvisorTerraClient:
             raise TripadvisorConfigurationError(
                 "TRIPADVISOR_API_KEY is not configured"
             )
-        if not self.settings.base_url.startswith("https://"):
-            raise TripadvisorConfigurationError("TRIPADVISOR_BASE_URL must use HTTPS")
+        try:
+            url = urlsplit(self.settings.base_url)
+            valid = (
+                url.scheme == "https" and bool(url.hostname)
+                and not url.username and not url.password
+                and not url.query and not url.fragment
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise TripadvisorConfigurationError(
+                "TRIPADVISOR_BASE_URL must be an HTTPS URL without credentials, query or fragment"
+            )
 
     def _request(
         self,
@@ -324,14 +355,15 @@ class TripadvisorTerraClient:
                     "Accept": "application/json",
                     "X-API-Key": self.settings.api_key,
                 },
+                allow_redirects=False,
             )
-        except requests.RequestException as exc:
+        except requests.RequestException:
             stale = self.cache.get(cache_key, allow_stale=True)
             if stale is not None:
                 payload, request_id = stale
                 logger.warning("Tripadvisor unavailable; using stale cache for %s", path)
                 return payload, request_id, True
-            raise TripadvisorUnavailableError(str(exc)) from exc
+            raise TripadvisorUnavailableError("Tripadvisor Terra request failed") from None
 
         request_id = (
             response.headers.get("x-request-id")
@@ -358,7 +390,12 @@ class TripadvisorTerraClient:
                 f"Tripadvisor Terra returned HTTP {response.status_code}"
             )
 
-        if response.status_code >= 400:
+        if response.status_code in (401, 403):
+            raise TripadvisorConfigurationError(
+                "Tripadvisor Terra rejected the API key or endpoint access"
+            )
+
+        if not 200 <= response.status_code < 300:
             raise TripadvisorResponseError(
                 f"Tripadvisor Terra returned HTTP {response.status_code}"
             )
