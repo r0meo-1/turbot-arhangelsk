@@ -1,0 +1,85 @@
+import base64
+import hashlib
+import hmac
+import time
+from datetime import date, timedelta
+from urllib.parse import urlencode
+
+import pytest
+from flask import Flask
+from shared.vk_miniapp import create_blueprint, validate_launch_params, validate_vk_trip
+from shared.telegram_webapp import MiniAppValidationError
+
+SECRET = 'test-app-secret'
+
+
+def signed(**changes):
+    params = dict(vk_app_id='123', vk_group_id='999', vk_user_id='42', vk_ts=str(int(time.time())))
+    params.update(changes)
+    query = urlencode(sorted(params.items()))
+    signature = base64.urlsafe_b64encode(hmac.new(SECRET.encode(), query.encode(), hashlib.sha256).digest()).decode().rstrip('=')
+    return query + '&sign=' + signature
+
+
+def payload():
+    return dict(type='trip_request', version=2, destination='Египет', departure='Архангельск',
+                date=(date.today() + timedelta(days=30)).isoformat(), nights=10,
+                adults=2, children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True)
+
+
+def test_signature_identity():
+    assert validate_launch_params(signed(), SECRET, '123', 999) == 42
+    assert validate_launch_params(signed(vk_group_id='0'), SECRET, '123', 999) == 42
+
+
+@pytest.mark.parametrize('raw', [
+    signed().replace('vk_user_id=42', 'vk_user_id=43'),
+    signed(vk_app_id='321'), signed(vk_group_id='1000'), signed(vk_user_id='0'),
+    signed(vk_ts=str(int(time.time()) - 3601)), signed(vk_ts=str(int(time.time()) + 120)),
+    signed() + '&vk_user_id=42', None, 'sign=é',
+])
+def test_reject_auth(raw):
+    with pytest.raises(MiniAppValidationError):
+        validate_launch_params(raw, SECRET, '123', 999)
+
+
+@pytest.mark.parametrize('change', [dict(consent=False), dict(nights=4.5), dict(childrenAges=[True, 14]),
+    dict(childrenAges=[18, 2]), dict(childrenAges=[2]), dict(adults=True), dict(budgetMaxRub=999),
+    dict(date='2000-01-01'), dict(destination='  ')])
+def test_reject_trip(change):
+    with pytest.raises(MiniAppValidationError):
+        validate_vk_trip(dict(payload(), **change))
+
+
+def test_draft_api_and_static():
+    saved = []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda uid, info: saved.append((uid, info)), lambda: (SECRET, '123', 999)))
+    client = app.test_client()
+    assert client.post('/vk/miniapp/draft', json={}).status_code == 401
+    assert client.post('/vk/miniapp/draft', json={'launchParams': signed(), 'payload': {}}).status_code == 400
+    assert not saved
+    response = client.post('/vk/miniapp/draft', json={'launchParams': signed(), 'payload': payload()})
+    assert response.json == {'ok': True, 'state': 'review', 'groupId': 999}
+    assert saved[0][0] == 42
+    assert saved[0][1]['budget_scope'] == 'total'
+    assert saved[0][1]['source'] == 'vk_mini_app'
+    assert response.headers['Cache-Control'] == 'no-store'
+    for path in ('', 'app.js', 'styles.css', 'vk-bridge.js'):
+        assert client.get('/vk/miniapp/' + path).status_code == 200
+    assert client.get('/vk/miniapp/README.md').status_code == 404
+
+
+def test_unconfigured_is_closed():
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *a: pytest.fail('must not save'), lambda: ('', '', 999)))
+    assert app.test_client().post('/vk/miniapp/draft', json={}).status_code == 503
+
+
+def test_save_failure_does_not_report_success():
+    def fail(*args):
+        raise RuntimeError('database offline')
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(fail, lambda: (SECRET, '123', 999)))
+    response = app.test_client().post('/vk/miniapp/draft', json={'launchParams': signed(), 'payload': payload()})
+    assert response.status_code == 500 and response.json['ok'] is False

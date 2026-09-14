@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#0b1220">
+  <title>АПРЕЛЬ тур — подбор тура в VK</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./vk-bridge.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="brand-mark" aria-hidden="true">✈</div>
+      <div>
+        <p class="eyebrow">АПРЕЛЬ тур</p>
+        <h1>Подбор тура</h1>
+      </div>
+      <span class="ai-badge">VK</span>
+    </header>
+
+    <section class="intro">
+      <p id="welcome">Соберём параметры поездки за минуту.</p>
+      <h2>Куда летим?</h2>
+    </section>
+
+    <form id="trip-form" novalidate>
+      <section class="card destination-card">
+        <label for="destination">Направление</label>
+        <div class="input-wrap">
+          <span aria-hidden="true">🌴</span>
+          <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Таиланд, Вьетнам, Шри-Ланка" required>
+        </div>
+        <div class="chips" aria-label="Популярные направления">
+          <button class="chip" type="button" data-destination="Таиланд">Таиланд</button>
+          <button class="chip" type="button" data-destination="Вьетнам">Вьетнам</button>
+          <button class="chip" type="button" data-destination="Шри-Ланка">Шри-Ланка</button>
+        </div>
+      </section>
+
+      <section class="grid two-col">
+        <label class="card field-card">
+          <span>Вылет</span>
+          <input id="departure" name="departure" type="text" maxlength="100" placeholder="Архангельск" value="Архангельск" required>
+        </label>
+        <label class="card field-card">
+          <span>Ночей</span>
+          <input id="nights" name="nights" type="number" min="3" max="30" inputmode="numeric" value="10" required>
+        </label>
+      </section>
+
+      <section class="card">
+        <div class="section-row">
+          <label for="date">Дата вылета</label>
+          <span class="hint">можно примерно</span>
+        </div>
+        <input id="date" name="date" class="full-input" type="date" required>
+      </section>
+
+      <section class="grid two-col">
+        <label class="card field-card">
+          <span>Взрослых</span>
+          <input id="adults" name="adults" type="number" min="1" max="8" inputmode="numeric" value="2" required>
+        </label>
+        <label class="card field-card">
+          <span>Детей до 18</span>
+          <input id="children" name="children" type="number" min="0" max="6" inputmode="numeric" value="0" required>
+        </label>
+      </section>
+
+      <section id="children-ages-card" class="card" hidden>
+        <div class="section-row">
+          <div>
+            <strong>Возраст детей</strong>
+            <div class="hint">На дату вылета</div>
+          </div>
+          <span class="hint">0 = до года</span>
+        </div>
+        <div id="children-ages" class="ages-grid"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-row">
+          <label for="budget">Бюджет на всю поездку</label>
+          <output id="budget-output" for="budget">270 000 ₽</output>
+        </div>
+        <input id="budget" name="budget" type="range" min="100000" max="600000" step="10000" value="270000">
+        <div class="range-labels"><span>100 000 ₽</span><span>600 000 ₽</span></div>
+      </section>
+
+      <label class="consent-card card">
+        <input id="consent" name="consent" type="checkbox" required>
+        <span>Согласен на обработку данных заявки по <a href="https://bot.r0meo1.ru/privacy" target="_blank" rel="noopener noreferrer">политике «АПРЕЛЬ тур»</a>.</span>
+      </label>
+
+      <p id="error" class="error" role="alert" aria-live="polite"></p>
+      <button id="submit" class="primary" type="submit">Проверить параметры</button>
+<p class="privacy-note">Сначала проверим параметры. Отели и цены покажет бот в сообщениях сообщества. Заявка менеджеру отправляется отдельно в чате.</p>
+    </form>
+    <section id="review" class="card" hidden aria-labelledby="review-title">
+      <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
+      <p>Заявка ещё не отправлена.</p>
+      <dl id="summary"></dl>
+      <button id="edit" class="secondary" type="button">Изменить</button>
+      <button id="save" class="primary" type="button">Сохранить и продолжить в боте</button>
+      <p id="status" role="status" aria-live="polite"></p>
+      <a id="chat" class="primary" hidden target="_blank" rel="noopener noreferrer">Открыть чат с ботом</a>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

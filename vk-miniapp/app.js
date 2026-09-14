@@ -1,0 +1,108 @@
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const form = $('trip-form');
+  const launchParams = location.search.slice(1);
+  const params = new URLSearchParams(launchParams);
+  const inVK = params.has('sign') && params.has('vk_app_id');
+  const bridge = window.vkBridge;
+  let payload;
+  const money = (n) => `${Number(n).toLocaleString('ru-RU')} ₽`;
+  const localDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const today = new Date();
+  $('date').min = localDate(today);
+  today.setDate(today.getDate() + 30);
+  $('date').value = localDate(today);
+  $('budget').addEventListener('input', () => { $('budget-output').textContent = money($('budget').value); });
+  document.querySelectorAll('.chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      $('destination').value = chip.dataset.destination;
+      $('destination').dispatchEvent(new Event('input'));
+    });
+  });
+  $('destination').addEventListener('input', () => {
+    document.querySelectorAll('.chip').forEach((chip) => {
+      const active = chip.dataset.destination === $('destination').value.trim();
+      chip.classList.toggle('active', active);
+      chip.setAttribute('aria-pressed', String(active));
+    });
+  });
+  $('children').addEventListener('input', () => {
+    const old = Array.from($('children-ages').querySelectorAll('input'), (i) => i.value);
+    const count = Math.min(6, Math.max(0, Math.trunc(Number($('children').value)) || 0));
+    $('children-ages').replaceChildren();
+    $('children-ages-card').hidden = count === 0;
+    for (let i = 0; i < count; i++) {
+      const label = document.createElement('label');
+      label.className = 'age-field';
+      label.textContent = `Ребёнок ${i + 1}, лет`;
+      const input = document.createElement('input');
+      Object.assign(input, { type: 'number', min: '0', max: '17', step: '1', required: true, value: old[i] || '' });
+      label.append(input);
+      $('children-ages').append(label);
+    }
+  });
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!form.reportValidity()) return;
+    payload = {
+      type: 'trip_request', version: 2,
+      destination: $('destination').value.trim(), departure: $('departure').value.trim(),
+      date: $('date').value, nights: Number($('nights').value), adults: Number($('adults').value),
+      children: Number($('children').value),
+      childrenAges: Array.from($('children-ages').querySelectorAll('input'), (i) => Number(i.value)),
+      budgetMaxRub: Number($('budget').value), consent: $('consent').checked,
+      directOnly: false, source: 'vk_mini_app'
+    };
+    if (!payload.destination || !payload.departure) { $('error').textContent = 'Укажите направление и город вылета.'; return; }
+    $('error').textContent = '';
+    const entries = [
+      ['Направление', payload.destination], ['Вылет', payload.departure],
+      ['Дата', new Date(`${payload.date}T12:00:00`).toLocaleDateString('ru-RU')],
+      ['Ночей', payload.nights], ['Взрослых', payload.adults],
+      ['Дети', payload.children ? payload.childrenAges.map((age) => `${age} лет`).join(', ') : 'Без детей'],
+      ['Бюджет на всех', `до ${money(payload.budgetMaxRub)}`]
+    ];
+    $('summary').replaceChildren();
+    entries.forEach(([label, value]) => {
+      const dt = document.createElement('dt'); dt.textContent = label;
+      const dd = document.createElement('dd'); dd.textContent = value;
+      $('summary').append(dt, dd);
+    });
+    form.hidden = true;
+    $('review').hidden = false;
+    $('status').textContent = inVK ? '' : 'Предпросмотр. Для сохранения откройте приложение из VK.';
+    $('save').disabled = !inVK;
+    $('review-title').focus();
+  });
+  $('edit').addEventListener('click', () => {
+    $('review').hidden = true; form.hidden = false; $('destination').focus();
+  });
+  $('save').addEventListener('click', async () => {
+    if (!inVK || !payload || $('save').disabled) return;
+    $('save').disabled = true; $('edit').disabled = true;
+    $('status').textContent = 'Сохраняем параметры…';
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      let response;
+      try {
+        response = await fetch('./draft', { method: 'POST', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ launchParams, payload }) });
+      } finally { clearTimeout(timer); }
+      const result = await response.json();
+      if (!response.ok || result.ok !== true) throw new Error(result.error || 'Не удалось сохранить параметры.');
+      const groupId = Number(result.groupId);
+      if (!Number.isSafeInteger(groupId) || groupId <= 0) throw new Error('Не удалось открыть сообщество.');
+      $('status').textContent = 'Параметры сохранены. Откройте чат и напишите «Проверить заявку»: бот покажет ваш подбор. Заявка менеджеру ещё не отправлена.';
+      $('chat').href = `https://vk.ru/im?sel=-${groupId}`;
+      $('chat').hidden = false;
+      $('save').hidden = true; $('edit').hidden = true;
+    } catch (error) {
+      $('status').textContent = error.name === 'AbortError' ? 'Ответ задержался. Повторите попытку — одинаковые параметры не создадут дубль.' : (error.message || 'Ошибка соединения. Повторите попытку.');
+      $('save').disabled = false; $('edit').disabled = false;
+    }
+  });
+  if (inVK && bridge) bridge.send('VKWebAppInit').catch(() => {
+    $('welcome').textContent = 'Соберём параметры поездки. Если приложение работает некорректно, откройте его заново.';
+  });
+})();

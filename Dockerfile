@@ -11,6 +11,7 @@ COPY bot.py vk_bot.py ./
 COPY shared/ ./shared/
 COPY deploy/ ./deploy/
 COPY docs/ ./docs/
+COPY vk-miniapp/ ./vk-miniapp/
 
 # Create data directory for SQLite
 RUN mkdir -p /app/data

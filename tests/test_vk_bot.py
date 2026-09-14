@@ -83,6 +83,32 @@ def test_validate_phone():
     assert bot.validate_phone("abc") == (False, None)
 
 
+def test_miniapp_persists_review_without_lead_or_messages(monkeypatch):
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+    raw = dict(type="trip_request", version=2, destination="Египет", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True)
+    monkeypatch.setattr(bot, "send_message", lambda *a, **k: pytest.fail("draft must not send messages"))
+    bot._save_miniapp_draft(42, validate_vk_trip(raw))
+    saved = bot.get_session(42)
+    assert saved["state"] == bot.STATE_REVIEW
+    assert saved["budget_scope"] == "total" and saved["budget"] == 270000
+    assert bot.user_data[42]["kids_ages"] == [0, 14]
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0
+        assert cur.execute("SELECT consent_at FROM users WHERE chat_id=42").fetchone()[0] > 0
+    bot._save_miniapp_draft(42, validate_vk_trip(raw))
+    with pytest.raises(bot.MiniAppValidationError):
+        bot._save_miniapp_draft(42, validate_vk_trip(dict(raw, destination="Турция")))
+    assert bot.get_session(42)["destination"] == "Египет"
+    # A real message in the existing chat resumes the existing review flow.
+    reviews = []
+    monkeypatch.setattr(bot, "_ask_review", lambda uid: reviews.append(uid))
+    bot.handle_dialog(42, "Проверить заявку", {})
+    assert reviews == [42]
+
+
 def test_validate_people():
     assert bot.validate_people("3") == (True, "3")
     assert bot.validate_people("5+") == (True, "5+")

@@ -59,6 +59,8 @@ from shared.constants import (
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
 )
+from shared.vk_miniapp import create_blueprint
+from shared.telegram_webapp import MiniAppValidationError
 from shared import tutu as _tutu
 from shared import tourvisor as _tourvisor
 from shared import version as _version
@@ -3245,7 +3247,28 @@ def load_state() -> None:
 # Flask app
 # ---------------------------------------------------------------------------
 
+def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
+    """Persist a review draft; never send messages or create a lead here."""
+    _, info["kids"], info["infants"] = party_bands(info)
+    info["state"] = STATE_REVIEW
+    set_consent(user_id)
+    with _lock:
+        previous = user_data.get(user_id)
+        if previous:
+            keys = ("destination", "origin", "dates", "nights", "people", "kids_ages", "budget", "budget_scope")
+            if previous.get("state") == STATE_REVIEW and not previous.get("_completing") and all(previous.get(k) == info.get(k) for k in keys):
+                return
+            raise MiniAppValidationError("Active draft")
+        info["updated_at"] = int(time.time())
+        set_session(user_id, info)
+        user_data[user_id] = info
+
+
 app = Flask(__name__)
+app.register_blueprint(create_blueprint(
+    _save_miniapp_draft,
+    lambda: (os.getenv("VK_MINI_APP_SECRET", ""), os.getenv("VK_MINI_APP_ID", ""), VK_GROUP_ID),
+))
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MB — VK events are well under this
 
 
