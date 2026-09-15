@@ -496,6 +496,12 @@ def init_db() -> None:
                 updated_at INTEGER NOT NULL
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS maintenance_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at INTEGER NOT NULL
+            )
+        """)
         # Additive migration for databases created before the origin step.
         for _t in ("sessions", "leads"):
             cur.execute(f"PRAGMA table_info({_t})")
@@ -533,10 +539,36 @@ def init_db() -> None:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_next_retry_at INTEGER")
                 if "mdt_synced_at" not in _cols:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_synced_at INTEGER")
+        # One-time production repair for the single lead that the pre-acknowledgement
+        # MDT client falsely marked `synced` after receiving an error JSON. Production
+        # diagnostics identified it as lead 35, the only synced row, with zero attempts;
+        # the CRM UI confirmed no corresponding inquiry exists. The migration marker
+        # makes this repair idempotent across restarts and future deploys.
+        repair_name = "20260915_requeue_false_mdt_sync_lead_35"
+        cur.execute("SELECT 1 FROM maintenance_migrations WHERE name = ?", (repair_name,))
+        if cur.fetchone() is None:
+            repair_now = int(time.time())
+            cur.execute(
+                """
+                UPDATE leads
+                SET mdt_status='pending', mdt_attempts=0,
+                    mdt_next_retry_at=?, mdt_synced_at=NULL
+                WHERE id=35 AND mdt_status='synced' AND mdt_attempts=0
+                """,
+                (repair_now,),
+            )
+            if cur.rowcount:
+                logger.warning("Requeued one false-synced MDT lead after acknowledgement fix")
+            cur.execute(
+                "INSERT INTO maintenance_migrations (name, applied_at) VALUES (?, ?)",
+                (repair_name, repair_now),
+            )
+
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
         cur.execute("PRAGMA journal_mode=WAL")
+        cur.fetchone()
 
 
 # --- session helpers ---

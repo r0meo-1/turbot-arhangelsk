@@ -1423,3 +1423,52 @@ def test_miniapp_snapshot_is_removed_on_cancel():
 
     assert bot._load_miniapp_snapshot(user_id) is None
     assert bot.get_session(user_id) is None
+
+
+
+def test_false_synced_mdt_lead_35_is_requeued_once(tmp_path, monkeypatch):
+    db_path = tmp_path / "repair.sqlite"
+    monkeypatch.setattr(bot, "DATABASE_PATH", str(db_path))
+
+    # First initialization creates schema and records the repair as already
+    # checked. Remove just the marker so the fixture can reproduce the exact
+    # production state found by diagnostics.
+    bot.init_db()
+    repair_name = "20260915_requeue_false_mdt_sync_lead_35"
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM maintenance_migrations WHERE name = ?", (repair_name,))
+        cur.execute(
+            """
+            INSERT INTO leads (
+                id, chat_id, phone, mdt_status, mdt_attempts,
+                mdt_next_retry_at, mdt_synced_at, created_at
+            ) VALUES (35, 424242, 'VK test', 'synced', 0, NULL, 123, 123)
+            """
+        )
+
+    bot.init_db()
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at "
+            "FROM leads WHERE id=35"
+        ).fetchone()
+        marker_row = cur.execute(
+            "SELECT applied_at FROM maintenance_migrations WHERE name = ?", (repair_name,)
+        ).fetchone()
+
+    assert row["mdt_status"] == "pending"
+    assert row["mdt_attempts"] == 0
+    assert row["mdt_next_retry_at"] is not None
+    assert row["mdt_synced_at"] is None
+    assert marker_row is not None
+
+    # The marker prevents the repair from firing twice after a later successful
+    # sync or a process restart.
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE leads SET mdt_status='synced', mdt_next_retry_at=NULL WHERE id=35"
+        )
+    bot.init_db()
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT mdt_status FROM leads WHERE id=35").fetchone()
+    assert row["mdt_status"] == "synced"
