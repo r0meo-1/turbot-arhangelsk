@@ -15,6 +15,12 @@ jobs:
         with:
           ref: fix/tour-fallback-destination
           fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
       - name: Prevent cross-destination fallback
         run: |
           set -Eeuo pipefail
@@ -24,10 +30,12 @@ jobs:
           path = Path("shared/tourvisor.py")
           text = path.read_text(encoding="utf-8")
           needle = "    # Global curated mix for hot deals / general search\n"
+          marker = "    # An explicit destination must never fall back to unrelated countries.\n"
           replacement = "    # An explicit destination must never fall back to unrelated countries.\n    # If live Tourvisor returned no offers and the curated catalog does not\n    # know this destination, let the caller show the honest no-results state.\n    if dest_clean:\n        return []\n\n    # Global curated mix is only for destination-free hot deals/general browse.\n"
-          if needle not in text:
+          if needle in text:
+              path.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
+          elif marker not in text:
               raise SystemExit("tourvisor fallback anchor not found")
-          path.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
 
           test_path = Path("tests/test_tourvisor.py")
           tests = test_path.read_text(encoding="utf-8")
@@ -36,6 +44,10 @@ jobs:
               test_path.write_text(tests + addition, encoding="utf-8")
           PY
           pytest -q tests/test_tourvisor.py
+          if git diff --quiet -- shared/tourvisor.py tests/test_tourvisor.py; then
+            echo "Patch already applied"
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add shared/tourvisor.py tests/test_tourvisor.py
