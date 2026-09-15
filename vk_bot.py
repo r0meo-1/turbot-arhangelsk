@@ -3276,34 +3276,20 @@ def load_state() -> None:
 # ---------------------------------------------------------------------------
 
 def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
-    """Persist a review draft; never send messages or create a lead here.
+    """Persist a Mini App review draft and make it the active chat draft.
 
-    SQLite is the durable source of truth for whether a chat draft still
-    exists. A cancellation deletes that row synchronously, so an in-memory
-    entry without a matching row is stale and must not block Mini App save.
+    Clicking Save in the Mini App is an explicit request to continue with
+    those parameters, so an unfinished chat draft is replaced instead of
+    forcing the user through a cancel-and-retry loop. Only a draft that is
+    already being completed is protected from replacement.
     """
     _, info["kids"], info["infants"] = party_bands(info)
     info["state"] = STATE_REVIEW
     set_consent(user_id)
     with _lock:
         previous = user_data.get(user_id)
-        persisted = get_session(user_id)
-
-        if previous and persisted is None:
-            # A cancelled durable session wins over a stale in-memory copy.
-            user_data.pop(user_id, None)
-            previous = None
-
-        if previous:
-            keys = ("destination", "origin", "dates", "nights", "people", "kids_ages", "budget", "budget_scope")
-            if previous.get("state") == STATE_REVIEW and not previous.get("_completing") and all(previous.get(k) == info.get(k) for k in keys):
-                return
-            raise MiniAppValidationError("Active draft")
-
-        # Also protect an active durable session if the in-memory cache is
-        # missing, for example immediately after a process restart.
-        if persisted is not None:
-            raise MiniAppValidationError("Active draft")
+        if previous and previous.get("_completing"):
+            raise MiniAppValidationError("Draft completion in progress")
 
         info["updated_at"] = int(time.time())
         set_session(user_id, info)
