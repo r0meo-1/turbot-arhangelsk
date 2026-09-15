@@ -1342,3 +1342,27 @@ def test_mdt_retry_is_not_armed_for_multistep_modes(monkeypatch):
     with bot._db_cursor() as cur:
         row = cur.execute("SELECT mdt_status, mdt_next_retry_at FROM leads WHERE id=?", (lead_id,)).fetchone()
     assert tuple(row) == ("disabled", None)
+
+
+def test_vk_back_from_selected_tour_returns_to_results(client, monkeypatch):
+    user_id = 9961
+    offer = {"hotel": "Akka Alinda Hotel", "tour_id": "tr-1"}
+    bot.user_data[user_id] = {
+        "state": bot.STATE_REVIEW,
+        "destination": "🔥 Горящие туры",
+        "selected_tour": dict(offer),
+        "_tour_offers": [dict(offer)],
+        "_tour_page": 2,
+    }
+    shown = []
+    monkeypatch.setattr(
+        bot, "_send_tour_results_page",
+        lambda uid, page: shown.append((uid, page)),
+    )
+
+    response = _post(client, user_id, bot.BACK_BUTTON_TEXT)
+
+    assert response.status_code == 200
+    assert "selected_tour" not in bot.user_data[user_id]
+    assert bot.user_data[user_id]["state"] == bot.STATE_REVIEW
+    assert shown == [(user_id, 2)]
