@@ -765,6 +765,37 @@ def test_privacy_command(client):
     assert resp.status_code == 200
 
 
+def test_admin_crm_status_is_pii_free(client, monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "preorder")
+    lead_id = bot.save_lead(424242, {"destination": "Секретное направление"}, "SECRET-PHONE", first_name="SECRET-NAME")
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            UPDATE leads
+            SET mdt_status='synced', mdt_attempts=1, mdt_synced_at=?,
+                mdt_preorder_id=1816, mdt_tourist_id=4321
+            WHERE id=?
+            """,
+            (int(time.time()), lead_id),
+        )
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: sent.append((uid, text)))
+
+    response = _post(client, bot.ADMIN_ID, "CRM статус")
+
+    assert response.status_code == 200
+    assert len(sent) == 1
+    text = sent[0][1]
+    assert f"Локальная заявка: #{lead_id}" in text
+    assert "MDT: synced" in text
+    assert "Preorder ID: 1816" in text
+    assert "Tourist ID: 4321" in text
+    assert "SECRET-NAME" not in text
+    assert "SECRET-PHONE" not in text
+    assert "Секретное направление" not in text
+
+
 def test_template_selection():
     text = bot._template_selection("Турция", "15-22 июня", "2", "60000")
     assert "Турция" in text
