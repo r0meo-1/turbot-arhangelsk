@@ -121,6 +121,7 @@
       children: childCount,
       childrenAges: childAgeValues,
       budgetMaxRub: Number(data.get('budget')),
+      budgetScope: 'per_person',
       directOnly: data.get('direct') === 'on',
       consent: data.get('consent') === 'on',
       source: 'telegram_mini_app'
