@@ -21,90 +21,14 @@ jobs:
           cache: pip
       - name: Install test dependencies
         run: pip install -r requirements-dev.txt
-      - name: Add durable Mini App draft snapshot
+      - name: Apply recovery patch and test
         run: |
           set -Eeuo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("vk_bot.py")
-          text = path.read_text(encoding="utf-8")
-
-          migration_anchor = '''        # Additive migration for databases created before the origin step.\n'''
-          migration_block = '''        cur.execute("""\n            CREATE TABLE IF NOT EXISTS miniapp_drafts (\n                chat_id INTEGER PRIMARY KEY,\n                payload TEXT NOT NULL,\n                updated_at INTEGER NOT NULL\n            )\n        """)\n        # Additive migration for databases created before the origin step.\n'''
-          if "CREATE TABLE IF NOT EXISTS miniapp_drafts" not in text:
-              if migration_anchor not in text:
-                  raise SystemExit("miniapp migration anchor not found")
-              text = text.replace(migration_anchor, migration_block, 1)
-
-          helper_anchor = '''def delete_session(chat_id: int) -> None:\n    with _db_cursor(commit=True) as cur:\n        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))\n\n\n'''
-          helper_block = '''def delete_session(chat_id: int) -> None:\n    with _db_cursor(commit=True) as cur:\n        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))\n\n\n_MINIAPP_SNAPSHOT_FIELDS = (\n    "destination", "origin", "dates", "nights", "dates_are_trip",\n    "hotel_query", "people", "kids", "kids_ages", "infants",\n    "budget", "budget_scope", "source", "vk_ref", "vk_platform",\n    "needs_consultation",\n)\n\n\ndef _save_miniapp_snapshot(chat_id: int, info: Dict[str, Any]) -> None:\n    payload = {key: info.get(key) for key in _MINIAPP_SNAPSHOT_FIELDS}\n    now = int(time.time())\n    with _db_cursor(commit=True) as cur:\n        cur.execute(\n            """\n            INSERT INTO miniapp_drafts (chat_id, payload, updated_at)\n            VALUES (?, ?, ?)\n            ON CONFLICT(chat_id) DO UPDATE SET\n                payload=excluded.payload, updated_at=excluded.updated_at\n            """,\n            (chat_id, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), now),\n        )\n\n\ndef _load_miniapp_snapshot(chat_id: int) -> Optional[Dict[str, Any]]:\n    with _db_cursor() as cur:\n        cur.execute("SELECT payload FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))\n        row = cur.fetchone()\n    if row is None:\n        return None\n    try:\n        payload = json.loads(row[0])\n    except (TypeError, ValueError):\n        logger.warning("Invalid Mini App snapshot for chat_id=%s", chat_id)\n        return None\n    if not isinstance(payload, dict):\n        return None\n    payload["state"] = STATE_REVIEW\n    payload["updated_at"] = int(time.time())\n    return payload\n\n\ndef _delete_miniapp_snapshot(chat_id: int) -> None:\n    with _db_cursor(commit=True) as cur:\n        cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))\n\n\n'''
-          if "def _save_miniapp_snapshot" not in text:
-              if helper_anchor not in text:
-                  raise SystemExit("session helper anchor not found")
-              text = text.replace(helper_anchor, helper_block, 1)
-
-          delete_anchor = '''        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))\n        cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))\n        cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))\n'''
-          delete_block = '''        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))\n        cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))\n        cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))\n        cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))\n'''
-          if 'DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))\n        cur.execute("DELETE FROM users' not in text:
-              if delete_anchor not in text:
-                  raise SystemExit("delete_user_data anchor not found")
-              text = text.replace(delete_anchor, delete_block, 1)
-
-          cancel_anchor = '''def handle_cancel(user_id: int) -> None:\n    with _lock:\n        existed = user_data.pop(user_id, None) is not None\n    if existed:\n        _mark_dirty(user_id)\n        delete_session(user_id)\n        send_message(\n'''
-          cancel_block = '''def handle_cancel(user_id: int) -> None:\n    snapshot_existed = _load_miniapp_snapshot(user_id) is not None\n    with _lock:\n        existed = user_data.pop(user_id, None) is not None\n    _delete_miniapp_snapshot(user_id)\n    if existed or snapshot_existed:\n        _mark_dirty(user_id)\n        delete_session(user_id)\n        send_message(\n'''
-          if "snapshot_existed = _load_miniapp_snapshot" not in text:
-              if cancel_anchor not in text:
-                  raise SystemExit("handle_cancel anchor not found")
-              text = text.replace(cancel_anchor, cancel_block, 1)
-
-          aliases_old = '''    "кнопки": "menu", "меню": "menu", "продолжить": "menu", "где кнопки": "menu",\n    "проверить заявку": "menu", "проверить": "menu",\n    "проверить заявку": "menu", "проверить": "menu",\n'''
-          aliases_new = '''    "кнопки": "menu", "меню": "menu", "продолжить": "menu", "где кнопки": "menu",\n    "проверить заявку": "review", "проверить": "review",\n'''
-          if '"проверить заявку": "review"' not in text:
-              if aliases_old not in text:
-                  raise SystemExit("command alias anchor not found")
-              text = text.replace(aliases_old, aliases_new, 1)
-
-          menu_anchor = '''    if command == "menu":\n        # Повторить текущий вопрос вместе с его кнопками. Mini App persists its\n'''
-          review_block = '''    if command == "review":\n        # `sessions` is the mutable FSM state. Mini App keeps an independent\n        # snapshot so Back/edit buttons cannot destroy the saved review draft.\n        snapshot = _load_miniapp_snapshot(user_id)\n        if snapshot is not None:\n            with _lock:\n                user_data[user_id] = snapshot\n            set_session(user_id, snapshot)\n            _ask_review(user_id)\n            return\n\n        # Backward compatibility for drafts saved before miniapp_drafts existed.\n        info = user_data.get(user_id) or _restore_session_from_db(user_id)\n        if info and info.get("source") == "vk_mini_app":\n            destination = str(info.get("destination") or "")\n            legacy_complete = bool(\n                destination\n                and destination not in (DEST_HOT_TOURS_LABEL, DEST_DIRECT_FLIGHTS_LABEL)\n                and info.get("origin") and info.get("dates") and info.get("people")\n                and (info.get("budget") is not None or info.get("budget_open_ended"))\n            )\n            if legacy_complete:\n                info["state"] = STATE_REVIEW\n                info.pop("selected_tour", None)\n                info.pop("_tour_offers", None)\n                info.pop("_tour_offers_base", None)\n                info["updated_at"] = int(time.time())\n                set_session(user_id, info)\n                _ask_review(user_id)\n                return\n            send_message(\n                user_id,\n                "Черновик Mini App был изменён старой навигацией. "\n                "Откройте приложение, проверьте параметры и сохраните их ещё раз — "\n                "после этого команда «Проверить заявку» восстановит их независимо от кнопок чата.",\n                keyboard=_soft_start_keyboard(),\n            )\n            return\n\n        state = (info or {}).get("state")\n        if state:\n            _prompt_for_state(user_id, state)\n        else:\n            send_message(user_id, HINT_START, keyboard=_soft_start_keyboard())\n        return\n\n    if command == "menu":\n        # Повторить текущий вопрос вместе с его кнопками. Mini App persists its\n'''
-          if 'if command == "review":' not in text:
-              if menu_anchor not in text:
-                  raise SystemExit("menu command anchor not found")
-              text = text.replace(menu_anchor, review_block, 1)
-
-          completion_anchor = '''    delete_session(user_id)\n\n    if SYNC_COMPLETION:\n'''
-          completion_block = '''    delete_session(user_id)\n    _delete_miniapp_snapshot(user_id)\n\n    if SYNC_COMPLETION:\n'''
-          if "delete_session(user_id)\n    _delete_miniapp_snapshot(user_id)" not in text:
-              if completion_anchor not in text:
-                  raise SystemExit("completion anchor not found")
-              text = text.replace(completion_anchor, completion_block, 1)
-
-          miniapp_anchor = '''        info["updated_at"] = int(time.time())\n        set_session(user_id, info)\n        user_data[user_id] = info\n'''
-          miniapp_block = '''        info["updated_at"] = int(time.time())\n        _save_miniapp_snapshot(user_id, info)\n        set_session(user_id, info)\n        user_data[user_id] = info\n'''
-          if "_save_miniapp_snapshot(user_id, info)" not in text:
-              if miniapp_anchor not in text:
-                  raise SystemExit("Mini App save anchor not found")
-              text = text.replace(miniapp_anchor, miniapp_block, 1)
-
-          path.write_text(text, encoding="utf-8")
-
-          test_path = Path("tests/test_vk_bot.py")
-          tests = test_path.read_text(encoding="utf-8")
-          fixture_anchor = '''        cur.execute("DELETE FROM sessions")\n        cur.execute("DELETE FROM users")\n        cur.execute("DELETE FROM leads")\n'''
-          fixture_block = '''        cur.execute("DELETE FROM sessions")\n        cur.execute("DELETE FROM miniapp_drafts")\n        cur.execute("DELETE FROM users")\n        cur.execute("DELETE FROM leads")\n'''
-          if 'cur.execute("DELETE FROM miniapp_drafts")' not in tests:
-              if fixture_anchor not in tests:
-                  raise SystemExit("test fixture anchor not found")
-              tests = tests.replace(fixture_anchor, fixture_block, 1)
-
-          marker = "test_miniapp_review_command_restores_snapshot_after_chat_navigation"
-          if marker not in tests:
-              tests += '''\n\ndef test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, monkeypatch):\n    from datetime import date, timedelta\n    from shared.vk_miniapp import validate_vk_trip\n\n    user_id = 9962\n    raw = dict(\n        type="trip_request", version=2, destination="Шри-Ланка",\n        departure="Архангельск",\n        date=(date.today() + timedelta(days=30)).isoformat(),\n        nights=10, adults=2, children=0, childrenAges=[],\n        budgetMaxRub=270000, consent=True,\n    )\n    bot._save_miniapp_draft(user_id, validate_vk_trip(raw))\n\n    # Simulate an old Back path corrupting the mutable chat FSM after Mini App save.\n    corrupted = dict(bot.user_data[user_id])\n    corrupted["state"] = bot.STATE_DESTINATION\n    corrupted["destination"] = bot.DEST_HOT_TOURS_LABEL\n    bot.user_data[user_id] = corrupted\n    bot.set_session(user_id, corrupted)\n\n    reviews = []\n    monkeypatch.setattr(bot, "_ask_review", lambda uid: reviews.append(dict(bot.user_data[uid])))\n    response = _post(client, user_id, "Проверить заявку")\n\n    assert response.status_code == 200\n    restored = bot.user_data[user_id]\n    assert restored["state"] == bot.STATE_REVIEW\n    assert restored["destination"] == "Шри-Ланка"\n    assert restored["origin"] == "Архангельск"\n    assert restored["nights"] == "10"\n    assert restored["budget"] == 270000\n    assert reviews and reviews[0]["destination"] == "Шри-Ланка"\n    assert bot.get_session(user_id)["destination"] == "Шри-Ланка"\n\n\ndef test_miniapp_snapshot_is_removed_on_cancel():\n    from datetime import date, timedelta\n    from shared.vk_miniapp import validate_vk_trip\n\n    user_id = 9963\n    raw = dict(\n        type="trip_request", version=2, destination="Шри-Ланка",\n        departure="Архангельск",\n        date=(date.today() + timedelta(days=30)).isoformat(),\n        nights=10, adults=2, children=0, childrenAges=[],\n        budgetMaxRub=270000, consent=True,\n    )\n    bot._save_miniapp_draft(user_id, validate_vk_trip(raw))\n    assert bot._load_miniapp_snapshot(user_id) is not None\n\n    bot.handle_cancel(user_id)\n\n    assert bot._load_miniapp_snapshot(user_id) is None\n    assert bot.get_session(user_id) is None\n'''
-          test_path.write_text(tests, encoding="utf-8")
-          PY
+          python scripts/patch_vk_miniapp_recovery.py
           pytest -q tests/test_vk_bot.py -k 'miniapp_review_command_restores_snapshot_after_chat_navigation or miniapp_snapshot_is_removed_on_cancel'
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add vk_bot.py tests/test_vk_bot.py
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m "Protect VK Mini App review drafts"
           git push origin HEAD:fix/vk-miniapp-draft-recovery
