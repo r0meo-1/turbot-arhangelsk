@@ -1,0 +1,33 @@
+name: Patch VK-only manager resolution
+
+on:
+  push:
+    branches: [feat/mdt-auto-manager]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/mdt-auto-manager
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Apply patch and verify
+        run: |
+          set -Eeuo pipefail
+          python scripts/patch_vk_only_manager_resolution.py
+          pytest -q tests/test_shared.py tests/test_bot.py -k 'preorder or manager'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add shared/mdt.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Limit manager auto-discovery to VK preorders"
+          git push origin HEAD:feat/mdt-auto-manager
