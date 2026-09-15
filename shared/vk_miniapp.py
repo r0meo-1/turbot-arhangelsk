@@ -17,7 +17,7 @@ def build_open_app_button(app_id, group_id, *, enabled=True, hash_value="bot"):
     """Build a native VK ``open_app`` keyboard button when Mini App is ready.
 
     ``owner_id`` is the negative community id because the application is
-    installed and opened in the community context.  Returning ``None`` keeps
+    installed and opened in the community context. Returning ``None`` keeps
     the ordinary chat flow intact on hosts where the app ID/secret are not
     configured yet.
     """
@@ -74,6 +74,17 @@ def validate_launch_params(raw, secret, app_id, group_id, *, now=None):
     return uid
 
 
+def _signed_launch_metadata(raw):
+    """Return non-sensitive attribution fields after ``raw`` was authenticated."""
+    params = dict(parse_qsl(raw.lstrip("?"), keep_blank_values=True, max_num_fields=100))
+    metadata = {}
+    for key in ("vk_ref", "vk_platform"):
+        value = str(params.get(key, "")).strip()
+        if value:
+            metadata[key] = value[:128]
+    return metadata
+
+
 def validate_vk_trip(payload):
     # JSON numbers must really be integers; do not silently truncate fractions.
     if isinstance(payload, dict):
@@ -117,8 +128,9 @@ def create_blueprint(save_draft, settings):
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return jsonify(ok=False, error="Некорректные данные формы."), 400
+        raw_launch = body.get("launchParams")
         try:
-            uid = validate_launch_params(body.get("launchParams"), secret, app_id, group_id)
+            uid = validate_launch_params(raw_launch, secret, app_id, group_id)
         except MiniAppValidationError as exc:
             return jsonify(
                 ok=False,
@@ -129,6 +141,7 @@ def create_blueprint(save_draft, settings):
             info = validate_vk_trip(body.get("payload"))
         except MiniAppValidationError:
             return jsonify(ok=False, error="Проверьте поля, дату и согласие на обработку данных."), 400
+        info.update(_signed_launch_metadata(raw_launch))
         try:
             save_draft(uid, info)
         except MiniAppValidationError:
