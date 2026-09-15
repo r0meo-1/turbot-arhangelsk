@@ -139,6 +139,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
         "children": 1,
         "childrenAges": [5],
         "budgetMaxRub": 270000,
+        "budgetScope": "per_person",
         "directOnly": True,
         "consent": True,
         "source": "telegram_mini_app",
