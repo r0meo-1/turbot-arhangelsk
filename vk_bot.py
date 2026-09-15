@@ -118,6 +118,8 @@ AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 PORT              = _env_int("VK_PORT", _env_int("PORT", 5100))
 DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", os.getenv("DATABASE_PATH", "vk_bot_state.sqlite"))
 ADMIN_ID          = _env_int("ADMIN_ID", 0)
+ADMIN_ERROR_ALERTS = os.getenv("ADMIN_ERROR_ALERTS", "true").lower().strip() in ("1", "true", "yes")
+ERROR_ALERT_COOLDOWN = max(0, _env_int("ERROR_ALERT_COOLDOWN", 300))
 DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT      = 15
 
@@ -819,6 +821,113 @@ def _lead_row_to_info(row: Dict[str, Any]) -> Dict[str, Any]:
     return info
 
 
+_ops_alert_lock = threading.Lock()
+_last_ops_alert: Dict[str, float] = {}
+
+
+def _mdt_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return aggregate VK MDT delivery telemetry without customer data."""
+    current = int(time.time() if now is None else now)
+    try:
+        with _db_cursor() as cur:
+            row = cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN mdt_status='synced' THEN 1 ELSE 0 END) AS synced,
+                    SUM(CASE WHEN mdt_status='failed' THEN 1 ELSE 0 END) AS failed,
+                    SUM(CASE WHEN mdt_status='pending' THEN 1 ELSE 0 END) AS pending,
+                    SUM(
+                        CASE
+                            WHEN mdt_status IS NULL OR mdt_status='' OR mdt_status='unset'
+                            THEN 1 ELSE 0
+                        END
+                    ) AS unset_count,
+                    MAX(
+                        CASE WHEN mdt_status='failed' THEN created_at ELSE NULL END
+                    ) AS latest_failed_created_at
+                FROM leads
+                """
+            ).fetchone()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK MDT delivery state: %s", exc)
+        return {
+            "enabled": bool(MDT_ENABLED and not DEMO_MODE),
+            "mode": MDT_MODE,
+            "available": False,
+            "total": None,
+            "synced": None,
+            "failed": None,
+            "pending": None,
+            "unset": None,
+            "latest_failed_seconds": None,
+        }
+
+    latest_failed = row["latest_failed_created_at"] if row else None
+    return {
+        "enabled": bool(MDT_ENABLED and not DEMO_MODE),
+        "mode": MDT_MODE,
+        "available": True,
+        "total": int(row["total"] or 0) if row else 0,
+        "synced": int(row["synced"] or 0) if row else 0,
+        "failed": int(row["failed"] or 0) if row else 0,
+        "pending": int(row["pending"] or 0) if row else 0,
+        "unset": int(row["unset_count"] or 0) if row else 0,
+        "latest_failed_seconds": (
+            max(0, current - int(latest_failed)) if latest_failed is not None else None
+        ),
+    }
+
+
+def _notify_ops_alert(message: str, *, alert_key: str) -> bool:
+    """Send a rate-limited, PII-free VK/MDT operations alert to Telegram."""
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
+    if not ADMIN_ERROR_ALERTS or not bot_token or not LEAD_NOTIFY_IDS:
+        return False
+
+    now = time.time()
+    key = str(alert_key or "vk_ops")[:100]
+    with _ops_alert_lock:
+        if _last_ops_alert.get(key, 0) > now - ERROR_ALERT_COOLDOWN:
+            return False
+        _last_ops_alert[key] = now
+
+    delivered = False
+    text = f"⚠️ VK/MDT: {message}"
+    for recipient in LEAD_NOTIFY_IDS:
+        try:
+            resp = http_session.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={"chat_id": recipient, "text": text},
+                timeout=5,
+            )
+            delivered = delivered or resp.status_code == 200
+            if resp.status_code != 200:
+                logger.warning(
+                    "VK ops alert failed for Telegram chat %s: HTTP %s",
+                    recipient,
+                    resp.status_code,
+                )
+        except Exception as exc:
+            logger.warning("VK ops alert failed for Telegram chat %s: %s", recipient, exc)
+    return delivered
+
+
+def _alert_mdt_preorder_failure() -> bool:
+    """Report a one-shot preorder failure without exposing the failed lead."""
+    stats = _mdt_delivery_health()
+    if stats.get("available"):
+        message = (
+            "MDT preorder write failed; "
+            f"failed={int(stats.get('failed') or 0)}, "
+            f"synced={int(stats.get('synced') or 0)}, "
+            f"mode={stats.get('mode') or MDT_MODE}"
+        )
+    else:
+        message = f"MDT preorder write failed; mode={MDT_MODE}"
+    return _notify_ops_alert(message, alert_key="vk_mdt_preorder_failed")
+
+
 def _record_mdt_preorder_result(
     lead_id: int,
     preorder_id: Optional[int],
@@ -849,6 +958,8 @@ def _record_mdt_preorder_result(
                 lead_id,
             ),
         )
+    if not synced:
+        _alert_mdt_preorder_failure()
 
 
 # --- user helpers ---
@@ -3729,6 +3840,7 @@ def health() -> Any:
         "platform": "vk",
         "revision": _version.REVISION,
         "uptime_seconds": _version.uptime_seconds(),
+        "mdt_delivery": _mdt_delivery_health(),
     })
 
 
