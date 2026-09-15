@@ -87,6 +87,52 @@ def test_health_endpoint(client):
     assert data["status"] == "ok"
     assert data["revision"]
     assert "bot_token_configured" not in data
+    assert data["mdt_retry"]["available"] is True
+    assert data["mdt_retry"]["pending"] == 0
+
+
+def test_health_reports_mdt_retry_queue_without_pii(client, monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+
+    now = int(time.time())
+    info = {
+        "destination": "Шри-Ланка",
+        "origin": "Москва",
+        "dates": "2026-10-16",
+        "people": "2",
+        "kids": 0,
+        "budget": 270000,
+    }
+    secret_phone = "+79991234567"
+    lead_id = bot.save_lead(
+        7801, info, secret_phone, first_name="Roman", username="health"
+    )
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            UPDATE leads
+            SET mdt_status='pending', mdt_attempts=3,
+                mdt_next_retry_at=?, created_at=?
+            WHERE id=?
+            """,
+            (now + 45, now - 120, lead_id),
+        )
+
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    retry = data["mdt_retry"]
+    assert retry["enabled"] is True
+    assert retry["available"] is True
+    assert retry["pending"] == 1
+    assert retry["due_now"] == 0
+    assert retry["max_attempts"] == 3
+    assert 119 <= retry["oldest_pending_seconds"] <= 121
+    assert 43 <= retry["next_retry_in_seconds"] <= 45
+    assert secret_phone not in resp.get_data(as_text=True)
 
 
 def test_webhook_rejects_missing_secret(client):
