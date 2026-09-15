@@ -74,24 +74,48 @@ jobs:
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
 
-      - name: Verify public VK production routes
+      - name: Verify public Mini App production routes
         shell: bash
         run: |
           set -euo pipefail
-          base="https://bot.r0meo1.ru/vk"
+          vk_base="https://bot.r0meo1.ru/vk"
+          tg_submit="https://bot.r0meo1.ru/miniapp/submit"
+
           for attempt in {1..12}; do
-            if curl -fsSL --max-time 15 "$base/health" >/dev/null && \
-               html="$(curl -fsSL --max-time 15 "$base/miniapp/")" && \
-               js="$(curl -fsSL --max-time 15 "$base/miniapp/app.js")"; then
+            if curl -fsSL --max-time 15 "$vk_base/health" >/dev/null && \
+               html="$(curl -fsSL --max-time 15 "$vk_base/miniapp/")" && \
+               js="$(curl -fsSL --max-time 15 "$vk_base/miniapp/app.js")"; then
               if grep -q 'trip-form' <<<"$html" && \
                  grep -q "budgetScope: 'total'" <<<"$js" && \
                  grep -q "source: 'vk_mini_app'" <<<"$js"; then
-                echo "VK external production smoke: ok"
-                exit 0
+                break
               fi
+            fi
+            if [[ "$attempt" == 12 ]]; then
+              echo "VK external production smoke failed" >&2
+              exit 1
             fi
             echo "VK public routes not ready yet (attempt $attempt/12)"
             sleep 5
           done
-          echo "VK external production smoke failed" >&2
-          exit 1
+
+          vk_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -X POST "$vk_base/miniapp/draft" \
+            -H 'Content-Type: application/json' \
+            --data '{}')"
+          if [[ "$vk_auth_status" != "401" ]]; then
+            echo "VK invalid-auth request returned HTTP $vk_auth_status, expected 401" >&2
+            exit 1
+          fi
+
+          tg_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -X POST "$tg_submit" \
+            -H 'Origin: https://r0meo-1.github.io' \
+            -H 'Content-Type: application/json' \
+            --data '{"initData":"tampered","payload":{}}')"
+          if [[ "$tg_auth_status" != "401" ]]; then
+            echo "Telegram invalid-auth request returned HTTP $tg_auth_status, expected 401" >&2
+            exit 1
+          fi
+
+          echo "Public Mini App routes and auth rejection smoke: ok"
