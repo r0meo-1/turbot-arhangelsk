@@ -56,6 +56,17 @@ jobs:
           secret_b64="$(printf '%s' "$VK_MINI_APP_SECRET" | base64 -w0)"
           mdt_key_b64="$(printf '%s' "$MDT_API_KEY" | base64 -w0)"
 
+          # First connection uses the legacy payload understood by older
+          # root-owned deploy entrypoints. It updates the server checkout and
+          # installs the current deploy script before we require payload V2.
+          printf 'TURBOT_DEPLOY_CONFIG_V1\n%s\n%s\n' \
+            "$app_id_b64" \
+            "$secret_b64" |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              root@${{ secrets.DEPLOY_HOST }} true
+
+          # Second connection runs the freshly installed entrypoint and
+          # enables MDT with the protected API key.
           printf 'TURBOT_DEPLOY_CONFIG_V2\n%s\n%s\n%s\n' \
             "$app_id_b64" \
             "$secret_b64" \
