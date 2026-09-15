@@ -6,6 +6,11 @@ INDEX = (ROOT / "miniapp" / "index.html").read_text(encoding="utf-8")
 APP = (ROOT / "miniapp" / "app.js").read_text(encoding="utf-8")
 
 
+def test_published_miniapp_form_matches_source():
+    published = (ROOT / "docs" / "miniapp" / "index.html").read_text(encoding="utf-8")
+    assert published == INDEX, "Keep the GitHub Pages form in sync with miniapp/index.html"
+
+
 def test_miniapp_frontend_matches_production_v2_contract():
     assert "https://bot.r0meo1.ru/miniapp/submit" in APP
     assert "YOUR-DOMAIN" not in APP
