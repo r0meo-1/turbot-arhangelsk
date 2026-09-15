@@ -85,9 +85,11 @@ jobs:
           PY
 
       - name: Install test dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements-dev.txt
 
       - name: Run Telegram bot tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: python -m pytest tests/test_bot.py -q
 
       - name: Commit patch
