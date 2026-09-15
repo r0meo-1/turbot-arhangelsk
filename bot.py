@@ -2539,6 +2539,17 @@ def _prepare_review(chat_id: int, contact: str, info: Dict[str, Any]) -> None:
     _ask_review(chat_id, info)
 
 
+def _trip_details_text(info: Dict[str, Any]) -> str:
+    """Keep optional Mini App details visible throughout the lead handoff."""
+    text = ""
+    if info.get("nights") is not None:
+        text += f"🌙 Ночей: {_esc(info['nights'])}\n"
+    if "direct_only" in info:
+        flight = "только прямой, если доступен" if info["direct_only"] else "прямой или с пересадкой"
+        text += f"✈️ Перелёт: {flight}\n"
+    return text
+
+
 def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
     token = info["review_token"]
     budget = f"{int(info['budget']):,}".replace(",", " ")
@@ -2548,6 +2559,7 @@ def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
         f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
         f"🛫 Откуда: {_esc(info.get('origin', '?'))}\n"
         f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
+        f"{_trip_details_text(info)}"
         f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: {'от' if info.get('budget_open_ended') else 'до'} {budget} ₽ на человека\n"
         f"📞 Связь: {_esc(info.get('phone', '?'))}\n\n"
@@ -2724,6 +2736,7 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
         + (f"🛫 Откуда: {_esc(info['origin'])}\n" if info.get("origin") else "")
         + f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
+        f"{_trip_details_text(info)}"
         f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: до {_esc(info.get('budget', '?'))} ₽ на человека\n"
         f"📞 Связь: {_esc(phone)}\n\n"
@@ -2755,8 +2768,9 @@ def _format_lead_notify_text(
         f"📍 {_esc(info.get('destination', '?'))}\n"
         + (f"🛫 Откуда: {_esc(info['origin'])}\n" if info.get("origin") else "")
         + f"📅 {_esc(info.get('dates', '?'))}\n"
+        f"{_trip_details_text(info)}"
         f"👥 {_esc(_party_text(info))}\n"
-        f"💰 {_esc(info.get('budget', '?'))}₽\n"
+        f"💰 {'от' if info.get('budget_open_ended') else 'до'} {_esc(info.get('budget', '?'))} ₽ на человека\n"
         f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
         f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}"
     )

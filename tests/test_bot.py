@@ -230,6 +230,55 @@ def test_contact_only_creates_draft_until_confirmed(client, monkeypatch, channel
     assert len(side_effects) == 1
 
 
+@pytest.mark.parametrize("direct_only", [True, False])
+def test_miniapp_details_survive_review_and_manager_handoff(client, monkeypatch, direct_only):
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda cid, text, **kw: sent.append((cid, text)) or _OkResp())
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **kw: None)
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+    chat = 88002
+    payload = {
+        "type": "trip_request", "version": 2,
+        "destination": "Таиланд", "departure": "Архангельск",
+        "date": "2099-10-15", "nights": 10, "adults": 2,
+        "children": 2, "childrenAges": [5, 9],
+        "budgetMaxRub": 600000, "directOnly": direct_only, "consent": True,
+    }
+    response = client.post(
+        "/webhook",
+        headers={"X-Telegram-Bot-Api-Secret-Token": "secret123"},
+        json={"message": {"chat": {"id": chat}, "from": {"id": chat, "first_name": "Test"},
+                          "web_app_data": {"data": json.dumps(payload)}}},
+    )
+    assert response.status_code == 200
+    assert bot.user_data[chat]["state"] == bot.STATE_CONTACT
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    review = sent[-1][1]
+    assert "Заявка ещё не отправлена" in review
+    assert bot.count_leads() == 0
+    assert not any(cid == 999 for cid, _ in sent)
+    _confirm_draft(client, chat)
+    confirmation = next(text for cid, text in sent if cid == chat and "Заявка принята" in text)
+    notification = next(text for cid, text in sent if cid == 999 and "Новая заявка" in text)
+    flight = "только прямой, если доступен" if direct_only else "прямой или с пересадкой"
+    for summary in (review, confirmation, notification):
+        assert "Ночей: 10" in summary
+        assert f"Перелёт: {flight}" in summary
+        assert "Таиланд" in summary and "Архангельск" in summary
+        assert "2099-10-15" in summary and "5 и 9 лет" in summary
+        assert "600000 ₽ на человека" in summary.replace("600 000", "600000")
+    assert bot.count_leads() == 1
+
+
+def test_classic_review_does_not_invent_miniapp_details(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda cid, text, **kw: sent.append(text) or _OkResp())
+    _reach_contact(client, 88003)
+    _callback(client, 88003, bot.CB_CONTACT_TG)
+    assert "Ночей:" not in sent[-1]
+    assert "Перелёт:" not in sent[-1]
+
+
 def test_budget_range_keeps_client_on_budget_step(client):
     _reach_contact(client, 6002)
     _callback(client, 6002, bot.CB_BACK)
