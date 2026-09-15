@@ -1581,6 +1581,67 @@ def _retry_pending_mdt_once(now: Optional[int] = None) -> int:
     return synced
 
 
+def _mdt_retry_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return aggregate retry-queue telemetry without exposing lead PII."""
+    current = int(time.time() if now is None else now)
+    enabled = bool(
+        MDT_RETRY_ENABLED
+        and MDT_ENABLED
+        and MDT_MODE == "lead"
+        and not DEMO_MODE
+    )
+    try:
+        with _db_cursor() as cur:
+            row = cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS pending,
+                    COALESCE(MAX(mdt_attempts), 0) AS max_attempts,
+                    MIN(created_at) AS oldest_created_at,
+                    MIN(mdt_next_retry_at) AS next_retry_at,
+                    SUM(
+                        CASE
+                            WHEN COALESCE(mdt_next_retry_at, 0) <= ? THEN 1
+                            ELSE 0
+                        END
+                    ) AS due_now
+                FROM leads
+                WHERE mdt_status='pending'
+                """,
+                (current,),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read Telegram MDT retry queue: %s", exc)
+        return {
+            "enabled": enabled,
+            "available": False,
+            "pending": None,
+            "due_now": None,
+            "max_attempts": None,
+            "oldest_pending_seconds": None,
+            "next_retry_in_seconds": None,
+        }
+
+    pending = int(row["pending"] or 0) if row else 0
+    oldest = row["oldest_created_at"] if row else None
+    next_retry = row["next_retry_at"] if row else None
+    return {
+        "enabled": enabled,
+        "available": True,
+        "pending": pending,
+        "due_now": int(row["due_now"] or 0) if row else 0,
+        "max_attempts": int(row["max_attempts"] or 0) if row else 0,
+        "oldest_pending_seconds": (
+            max(0, current - int(oldest)) if pending and oldest is not None else None
+        ),
+        "next_retry_in_seconds": (
+            max(0, int(next_retry) - current)
+            if pending and next_retry is not None
+            else None
+        ),
+    }
+
+
 def _start_mdt_retry_worker() -> None:
     if not (MDT_RETRY_ENABLED and MDT_ENABLED and MDT_MODE == "lead" and not DEMO_MODE):
         return
@@ -3347,6 +3408,7 @@ def health() -> Any:
             round(now - _last_update_at, 1) if _last_update_at else None
         ),
         "bot_mode": BOT_MODE,
+        "mdt_retry": _mdt_retry_health(now),
     })
     # 503 rather than 200-with-a-sad-field: monitoring reads status codes, and
     # a body nobody parses is how the last two outages stayed invisible.
