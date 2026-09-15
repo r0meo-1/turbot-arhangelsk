@@ -72,8 +72,8 @@
       date: $('date').value, nights: Number($('nights').value), adults: Number($('adults').value),
       children: Number($('children').value),
       childrenAges: Array.from($('children-ages').querySelectorAll('input'), (i) => Number(i.value)),
-      budgetMaxRub: Number($('budget').value), consent: $('consent').checked,
-      directOnly: false, source: 'vk_mini_app'
+      budgetMaxRub: Number($('budget').value), budgetScope: 'total', consent: $('consent').checked,
+      directOnly: $('direct').checked, source: 'vk_mini_app'
     };
     if (!payload.destination || !payload.departure) { $('error').textContent = 'Укажите направление и город вылета.'; return; }
     $('error').textContent = '';
@@ -82,7 +82,8 @@
       ['Дата', new Date(`${payload.date}T12:00:00`).toLocaleDateString('ru-RU')],
       ['Ночей', payload.nights], ['Взрослых', payload.adults],
       ['Дети', payload.children ? payload.childrenAges.map((age) => `${age} лет`).join(', ') : 'Без детей'],
-      ['Бюджет на всех', `до ${money(payload.budgetMaxRub)}`]
+      ['Бюджет на всех', `до ${money(payload.budgetMaxRub)}`],
+      ['Перелёт', payload.directOnly ? 'только прямой' : 'любой подходящий']
     ];
     $('summary').replaceChildren();
     entries.forEach(([label, value]) => {
