@@ -3362,7 +3362,18 @@ def _process_message(message: Dict[str, Any]) -> None:
 
     # Button-text matching (exact match against known buttons)
     if text == BACK_BUTTON_TEXT:
-        if user_id in user_data:
+        live = user_data.get(user_id)
+        if (
+            live
+            and live.get("state") == STATE_REVIEW
+            and live.get("selected_tour")
+            and live.get("_tour_offers")
+        ):
+            page = int(live.get("_tour_page") or 0)
+            live.pop("selected_tour", None)
+            _mark_dirty(user_id, user=False)
+            _send_tour_results_page(user_id, page)
+        elif user_id in user_data:
             _go_back(user_id)
         else:
             send_message(user_id, HINT_START)
