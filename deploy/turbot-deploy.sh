@@ -109,6 +109,10 @@ PY
   done
 
   echo "VK service did not become healthy" >&2
+
+  systemctl status vk-turbot --no-pager -l || true
+
+  journalctl -u vk-turbot -n 80 --no-pager || true
   return 1
 }
 
