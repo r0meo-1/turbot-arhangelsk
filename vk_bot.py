@@ -649,7 +649,11 @@ def save_lead(
     now = int(time.time())
     if DEMO_MODE:
         phone = _tutu_mask_phone(phone)
-    mdt_status = "pending" if MDT_ENABLED and not DEMO_MODE else "disabled"
+    # Durable retry is intentionally scoped to add-lead mode. Retrying a
+    # multi-step preorder/both transaction without server-side idempotency can
+    # duplicate the part that already succeeded. Those modes keep the legacy
+    # one-shot path until MDT exposes an idempotency key or lookup API.
+    mdt_status = "pending" if MDT_ENABLED and MDT_MODE == "lead" and not DEMO_MODE else "disabled"
     mdt_next_retry_at = now if mdt_status == "pending" else None
     with _db_cursor(commit=True) as cur:
         cur.execute(
@@ -1458,6 +1462,9 @@ def _start_mdt_retry_worker() -> None:
     if not MDT_ENABLED or not MDT_RETRY_ENABLED or DEMO_MODE:
         return
     def _worker() -> None:
+        # Give startup network/config work a chance to finish before replaying
+        # rows left pending by a previous process.
+        time.sleep(MDT_RETRY_POLL_SECONDS)
         while True:
             try:
                 _retry_pending_mdt_leads()
@@ -3036,9 +3043,11 @@ def _post_completion_side_effects(
 ) -> None:
     """MDT push + live offers + AI blurb — off the VK Callback hot path."""
     try:
-        if lead_id is not None:
+        if lead_id is not None and MDT_MODE == "lead":
             _deliver_mdt_lead(lead_id)
         elif MDT_ENABLED and not DEMO_MODE:
+            # preorder/both remain one-shot because their multi-call transaction
+            # cannot be retried safely without server-side idempotency.
             send_lead_to_mdt(user_id, info, phone, client_name)
 
         # The client already chose a complete package. Sending an unrelated

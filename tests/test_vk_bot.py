@@ -1271,11 +1271,12 @@ def test_vk_hotel_info_button_shows_tophotels_details(client, monkeypatch):
 
 
 def test_mdt_durable_retry_survives_failure_and_restart_state(monkeypatch):
-    bot.MDT_ENABLED = True
-    bot.MDT_RETRY_ENABLED = True
-    bot.MDT_RETRY_BASE_SECONDS = 5
-    bot.MDT_RETRY_MAX_SECONDS = 60
-    bot.MDT_RETRY_BATCH_SIZE = 10
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_RETRY_BASE_SECONDS", 5)
+    monkeypatch.setattr(bot, "MDT_RETRY_MAX_SECONDS", 60)
+    monkeypatch.setattr(bot, "MDT_RETRY_BATCH_SIZE", 10)
     info = {"destination": "Таиланд", "origin": "Архангельск", "dates": "2026-10-15",
             "nights": "10", "people": "2", "budget": 270000, "budget_scope": "total",
             "selected_tour": {"hotel": "Mandarava Resort & Spa Karon Beach",
@@ -1308,8 +1309,9 @@ def test_mdt_durable_retry_survives_failure_and_restart_state(monkeypatch):
 
 
 def test_mdt_retry_does_not_repeat_client_or_manager_notifications(monkeypatch):
-    bot.MDT_ENABLED = True
-    bot.MDT_RETRY_ENABLED = True
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
     lead_id = bot.save_lead(777, {"destination": "Египет", "people": "2", "budget": 200000}, "vk:777", first_name="Test User")
     with bot._db_cursor(commit=True) as cur:
         cur.execute("UPDATE leads SET mdt_next_retry_at=0 WHERE id=?", (lead_id,))
@@ -1320,12 +1322,21 @@ def test_mdt_retry_does_not_repeat_client_or_manager_notifications(monkeypatch):
 
 
 def test_mdt_delivery_key_is_in_add_lead_fields(monkeypatch):
-    bot.MDT_ENABLED = True
-    bot.MDT_MODE = "lead"
-    bot.MDT_API_KEY = "test-key"
-    bot.MDT_BASE_URL = "https://example.invalid"
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_API_KEY", "test-key")
+    monkeypatch.setattr(bot, "MDT_BASE_URL", "https://example.invalid")
     calls = []
     monkeypatch.setattr(bot, "_mdt_request", lambda method, params: calls.append((method, params)) or {"id": 1})
     assert bot.send_lead_to_mdt(42, {"destination": "Таиланд", "_mdt_delivery_key": "vk-lead-123"}, "vk:42", "Роман") is True
     assert calls[0][0] == "add-lead"
     assert {"name": "ID заявки бота", "values": ["vk-lead-123"]} in calls[0][1]["fields"]
+
+
+def test_mdt_retry_is_not_armed_for_multistep_modes(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "both")
+    lead_id = bot.save_lead(778, {"destination": "Турция"}, "vk:778", first_name="Test")
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT mdt_status, mdt_next_retry_at FROM leads WHERE id=?", (lead_id,)).fetchone()
+    assert tuple(row) == ("disabled", None)
