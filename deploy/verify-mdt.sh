@@ -10,6 +10,7 @@ cd "$repo"
 
 "$venv/python" - <<'PY'
 import os
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -26,12 +27,13 @@ base = (os.getenv('MDT_BASE_URL', '') or '').strip().rstrip('/')
 api_key = (os.getenv('MDT_API_KEY', '') or '').strip()
 
 endpoint = base or (f'https://{account}.moidokumenti.ru' if account else '')
+endpoint_host = urlparse(endpoint).hostname or 'missing'
 
 print(
     'MDT config: '
     f'enabled={"yes" if enabled else "no"} '
     f'mode={mode} '
-    f'endpoint={"set" if endpoint else "missing"} '
+    f'endpoint_host={endpoint_host} '
     f'api_key={"set" if api_key else "missing"}'
 )
 
@@ -52,6 +54,15 @@ try:
         f'{endpoint}/api/get-country-list',
         data={'params': '{}', 'key': api_key},
         timeout=15,
+    )
+    content_type = (response.headers.get('content-type') or '').split(';', 1)[0].strip() or 'missing'
+    final_host = urlparse(response.url).hostname or 'missing'
+    print(
+        'MDT HTTP: '
+        f'status={response.status_code} '
+        f'content_type={content_type} '
+        f'redirects={len(response.history)} '
+        f'final_host={final_host}'
     )
     response.raise_for_status()
     response.json()
