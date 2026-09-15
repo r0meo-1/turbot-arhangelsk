@@ -73,7 +73,7 @@ jobs:
 
       - name: Run focused tests
         run: |
-          python -m pytest -q tests/test_vk_miniapp_review_return.py tests/test_vk_bot.py
+          python -m pytest -q tests/test_vk_bot.py tests/test_vk_miniapp_review_return.py
 
       - name: Commit patch
         run: |
