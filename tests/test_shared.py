@@ -135,7 +135,7 @@ def test_create_preorder_flow():
             return {"id": 20}
         return None
 
-    settings = MDTSettings(enabled=True, mode="preorder", tourist_tags="Telegram Bot")
+    settings = MDTSettings(enabled=True, mode="preorder", tourist_tags="Telegram Bot", manager_ids=[5])
     preorder_id, tourist_id = create_preorder(
         settings,
         5,
@@ -148,6 +148,95 @@ def test_create_preorder_flow():
     assert preorder_id == 20
     assert tourist_id == 10
     assert calls == ["add-tourist-temp", "create-preorder"]
+
+
+def test_create_preorder_auto_assigns_sole_active_manager():
+    calls = []
+    payloads = {}
+
+    def req(method, params):
+        calls.append(method)
+        payloads[method] = params
+        if method == "get-manager-list":
+            return {
+                "data": [
+                    {"id": "17", "dismissed": 0, "office_id": 1},
+                    {"id": "99", "dismissed": 1, "office_id": 1},
+                ]
+            }
+        if method == "add-tourist-temp":
+            return {"id": 10}
+        if method == "create-preorder":
+            return {"data": {"preorder_id": 20}}
+        return None
+
+    settings = MDTSettings(
+        enabled=True, mode="preorder", source="VK Bot", name_prefix="VK", tourist_tags="VK Bot"
+    )
+    preorder_id, tourist_id = create_preorder(
+        settings,
+        424242,
+        {
+            "destination": "Таиланд",
+            "origin": "Архангельск",
+            "dates": "2026-10-15",
+            "nights": "10",
+            "people": "2",
+            "kids": 0,
+            "kids_ages": [],
+            "budget": 270000,
+            "budget_scope": "total",
+            "selected_tour": {
+                "hotel": "Mandarava Resort",
+                "date": "2026-10-15",
+                "nights": 10,
+                "meal": "BB",
+                "price": 155000,
+                "tour_id": "th-6",
+            },
+        },
+        "VK (чат id 424242) · Тест",
+        "Тест VK",
+        {"таиланд": 7},
+        request_fn=req,
+    )
+
+    assert preorder_id == 20
+    assert tourist_id == 10
+    assert calls == ["get-manager-list", "add-tourist-temp", "create-preorder"]
+    assert payloads["add-tourist-temp"]["manager_id"] == 17
+    preorder = payloads["create-preorder"]
+    assert preorder["preorder_manager_id"] == 17
+    assert preorder["nights_from"] == 10
+    assert preorder["nights_to"] == 10
+    assert preorder["link"] == "https://vk.com/id424242"
+    assert "Вылет: Архангельск" in preorder["comment"]
+    assert "Источник: VK Bot" in preorder["comment"]
+    assert "Mandarava Resort" in preorder["comment"]
+    assert "ID th-6" in preorder["comment"]
+
+
+def test_create_preorder_does_not_guess_between_multiple_active_managers():
+    payloads = {}
+
+    def req(method, params):
+        payloads.setdefault(method, []).append(params)
+        if method == "get-manager-list":
+            return {"data": [{"id": 17, "dismissed": 0}, {"id": 18, "dismissed": 0}]}
+        if method == "add-tourist-temp":
+            return {"id": 10}
+        if method == "create-preorder":
+            return {"id": 20}
+        return None
+
+    settings = MDTSettings(enabled=True, mode="preorder", name_prefix="VK")
+    preorder_id, _ = create_preorder(
+        settings, 424242, {"destination": "Таиланд", "people": "2"},
+        "VK chat", "Тест", {"таиланд": 7}, request_fn=req
+    )
+    assert preorder_id == 20
+    assert "manager_id" not in payloads["add-tourist-temp"][0]
+    assert "preorder_manager_id" not in payloads["create-preorder"][0]
 
 
 def test_create_lead_includes_selected_tour():

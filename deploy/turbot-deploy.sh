@@ -83,6 +83,7 @@ if marker == "TURBOT_DEPLOY_CONFIG_V2":
             "MDT_API_KEY": quote_env(mdt_api_key),
             "MDT_ENABLED": "true",
             "MDT_MODE": "lead",
+            "VK_MDT_MODE": "preorder",
             "MDT_ACCOUNT": quote_env("apreltour"),
             "MDT_BASE_URL": quote_env("https://apreltour.moidokumenti.ru"),
         }
