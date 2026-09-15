@@ -793,8 +793,8 @@ def save_lead(
     phone: str,
     first_name: str = "",
     username: str = "",
-) -> None:
-    """Persist a completed tour request for export/analytics."""
+) -> int:
+    """Persist a completed tour request and return its local lead ID."""
     now = int(time.time())
     if DEMO_MODE:
         phone = mask_phone(phone)
@@ -822,6 +822,7 @@ def save_lead(
                 now,
             ),
         )
+        return int(cur.lastrowid)
 
 
 def count_leads() -> int:
@@ -2954,7 +2955,7 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
 
     # Persist lead before side-effects so export/analytics work even if notify fails.
     try:
-        save_lead(chat_id, info, phone, first_name=first_name, username=username)
+        lead_id = save_lead(chat_id, info, phone, first_name=first_name, username=username)
     except Exception as exc:
         logger.error("Failed to save lead for %s: %s", chat_id, exc)
         _alert_admin_error("Failed to save lead", exc)
@@ -2965,6 +2966,9 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
             _ask_review(chat_id, live)
         return
 
+    delivery_info = dict(info)
+    delivery_info["_mdt_delivery_key"] = f"tg-lead-{lead_id}"
+
     _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
     # 2. Notify bot creator / admins in Telegram (sync — ops must see it)
     _notify_admin(chat_id, info, phone, client_name, username=username or "")
@@ -2974,11 +2978,11 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
 
     # 4–5. CRM + AI can be slow (network); don't block Telegram's webhook ACK.
     if SYNC_COMPLETION:
-        _post_completion_side_effects(chat_id, info, phone, client_name)
+        _post_completion_side_effects(chat_id, delivery_info, phone, client_name)
     else:
         threading.Thread(
             target=_post_completion_side_effects,
-            args=(chat_id, info, phone, client_name),
+            args=(chat_id, delivery_info, phone, client_name),
             daemon=True,
             name=f"complete-{chat_id}",
         ).start()
