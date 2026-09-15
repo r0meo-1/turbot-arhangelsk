@@ -101,7 +101,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
             assert captured == []
             assert page.evaluate("window.__tgClosed") is False
             assert page.evaluate("window.__tgBackVisible") is True
-            review_text = page.locator("#summary").inner_text()
+            review_text = page.locator("#summary").inner_text().replace("\u00a0", " ")
             for expected in (
                 "Таиланд", "Архангельск", "10", "2", "5", "270 000", "только прямой"
             ):
