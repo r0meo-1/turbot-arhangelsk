@@ -57,3 +57,7 @@ jobs:
       - name: VK Mini App browser roundtrip
         run: |
           python -m pytest -q tests/test_vk_miniapp_e2e.py
+
+      - name: Telegram Mini App browser roundtrip
+        run: |
+          python -m pytest -q tests/test_telegram_miniapp_e2e.py
