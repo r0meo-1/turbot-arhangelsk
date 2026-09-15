@@ -1345,6 +1345,62 @@ def test_mdt_retry_is_not_armed_for_multistep_modes(monkeypatch):
     assert tuple(row) == ("disabled", None)
 
 
+def test_vk_preorder_observability_records_ids(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "preorder")
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    info = {
+        "destination": "Таиланд",
+        "origin": "Архангельск",
+        "dates": "2026-10-15",
+        "nights": "10",
+        "people": "2",
+        "budget": 270000,
+        "selected_tour": {"hotel": "Test Hotel", "tour_id": "th-test"},
+    }
+    lead_id = bot.save_lead(779, info, "VK test", first_name="Test")
+    monkeypatch.setattr(bot, "send_preorder_to_mdt", lambda *a, **k: (1816, 4321))
+
+    bot._post_completion_side_effects(779, info, "VK test", "Test", lead_id)
+
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at, "
+            "mdt_preorder_id, mdt_tourist_id FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+    assert row["mdt_status"] == "synced"
+    assert row["mdt_attempts"] == 1
+    assert row["mdt_next_retry_at"] is None
+    assert row["mdt_synced_at"] > 0
+    assert row["mdt_preorder_id"] == 1816
+    assert row["mdt_tourist_id"] == 4321
+
+
+def test_vk_preorder_observability_records_failure_without_retry(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "preorder")
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    info = {"destination": "Турция", "selected_tour": {"hotel": "Test Hotel"}}
+    lead_id = bot.save_lead(780, info, "VK test", first_name="Test")
+    monkeypatch.setattr(bot, "send_preorder_to_mdt", lambda *a, **k: (None, 9876))
+
+    bot._post_completion_side_effects(780, info, "VK test", "Test", lead_id)
+
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at, "
+            "mdt_preorder_id, mdt_tourist_id FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+    assert row["mdt_status"] == "failed"
+    assert row["mdt_attempts"] == 1
+    assert row["mdt_next_retry_at"] is None
+    assert row["mdt_synced_at"] is None
+    assert row["mdt_preorder_id"] is None
+    assert row["mdt_tourist_id"] == 9876
+
+
 def test_vk_back_from_selected_tour_returns_to_results(client, monkeypatch):
     user_id = 9961
     offer = {"hotel": "Akka Alinda Hotel", "tour_id": "tr-1"}

@@ -486,6 +486,8 @@ def init_db() -> None:
                 mdt_attempts INTEGER NOT NULL DEFAULT 0,
                 mdt_next_retry_at INTEGER,
                 mdt_synced_at INTEGER,
+                mdt_preorder_id INTEGER,
+                mdt_tourist_id INTEGER,
                 created_at INTEGER NOT NULL
             )
         """)
@@ -539,6 +541,10 @@ def init_db() -> None:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_next_retry_at INTEGER")
                 if "mdt_synced_at" not in _cols:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_synced_at INTEGER")
+                if "mdt_preorder_id" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN mdt_preorder_id INTEGER")
+                if "mdt_tourist_id" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN mdt_tourist_id INTEGER")
         # One-time production repair for the single lead that the pre-acknowledgement
         # MDT client falsely marked `synced` after receiving an error JSON. Production
         # diagnostics identified it as lead 35, the only synced row, with zero attempts;
@@ -811,6 +817,38 @@ def _lead_row_to_info(row: Dict[str, Any]) -> Dict[str, Any]:
     info["selected_tour"] = _tour_from_db(info.get("selected_tour"))
     info["_mdt_delivery_key"] = f"vk-lead-{info['id']}"
     return info
+
+
+def _record_mdt_preorder_result(
+    lead_id: int,
+    preorder_id: Optional[int],
+    tourist_id: Optional[int],
+) -> None:
+    """Persist the one-shot VK preorder outcome without storing more PII.
+
+    Preorder writes are intentionally not retried because MDT creates a temp
+    tourist and then a preorder. Retrying that transaction after a partial
+    success can duplicate CRM entities. Persisting the returned IDs gives us a
+    durable, non-sensitive production proof instead.
+    """
+    synced = preorder_id is not None
+    now = int(time.time())
+    with _db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            UPDATE leads
+            SET mdt_status=?, mdt_attempts=1, mdt_next_retry_at=NULL,
+                mdt_synced_at=?, mdt_preorder_id=?, mdt_tourist_id=?
+            WHERE id=?
+            """,
+            (
+                "synced" if synced else "failed",
+                now if synced else None,
+                preorder_id,
+                tourist_id,
+                lead_id,
+            ),
+        )
 
 
 # --- user helpers ---
@@ -3162,8 +3200,16 @@ def _post_completion_side_effects(
             _deliver_mdt_lead(lead_id)
         elif MDT_ENABLED and not DEMO_MODE:
             # preorder/both remain one-shot because their multi-call transaction
-            # cannot be retried safely without server-side idempotency.
-            send_lead_to_mdt(user_id, delivery_info, phone, client_name)
+            # cannot be retried safely without server-side idempotency. Capture
+            # the production VK preorder IDs so diagnostics can prove the write
+            # without exposing customer data.
+            if lead_id is not None and MDT_MODE == "preorder":
+                preorder_id, tourist_id = send_preorder_to_mdt(
+                    user_id, delivery_info, phone, client_name
+                )
+                _record_mdt_preorder_result(lead_id, preorder_id, tourist_id)
+            else:
+                send_lead_to_mdt(user_id, delivery_info, phone, client_name)
 
         # The client already chose a complete package. Sending an unrelated
         # flight-only estimate or an AI placeholder after confirmation would
