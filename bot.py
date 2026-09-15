@@ -1421,9 +1421,9 @@ def _send_lead_to_mdt_once(
     info: Dict[str, Any],
     phone: str,
     client_name: Optional[str],
-) -> None:
-    """Dispatch a completed request to MDT CRM based on MDT_MODE."""
-    mdt_shared.dispatch_lead(
+) -> bool:
+    """Dispatch a completed request to MDT CRM and return write success."""
+    return mdt_shared.dispatch_lead(
         _mdt_settings(),
         chat_id,
         info,

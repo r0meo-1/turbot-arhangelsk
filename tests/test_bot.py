@@ -1828,3 +1828,24 @@ def test_mdt_retry_stale_alert_can_be_disabled(monkeypatch):
         lambda now=None: (_ for _ in ()).throw(AssertionError("health should not be read")),
     )
     assert bot._alert_stale_mdt_retry_queue(now=123) is False
+
+
+
+def test_send_lead_to_mdt_once_returns_dispatch_result(monkeypatch):
+    calls = []
+
+    def fake_dispatch(*args, **kwargs):
+        calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(bot.mdt_shared, "dispatch_lead", fake_dispatch)
+
+    result = bot._send_lead_to_mdt_once(
+        7950,
+        {"destination": "Вьетнам", "people": "2", "budget": 250000},
+        "Telegram @dispatch",
+        "Roman",
+    )
+
+    assert result is True
+    assert len(calls) == 1
