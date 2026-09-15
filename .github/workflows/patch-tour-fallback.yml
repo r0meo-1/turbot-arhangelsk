@@ -21,33 +21,19 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('shared/tourvisor.py')
-          text = path.read_text(encoding='utf-8')
-          old = '''    if any(k in dest_clean for k in ("пхукет", "паттайя", "краби", "самуи")):
-        return catalog["таиланд"][:limit]
+          path = Path("shared/tourvisor.py")
+          text = path.read_text(encoding="utf-8")
+          needle = "    # Global curated mix for hot deals / general search\n"
+          replacement = "    # An explicit destination must never fall back to unrelated countries.\n    # If live Tourvisor returned no offers and the curated catalog does not\n    # know this destination, let the caller show the honest no-results state.\n    if dest_clean:\n        return []\n\n    # Global curated mix is only for destination-free hot deals/general browse.\n"
+          if needle not in text:
+              raise SystemExit("tourvisor fallback anchor not found")
+          path.write_text(text.replace(needle, replacement, 1), encoding="utf-8")
 
-    # Global curated mix for hot deals / general search
-'''
-          new = '''    if any(k in dest_clean for k in ("пхукет", "паттайя", "краби", "самуи")):
-        return catalog["таиланд"][:limit]
-
-    # An explicit destination must never fall back to unrelated countries.
-    # If live Tourvisor returned no offers and the curated catalog does not
-    # know this destination, let the caller show the honest no-results state.
-    if dest_clean:
-        return []
-
-    # Global curated mix is only for destination-free hot deals/general browse.
-'''
-          if old not in text:
-              raise SystemExit('tourvisor fallback anchor not found')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
-
-          test_path = Path('tests/test_tourvisor.py')
-          tests = test_path.read_text(encoding='utf-8')
-          addition = '''\n\ndef test_explicit_unknown_destination_never_gets_unrelated_hot_tours():\n    offers = tourvisor.get_hot_tours(\n        "Архангельск", destination="Шри-Ланка", limit=15\n    )\n\n    assert offers == []\n\n\ndef test_destination_free_hot_tours_still_return_curated_mix():\n    offers = tourvisor.get_hot_tours("Архангельск", destination=None, limit=3)\n\n    assert len(offers) == 3\n    assert all(offer.hotel for offer in offers)\n'''
-          if 'test_explicit_unknown_destination_never_gets_unrelated_hot_tours' not in tests:
-              test_path.write_text(tests + addition, encoding='utf-8')
+          test_path = Path("tests/test_tourvisor.py")
+          tests = test_path.read_text(encoding="utf-8")
+          if "test_explicit_unknown_destination_never_gets_unrelated_hot_tours" not in tests:
+              addition = "\n\ndef test_explicit_unknown_destination_never_gets_unrelated_hot_tours():\n    offers = tourvisor.get_hot_tours(\n        \"Архангельск\", destination=\"Шри-Ланка\", limit=15\n    )\n\n    assert offers == []\n\n\ndef test_destination_free_hot_tours_still_return_curated_mix():\n    offers = tourvisor.get_hot_tours(\"Архангельск\", destination=None, limit=3)\n\n    assert len(offers) == 3\n    assert all(offer.hotel for offer in offers)\n"
+              test_path.write_text(tests + addition, encoding="utf-8")
           PY
           pytest -q tests/test_tourvisor.py
           git config user.name "github-actions[bot]"
