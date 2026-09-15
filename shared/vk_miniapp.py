@@ -94,8 +94,14 @@ def validate_vk_trip(payload):
         ages = payload.get("childrenAges")
         if not isinstance(ages, list) or any(type(age) is not int for age in ages):
             raise MiniAppValidationError("Invalid child ages")
-    info = validate_trip_request(payload)
-    info.update(source="vk_mini_app", budget_scope="total")
+        # VK v2 historically meant total-trip budget. New clients send the
+        # scope explicitly, while old installed WebViews keep their old meaning.
+        normalized_payload = dict(payload)
+        normalized_payload.setdefault("budgetScope", "total")
+    else:
+        normalized_payload = payload
+    info = validate_trip_request(normalized_payload)
+    info.update(source="vk_mini_app")
     return info
 
 
