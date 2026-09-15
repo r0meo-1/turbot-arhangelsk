@@ -1,9 +1,9 @@
-(() => {
+(async () => {
   const $ = (id) => document.getElementById(id);
   const form = $('trip-form');
   const launchParams = location.search.slice(1);
   const params = new URLSearchParams(launchParams);
-  const inVK = params.has('sign') && params.has('vk_app_id');
+  let inVK = params.has('sign') && params.has('vk_app_id');
   const bridge = window.vkBridge;
   let payload;
   const money = (n) => `${Number(n).toLocaleString('ru-RU')} ₽`;
@@ -87,10 +87,10 @@
       let response;
       try {
         response = await fetch('./draft', { method: 'POST', signal: controller.signal,
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ launchParams, payload }) });
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ launchParams: effectiveLaunchParams, payload }) });
       } finally { clearTimeout(timer); }
       const result = await response.json();
-      if (!response.ok || result.ok !== true) throw new Error(result.error || 'Не удалось сохранить параметры.');
+      if (!response.ok || result.ok !== true) throw new Error(result.authReason ? (result.error + ' [' + result.authReason + ']') : (result.error || 'Не удалось сохранить параметры.'));
       const groupId = Number(result.groupId);
       if (!Number.isSafeInteger(groupId) || groupId <= 0) throw new Error('Не удалось открыть сообщество.');
       $('status').textContent = 'Параметры сохранены. Откройте чат и напишите «Проверить заявку»: бот покажет ваш подбор. Заявка менеджеру ещё не отправлена.';

@@ -88,8 +88,12 @@ def create_blueprint(save_draft, settings):
             return jsonify(ok=False, error="Некорректные данные формы."), 400
         try:
             uid = validate_launch_params(body.get("launchParams"), secret, app_id, group_id)
-        except MiniAppValidationError:
-            return jsonify(ok=False, error="Откройте приложение заново из VK."), 401
+        except MiniAppValidationError as exc:
+            return jsonify(
+                ok=False,
+                error="Откройте приложение заново из VK.",
+                authReason=str(exc),
+            ), 401
         try:
             info = validate_vk_trip(body.get("payload"))
         except MiniAppValidationError:
