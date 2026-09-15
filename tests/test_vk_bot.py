@@ -133,6 +133,40 @@ def test_miniapp_attribution_survives_session_and_lead():
     assert tuple(row) == ("vk_mini_app", "community_messages", "desktop_web")
 
 
+def test_miniapp_draft_ignores_stale_memory_after_persistent_cancel():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True)
+    stale = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_DESTINATION)
+    bot.user_data[44] = stale
+    bot.delete_session(44)
+
+    bot._save_miniapp_draft(44, validate_vk_trip(raw))
+
+    assert bot.user_data[44]["state"] == bot.STATE_REVIEW
+    assert bot.user_data[44]["destination"] == "Шри-Ланка"
+    assert bot.get_session(44)["destination"] == "Шри-Ланка"
+
+
+def test_miniapp_draft_still_blocks_durable_active_chat_session():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True)
+    active = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_DESTINATION)
+    bot.set_session(45, active)
+    bot.user_data.pop(45, None)
+
+    with pytest.raises(bot.MiniAppValidationError):
+        bot._save_miniapp_draft(45, validate_vk_trip(raw))
+    assert bot.get_session(45)["destination"] == "Египет"
+
+
 def test_validate_people():
     assert bot.validate_people("3") == (True, "3")
     assert bot.validate_people("5+") == (True, "5+")
