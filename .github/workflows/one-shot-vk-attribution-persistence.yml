@@ -1,0 +1,171 @@
+name: One-shot VK attribution persistence patch
+
+on:
+  push:
+    branches: [feat/vk-attribution-persistence]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/vk-attribution-persistence
+
+      - name: Patch VK attribution persistence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('vk_bot.py')
+          text = path.read_text(encoding='utf-8')
+
+          old = '''                budget INTEGER,
+                budget_scope TEXT,
+                phone TEXT,
+'''
+          new = '''                budget INTEGER,
+                budget_scope TEXT,
+                source TEXT,
+                vk_ref TEXT,
+                vk_platform TEXT,
+                phone TEXT,
+'''
+          if text.count(old) != 2:
+              raise SystemExit(f'unexpected schema block count: {text.count(old)}')
+          text = text.replace(old, new)
+
+          old = '''            if "budget_scope" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN budget_scope TEXT")
+'''
+          new = '''            if "budget_scope" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN budget_scope TEXT")
+            for _c in ("source", "vk_ref", "vk_platform"):
+                if _c not in _cols:
+                    cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} TEXT")
+'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected migration block')
+          text = text.replace(old, new, 1)
+
+          old = '''                                  kids, kids_ages, infants, budget, budget_scope, phone,
+                                  needs_consultation, selected_tour, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+'''
+          new = '''                                  kids, kids_ages, infants, budget, budget_scope,
+                                  source, vk_ref, vk_platform, phone,
+                                  needs_consultation, selected_tour, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected session insert block')
+          text = text.replace(old, new, 1)
+
+          old = '''                budget=excluded.budget, budget_scope=excluded.budget_scope,
+                phone=excluded.phone,
+'''
+          new = '''                budget=excluded.budget, budget_scope=excluded.budget_scope,
+                source=excluded.source, vk_ref=excluded.vk_ref,
+                vk_platform=excluded.vk_platform,
+                phone=excluded.phone,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected session update block')
+          text = text.replace(old, new, 1)
+
+          old = '''              data.get("infants"), data.get("budget"),
+              data.get("budget_scope"), data.get("phone"),
+'''
+          new = '''              data.get("infants"), data.get("budget"),
+              data.get("budget_scope"), data.get("source"),
+              data.get("vk_ref"), data.get("vk_platform"), data.get("phone"),
+'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected session values block')
+          text = text.replace(old, new, 1)
+
+          old = '''                people, hotel_query, kids, kids_ages, infants, budget, budget_scope, phone,
+                needs_consultation, selected_tour, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+'''
+          new = '''                people, hotel_query, kids, kids_ages, infants, budget, budget_scope,
+                source, vk_ref, vk_platform, phone,
+                needs_consultation, selected_tour, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected lead insert block')
+          text = text.replace(old, new, 1)
+
+          old = '''                info.get("budget"),
+                info.get("budget_scope"),
+                phone,
+'''
+          new = '''                info.get("budget"),
+                info.get("budget_scope"),
+                info.get("source"),
+                info.get("vk_ref"),
+                info.get("vk_platform"),
+                phone,
+'''
+          if text.count(old) != 1:
+              raise SystemExit('unexpected lead values block')
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_vk_bot.py')
+          tests = test_path.read_text(encoding='utf-8')
+          marker = '\n\ndef test_validate_people():\n'
+          addition = '''\n\ndef test_miniapp_attribution_survives_session_and_lead():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    raw = dict(type="trip_request", version=2, destination="Таиланд", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True)
+    info = validate_vk_trip(raw)
+    info.update(vk_ref="community_messages", vk_platform="desktop_web")
+
+    bot._save_miniapp_draft(43, info)
+    saved = bot.get_session(43)
+    assert saved["source"] == "vk_mini_app"
+    assert saved["vk_ref"] == "community_messages"
+    assert saved["vk_platform"] == "desktop_web"
+
+    bot.save_lead(43, saved, "vk:43")
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT source, vk_ref, vk_platform FROM leads WHERE chat_id=43"
+        ).fetchone()
+    assert tuple(row) == ("vk_mini_app", "community_messages", "desktop_web")
+'''
+          if tests.count(marker) != 1:
+              raise SystemExit('unexpected test insertion marker')
+          tests = tests.replace(marker, addition + marker, 1)
+          test_path.write_text(tests, encoding='utf-8')
+          PY
+
+          git diff --check
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run focused tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          pytest -q tests/test_vk_bot.py tests/test_vk_miniapp.py tests/test_vk_miniapp_attribution.py
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vk_bot.py tests/test_vk_bot.py
+          git commit -m "Persist VK Mini App attribution"
+          git push origin HEAD:feat/vk-attribution-persistence
