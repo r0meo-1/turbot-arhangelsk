@@ -445,6 +445,9 @@ def init_db() -> None:
                 infants INTEGER,
                 budget INTEGER,
                 budget_scope TEXT,
+                source TEXT,
+                vk_ref TEXT,
+                vk_platform TEXT,
                 phone TEXT,
                 needs_consultation INTEGER NOT NULL DEFAULT 0,
                 selected_tour TEXT,
@@ -468,6 +471,9 @@ def init_db() -> None:
                 infants INTEGER,
                 budget INTEGER,
                 budget_scope TEXT,
+                source TEXT,
+                vk_ref TEXT,
+                vk_platform TEXT,
                 phone TEXT NOT NULL,
                 needs_consultation INTEGER NOT NULL DEFAULT 0,
                 selected_tour TEXT,
@@ -499,6 +505,9 @@ def init_db() -> None:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN selected_tour TEXT")
             if "budget_scope" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN budget_scope TEXT")
+            for _c in ("source", "vk_ref", "vk_platform"):
+                if _c not in _cols:
+                    cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("PRAGMA journal_mode=WAL")
@@ -528,9 +537,10 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
             INSERT INTO sessions (chat_id, state, destination, origin, dates, nights,
                                   dates_are_trip, people,
                                   hotel_query,
-                                  kids, kids_ages, infants, budget, budget_scope, phone,
+                                  kids, kids_ages, infants, budget, budget_scope,
+                                  source, vk_ref, vk_platform, phone,
                                   needs_consultation, selected_tour, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
@@ -540,6 +550,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 kids=excluded.kids, kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
                 budget=excluded.budget, budget_scope=excluded.budget_scope,
+                source=excluded.source, vk_ref=excluded.vk_ref,
+                vk_platform=excluded.vk_platform,
                 phone=excluded.phone,
                 needs_consultation=excluded.needs_consultation,
                 selected_tour=excluded.selected_tour,
@@ -551,7 +563,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
               data.get("people"), data.get("hotel_query"),
               data.get("kids"), _ages_to_db(data.get("kids_ages")),
               data.get("infants"), data.get("budget"),
-              data.get("budget_scope"), data.get("phone"),
+              data.get("budget_scope"), data.get("source"),
+              data.get("vk_ref"), data.get("vk_platform"), data.get("phone"),
               int(bool(data.get("needs_consultation"))),
               _tour_to_db(data.get("selected_tour")),
               data.get("updated_at", now)))
@@ -600,9 +613,10 @@ def save_lead(
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates, nights,
                 dates_are_trip,
-                people, hotel_query, kids, kids_ages, infants, budget, budget_scope, phone,
+                people, hotel_query, kids, kids_ages, infants, budget, budget_scope,
+                source, vk_ref, vk_platform, phone,
                 needs_consultation, selected_tour, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -619,6 +633,9 @@ def save_lead(
                 info.get("infants"),
                 info.get("budget"),
                 info.get("budget_scope"),
+                info.get("source"),
+                info.get("vk_ref"),
+                info.get("vk_platform"),
                 phone,
                 int(bool(info.get("needs_consultation"))),
                 _tour_to_db(info.get("selected_tour")),

@@ -109,6 +109,30 @@ def test_miniapp_persists_review_without_lead_or_messages(monkeypatch):
     assert reviews == [42]
 
 
+def test_miniapp_attribution_survives_session_and_lead():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    raw = dict(type="trip_request", version=2, destination="Таиланд", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True)
+    info = validate_vk_trip(raw)
+    info.update(vk_ref="community_messages", vk_platform="desktop_web")
+
+    bot._save_miniapp_draft(43, info)
+    saved = bot.get_session(43)
+    assert saved["source"] == "vk_mini_app"
+    assert saved["vk_ref"] == "community_messages"
+    assert saved["vk_platform"] == "desktop_web"
+
+    bot.save_lead(43, saved, "vk:43")
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT source, vk_ref, vk_platform FROM leads WHERE chat_id=43"
+        ).fetchone()
+    assert tuple(row) == ("vk_mini_app", "community_messages", "desktop_web")
+
+
 def test_validate_people():
     assert bot.validate_people("3") == (True, "3")
     assert bot.validate_people("5+") == (True, "5+")
