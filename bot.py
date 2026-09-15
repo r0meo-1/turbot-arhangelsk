@@ -291,6 +291,11 @@ try:
 except (ValueError, TypeError):
     MDT_REMINDER_DAYS = 1
 MDT_REMINDER_TEXT = os.getenv("MDT_REMINDER_TEXT", "Позвонить по заявке с Telegram-бота")
+MDT_RETRY_ENABLED = os.getenv("MDT_RETRY_ENABLED", "true").lower().strip() in ("1", "true", "yes")
+MDT_RETRY_POLL_SECONDS = max(5, _env_int("MDT_RETRY_POLL_SECONDS", 60))
+MDT_RETRY_BASE_SECONDS = max(5, _env_int("MDT_RETRY_BASE_SECONDS", 60))
+MDT_RETRY_MAX_SECONDS = max(MDT_RETRY_BASE_SECONDS, _env_int("MDT_RETRY_MAX_SECONDS", 3600))
+MDT_RETRY_BATCH_SIZE = max(1, _env_int("MDT_RETRY_BATCH_SIZE", 10))
 
 if MDT_MODE not in ("lead", "preorder", "both"):
     logger.warning("MDT_MODE '%s' is unknown, defaulting to 'lead'", MDT_MODE)
@@ -645,6 +650,21 @@ def init_db() -> None:
         cur.execute("PRAGMA table_info(sessions)")
         if "review_token" not in {row[1] for row in cur.fetchall()}:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
+        cur.execute("PRAGMA table_info(leads)")
+        _lead_cols = {row[1] for row in cur.fetchall()}
+        if "mdt_status" not in _lead_cols:
+            cur.execute("ALTER TABLE leads ADD COLUMN mdt_status TEXT")
+        if "mdt_attempts" not in _lead_cols:
+            cur.execute("ALTER TABLE leads ADD COLUMN mdt_attempts INTEGER NOT NULL DEFAULT 0")
+        if "mdt_next_retry_at" not in _lead_cols:
+            cur.execute("ALTER TABLE leads ADD COLUMN mdt_next_retry_at INTEGER")
+        if "mdt_synced_at" not in _lead_cols:
+            cur.execute("ALTER TABLE leads ADD COLUMN mdt_synced_at INTEGER")
+        if "mdt_payload" not in _lead_cols:
+            cur.execute("ALTER TABLE leads ADD COLUMN mdt_payload TEXT")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)"
+        )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)"
         )
@@ -1390,7 +1410,7 @@ def _mdt_create_lead(
     )
 
 
-def send_lead_to_mdt(
+def _send_lead_to_mdt_once(
     chat_id: int,
     info: Dict[str, Any],
     phone: str,
@@ -1408,6 +1428,172 @@ def send_lead_to_mdt(
         log=logger,
     )
 
+
+
+_mdt_delivery_lock = threading.Lock()
+
+
+def _mdt_retry_delay(attempts: int) -> int:
+    exponent = max(0, min(int(attempts) - 1, 16))
+    return min(MDT_RETRY_MAX_SECONDS, MDT_RETRY_BASE_SECONDS * (2 ** exponent))
+
+
+def _queue_mdt_lead(
+    lead_id: int,
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+) -> None:
+    if not (MDT_RETRY_ENABLED and MDT_ENABLED and MDT_MODE == "lead" and not DEMO_MODE):
+        return
+    payload = json.dumps(
+        {
+            "chat_id": chat_id,
+            "info": dict(info),
+            "phone": phone,
+            "client_name": client_name,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    now = int(time.time())
+    with _db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            UPDATE leads
+            SET mdt_status='pending', mdt_attempts=0,
+                mdt_next_retry_at=?, mdt_synced_at=NULL, mdt_payload=?
+            WHERE id=?
+            """,
+            (now, payload, int(lead_id)),
+        )
+
+
+def _record_mdt_attempt(lead_id: int, ok: bool) -> None:
+    now = int(time.time())
+    with _db_cursor(commit=True) as cur:
+        row = cur.execute(
+            "SELECT mdt_attempts FROM leads WHERE id=?", (int(lead_id),)
+        ).fetchone()
+        attempts = int(row["mdt_attempts"] or 0) + 1 if row else 1
+        if ok:
+            cur.execute(
+                """
+                UPDATE leads
+                SET mdt_status='synced', mdt_attempts=?,
+                    mdt_next_retry_at=NULL, mdt_synced_at=?
+                WHERE id=?
+                """,
+                (attempts, now, int(lead_id)),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE leads
+                SET mdt_status='pending', mdt_attempts=?,
+                    mdt_next_retry_at=?, mdt_synced_at=NULL
+                WHERE id=?
+                """,
+                (attempts, now + _mdt_retry_delay(attempts), int(lead_id)),
+            )
+
+
+def _attempt_mdt_delivery(
+    lead_id: int,
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+) -> bool:
+    with _mdt_delivery_lock:
+        try:
+            ok = bool(_send_lead_to_mdt_once(chat_id, info, phone, client_name))
+        except Exception as exc:
+            logger.warning("MDT delivery failed for Telegram lead %s: %s", lead_id, exc)
+            ok = False
+        _record_mdt_attempt(lead_id, ok)
+        return ok
+
+
+def send_lead_to_mdt(
+    chat_id: int,
+    info: Dict[str, Any],
+    phone: str,
+    client_name: Optional[str],
+) -> bool:
+    lead_id = info.get("_local_lead_id")
+    if (
+        lead_id
+        and MDT_RETRY_ENABLED
+        and MDT_ENABLED
+        and MDT_MODE == "lead"
+        and not DEMO_MODE
+    ):
+        return _attempt_mdt_delivery(int(lead_id), chat_id, info, phone, client_name)
+    return _send_lead_to_mdt_once(chat_id, info, phone, client_name)
+
+
+def _deliver_mdt_lead(lead_id: int) -> bool:
+    with _db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_payload FROM leads WHERE id=?", (int(lead_id),)
+        ).fetchone()
+    if not row or row["mdt_status"] == "synced" or not row["mdt_payload"]:
+        return True
+    try:
+        payload = json.loads(row["mdt_payload"])
+        info = dict(payload["info"])
+        info["_local_lead_id"] = int(lead_id)
+        info["_mdt_delivery_key"] = f"tg-lead-{int(lead_id)}"
+        return _attempt_mdt_delivery(
+            int(lead_id),
+            int(payload["chat_id"]),
+            info,
+            str(payload["phone"]),
+            payload.get("client_name"),
+        )
+    except Exception as exc:
+        logger.warning("Invalid MDT retry payload for Telegram lead %s: %s", lead_id, exc)
+        _record_mdt_attempt(int(lead_id), False)
+        return False
+
+
+def _retry_pending_mdt_once(now: Optional[int] = None) -> int:
+    if not (MDT_RETRY_ENABLED and MDT_ENABLED and MDT_MODE == "lead" and not DEMO_MODE):
+        return 0
+    current = int(time.time()) if now is None else int(now)
+    with _db_cursor() as cur:
+        rows = cur.execute(
+            """
+            SELECT id FROM leads
+            WHERE mdt_status='pending'
+              AND COALESCE(mdt_next_retry_at, 0) <= ?
+            ORDER BY id
+            LIMIT ?
+            """,
+            (current, MDT_RETRY_BATCH_SIZE),
+        ).fetchall()
+    synced = 0
+    for row in rows:
+        if _deliver_mdt_lead(int(row["id"])):
+            synced += 1
+    return synced
+
+
+def _start_mdt_retry_worker() -> None:
+    if not (MDT_RETRY_ENABLED and MDT_ENABLED and MDT_MODE == "lead" and not DEMO_MODE):
+        return
+
+    def _worker() -> None:
+        while True:
+            try:
+                _retry_pending_mdt_once()
+            except Exception:
+                logger.exception("Telegram MDT retry worker failed")
+            time.sleep(MDT_RETRY_POLL_SECONDS)
+
+    threading.Thread(target=_worker, daemon=True, name="mdt-retry").start()
 
 def _inline_btn(text: str, callback_data: str) -> Dict[str, Any]:
     return {"text": text, "callback_data": callback_data}
@@ -2968,6 +3154,8 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
 
     delivery_info = dict(info)
     delivery_info["_mdt_delivery_key"] = f"tg-lead-{lead_id}"
+    delivery_info["_local_lead_id"] = lead_id
+    _queue_mdt_lead(lead_id, chat_id, delivery_info, phone, client_name)
 
     _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
     # 2. Notify bot creator / admins in Telegram (sync — ops must see it)
@@ -3588,6 +3776,7 @@ load_state()
 _start_timeout_worker()
 _start_followup_worker()
 _start_retention_worker()
+_start_mdt_retry_worker()
 
 logger.info(
     "TurBot loaded (port=%s, admin_set=%s, groq_set=%s, webhook_secret_set=%s)",
