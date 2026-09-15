@@ -95,6 +95,9 @@ PY
 
   rm -f "$payload"
 
+  chown turbot:turbot /opt/turbot/.env
+  chmod 600 /opt/turbot/.env
+
   systemctl restart vk-turbot
 
   for _ in {1..10}; do
