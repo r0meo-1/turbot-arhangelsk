@@ -5,9 +5,12 @@ import threading
 import time
 from urllib.parse import urlencode
 
+import pytest
 from flask import Flask
-from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
+
+playwright_sync = pytest.importorskip("playwright.sync_api", reason="VK Mini App browser E2E runs in Edge Bot CI")
+sync_playwright = playwright_sync.sync_playwright
 
 from shared.vk_miniapp import create_blueprint
 
