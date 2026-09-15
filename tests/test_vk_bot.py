@@ -43,6 +43,7 @@ def clean_state(monkeypatch):
     bot.all_users.clear()
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions")
+        cur.execute("DELETE FROM miniapp_drafts")
         cur.execute("DELETE FROM users")
         cur.execute("DELETE FROM leads")
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: None)
@@ -1366,3 +1367,59 @@ def test_vk_back_from_selected_tour_returns_to_results(client, monkeypatch):
     assert "selected_tour" not in bot.user_data[user_id]
     assert bot.user_data[user_id]["state"] == bot.STATE_REVIEW
     assert shown == [(user_id, 2)]
+
+
+def test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, monkeypatch):
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    user_id = 9962
+    raw = dict(
+        type="trip_request", version=2, destination="Шри-Ланка",
+        departure="Архангельск",
+        date=(date.today() + timedelta(days=30)).isoformat(),
+        nights=10, adults=2, children=0, childrenAges=[],
+        budgetMaxRub=270000, consent=True,
+    )
+    bot._save_miniapp_draft(user_id, validate_vk_trip(raw))
+
+    corrupted = dict(bot.user_data[user_id])
+    corrupted["state"] = bot.STATE_DESTINATION
+    corrupted["destination"] = bot.DEST_HOT_TOURS_LABEL
+    bot.user_data[user_id] = corrupted
+    bot.set_session(user_id, corrupted)
+
+    reviews = []
+    monkeypatch.setattr(bot, "_ask_review", lambda uid: reviews.append(dict(bot.user_data[uid])))
+    response = _post(client, user_id, "Проверить заявку")
+
+    assert response.status_code == 200
+    restored = bot.user_data[user_id]
+    assert restored["state"] == bot.STATE_REVIEW
+    assert restored["destination"] == "Шри-Ланка"
+    assert restored["origin"] == "Архангельск"
+    assert str(restored["nights"]) == "10"
+    assert restored["budget"] == 270000
+    assert reviews and reviews[0]["destination"] == "Шри-Ланка"
+    assert bot.get_session(user_id)["destination"] == "Шри-Ланка"
+
+
+def test_miniapp_snapshot_is_removed_on_cancel():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    user_id = 9963
+    raw = dict(
+        type="trip_request", version=2, destination="Шри-Ланка",
+        departure="Архангельск",
+        date=(date.today() + timedelta(days=30)).isoformat(),
+        nights=10, adults=2, children=0, childrenAges=[],
+        budgetMaxRub=270000, consent=True,
+    )
+    bot._save_miniapp_draft(user_id, validate_vk_trip(raw))
+    assert bot._load_miniapp_snapshot(user_id) is not None
+
+    bot.handle_cancel(user_id)
+
+    assert bot._load_miniapp_snapshot(user_id) is None
+    assert bot.get_session(user_id) is None
