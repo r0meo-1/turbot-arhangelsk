@@ -5,6 +5,28 @@
   const params = new URLSearchParams(launchParams);
   let inVK = params.has('sign') && params.has('vk_app_id');
   const bridge = window.vkBridge;
+
+  let effectiveLaunchParams = launchParams;
+
+  if (!inVK && bridge) {
+    try {
+      const bridgeParams = await bridge.send('VKWebAppGetLaunchParams');
+      const qp = new URLSearchParams();
+
+      Object.entries(bridgeParams || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          qp.set(key, String(value));
+        }
+      });
+
+      effectiveLaunchParams = qp.toString();
+
+      const effectiveParams = new URLSearchParams(effectiveLaunchParams);
+      inVK = effectiveParams.has('sign') && effectiveParams.has('vk_app_id');
+    } catch (_) {
+      effectiveLaunchParams = launchParams;
+    }
+  }
   let payload;
   const money = (n) => `${Number(n).toLocaleString('ru-RU')} ₽`;
   const localDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
