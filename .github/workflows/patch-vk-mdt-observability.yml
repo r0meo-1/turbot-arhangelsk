@@ -1,0 +1,31 @@
+name: Patch VK MDT observability
+
+on:
+  push:
+    branches: [feat/vk-mdt-observability]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: feat/vk-mdt-observability
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - name: Apply patch and test
+        run: |
+          python scripts/patch_vk_mdt_observability.py
+          pytest -q tests/test_vk_bot.py
+          bash -n deploy/verify-mdt.sh
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add vk_bot.py deploy/verify-mdt.sh tests/test_vk_bot.py
+          git diff --cached --check
+          git commit -m "Persist VK MDT preorder delivery status"
+          git push origin HEAD:feat/vk-mdt-observability
