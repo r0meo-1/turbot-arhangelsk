@@ -1,0 +1,50 @@
+name: Patch VK selected tour back
+
+on:
+  push:
+    branches: [fix/vk-selected-tour-back]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/vk-selected-tour-back
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Fix selected-tour back navigation
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("vk_bot.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''    if text == BACK_BUTTON_TEXT:\n        if user_id in user_data:\n            _go_back(user_id)\n        else:\n            send_message(user_id, HINT_START)\n        return\n'''
+          new = '''    if text == BACK_BUTTON_TEXT:\n        live = user_data.get(user_id)\n        if (\n            live\n            and live.get("state") == STATE_REVIEW\n            and live.get("selected_tour")\n            and live.get("_tour_offers")\n        ):\n            page = int(live.get("_tour_page") or 0)\n            live.pop("selected_tour", None)\n            _mark_dirty(user_id, user=False)\n            _send_tour_results_page(user_id, page)\n        elif user_id in user_data:\n            _go_back(user_id)\n        else:\n            send_message(user_id, HINT_START)\n        return\n'''
+          if old not in text:
+              raise SystemExit("VK back handler anchor not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          test_path = Path("tests/test_vk_bot.py")
+          tests = test_path.read_text(encoding="utf-8")
+          marker = "test_vk_back_from_selected_tour_returns_to_results"
+          if marker not in tests:
+              addition = '''\n\ndef test_vk_back_from_selected_tour_returns_to_results(monkeypatch):\n    user_id = 9961\n    offer = {"hotel": "Akka Alinda Hotel", "tour_id": "tr-1"}\n    bot.user_data[user_id] = {\n        "state": bot.STATE_REVIEW,\n        "destination": "🔥 Горящие туры",\n        "selected_tour": dict(offer),\n        "_tour_offers": [dict(offer)],\n        "_tour_page": 2,\n    }\n    shown = []\n    monkeypatch.setattr(\n        bot, "_send_tour_results_page",\n        lambda uid, page: shown.append((uid, page)),\n    )\n\n    bot.handle_dialog(user_id, bot.BACK_BUTTON_TEXT, {})\n\n    assert "selected_tour" not in bot.user_data[user_id]\n    assert bot.user_data[user_id]["state"] == bot.STATE_REVIEW\n    assert shown == [(user_id, 2)]\n'''
+              test_path.write_text(tests + addition, encoding="utf-8")
+          PY
+          pytest -q tests/test_vk_bot.py -k 'back_from_selected_tour_returns_to_results'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vk_bot.py tests/test_vk_bot.py
+          git commit -m "Return from selected VK tour to results"
+          git push origin HEAD:fix/vk-selected-tour-back
