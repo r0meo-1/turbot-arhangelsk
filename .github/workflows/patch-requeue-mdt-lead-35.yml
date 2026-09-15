@@ -1,0 +1,34 @@
+name: Patch false-synced MDT lead repair
+
+on:
+  push:
+    branches: [fix/requeue-mdt-lead-35]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/requeue-mdt-lead-35
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Apply repair and test
+        run: |
+          set -Eeuo pipefail
+          python scripts/patch_requeue_mdt_lead_35.py
+          pytest -q tests/test_vk_bot.py -k 'false_synced_mdt_lead_35_is_requeued_once'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vk_bot.py tests/test_vk_bot.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "Requeue false-synced MDT lead once"
+          git push origin HEAD:fix/requeue-mdt-lead-35
