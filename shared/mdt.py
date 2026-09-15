@@ -299,9 +299,13 @@ def create_lead(
     compact_contact = re.sub(r"[\s().-]+", "", raw_contact)
     is_phone = bool(re.fullmatch(r"\+?\d{7,15}", compact_contact))
 
+    is_vk = settings.name_prefix.strip().casefold() == "vk"
     params = {
         "name": client_name or f"{settings.name_prefix} {chat_id}",
-        "phone": raw_contact if is_phone else "",
+        # MDT's live add-lead endpoint still expects a non-empty contact in the
+        # phone slot. The VK chat descriptor is intentionally preserved here;
+        # `content` and `url` below keep the same contact machine-readable.
+        "phone": raw_contact if (is_phone or is_vk) else "",
         "email": "",
         "source": settings.source,
         "fields": fields,
@@ -314,7 +318,7 @@ def create_lead(
         # Messenger contacts are not phone numbers. Sending e.g. "VK (chat id
         # ...)" in `phone` can be rejected by MDT while still returning JSON.
         params["content"] = f"Контакт: {raw_contact}"
-    if settings.name_prefix.strip().casefold() == "vk":
+    if is_vk:
         params["url"] = f"https://vk.com/id{chat_id}"
 
     result = request_fn("add-lead", params)

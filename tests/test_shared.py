@@ -207,7 +207,7 @@ def test_create_lead_rejects_error_json_without_id():
     assert ok is False
 
 
-def test_create_lead_maps_vk_contact_outside_phone_field():
+def test_create_lead_keeps_vk_contact_for_mdt_and_metadata():
     captured = {}
 
     def req(method, params):
@@ -237,7 +237,7 @@ def test_create_lead_maps_vk_contact_outside_phone_field():
     params = captured["params"]
     assert params["name"] == "Тест VK"
     assert params["source"] == "VK Bot"
-    assert params["phone"] == ""
+    assert params["phone"] == "VK (чат id 424242) · Тест"
     fields = {field["name"]: field["values"][0] for field in params["fields"]}
     assert fields["Вылет"] == "Архангельск"
     assert params["external_lead_id"] == "vk-lead-35"

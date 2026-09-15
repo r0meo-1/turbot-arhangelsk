@@ -1472,3 +1472,48 @@ def test_false_synced_mdt_lead_35_is_requeued_once(tmp_path, monkeypatch):
     with bot._db_cursor() as cur:
         row = cur.execute("SELECT mdt_status FROM leads WHERE id=35").fetchone()
     assert row["mdt_status"] == "synced"
+
+
+
+def test_confirmed_mdt_lead_35_stops_retry_once(tmp_path, monkeypatch):
+    db_path = tmp_path / "confirm-existing.sqlite"
+    monkeypatch.setattr(bot, "DATABASE_PATH", str(db_path))
+    bot.init_db()
+
+    confirm_name = "20260915_confirm_existing_mdt_lead_35"
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM maintenance_migrations WHERE name = ?", (confirm_name,))
+        cur.execute(
+            """
+            INSERT INTO leads (
+                id, chat_id, phone, mdt_status, mdt_attempts,
+                mdt_next_retry_at, mdt_synced_at, created_at
+            ) VALUES (35, 424242, 'VK test', 'pending', 4, 123, NULL, 123)
+            """
+        )
+
+    bot.init_db()
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at "
+            "FROM leads WHERE id=35"
+        ).fetchone()
+        marker_row = cur.execute(
+            "SELECT applied_at FROM maintenance_migrations WHERE name = ?", (confirm_name,)
+        ).fetchone()
+
+    assert row["mdt_status"] == "synced"
+    assert row["mdt_attempts"] == 4
+    assert row["mdt_next_retry_at"] is None
+    assert row["mdt_synced_at"] is not None
+    assert marker_row is not None
+
+    # The marker makes this a one-time production repair.
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE leads SET mdt_status='pending', mdt_next_retry_at=123 WHERE id=35"
+        )
+    bot.init_db()
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT mdt_status FROM leads WHERE id=35").fetchone()
+    assert row["mdt_status"] == "pending"
