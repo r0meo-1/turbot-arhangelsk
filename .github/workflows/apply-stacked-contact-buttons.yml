@@ -18,22 +18,19 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           path = Path("bot.py")
-          text = path.read_text(encoding="utf-8")
-          start = text.index("def kb_contact_methods() -> str:")
-          end = text.index("\n\ndef ", start + 1)
-          block = text[start:end]
-          old = """        [
-            _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
-            _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
-        ],"""
-          new = """        [_inline_btn(BACK_BUTTON_TEXT, CB_BACK)],
-        [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],"""
-          if old not in block:
-              raise SystemExit("Target contact navigation row not found")
-          block = block.replace(old, new, 1)
-          path.write_text(text[:start] + block + text[end:], encoding="utf-8")
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          start = next(i for i, line in enumerate(lines) if line.startswith("def kb_contact_methods()"))
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("def "))
+          back = next(i for i in range(start, end) if "BACK_BUTTON_TEXT, CB_BACK" in lines[i])
+          if "CANCEL_BUTTON_TEXT, CB_CANCEL" not in lines[back + 1]:
+              raise SystemExit("Unexpected contact keyboard layout")
+          indent = lines[back][:len(lines[back]) - len(lines[back].lstrip())]
+          lines[back - 1:back + 3] = [
+              indent + "[_inline_btn(BACK_BUTTON_TEXT, CB_BACK)],\n",
+              indent + "[_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],\n",
+          ]
+          path.write_text("".join(lines), encoding="utf-8")
           PY
       - name: Commit change
         run: |
