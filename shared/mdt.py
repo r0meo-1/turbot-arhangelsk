@@ -271,7 +271,9 @@ def create_preorder(
     """Create temp tourist + preorder. Returns (preorder_id, tourist_id)."""
     log = log or logger
     name = client_name or f"{settings.name_prefix} {chat_id}"
-    manager_id = resolve_manager_id(settings, request_fn, log=log)
+    manager_id = None
+    if settings.manager_ids or settings.name_prefix.strip().casefold() == "vk":
+        manager_id = resolve_manager_id(settings, request_fn, log=log)
     tourist_id = add_tourist_temp(
         settings, name, phone, request_fn, log=log, manager_id=manager_id
     )
