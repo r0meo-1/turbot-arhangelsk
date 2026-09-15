@@ -99,9 +99,8 @@ def test_miniapp_persists_review_without_lead_or_messages(monkeypatch):
         assert cur.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0
         assert cur.execute("SELECT consent_at FROM users WHERE chat_id=42").fetchone()[0] > 0
     bot._save_miniapp_draft(42, validate_vk_trip(raw))
-    with pytest.raises(bot.MiniAppValidationError):
-        bot._save_miniapp_draft(42, validate_vk_trip(dict(raw, destination="Турция")))
-    assert bot.get_session(42)["destination"] == "Египет"
+    bot._save_miniapp_draft(42, validate_vk_trip(dict(raw, destination="Турция")))
+    assert bot.get_session(42)["destination"] == "Турция"
     # A real message in the existing chat resumes the existing review flow.
     reviews = []
     monkeypatch.setattr(bot, "_ask_review", lambda uid: reviews.append(uid))
@@ -151,7 +150,7 @@ def test_miniapp_draft_ignores_stale_memory_after_persistent_cancel():
     assert bot.get_session(44)["destination"] == "Шри-Ланка"
 
 
-def test_miniapp_draft_still_blocks_durable_active_chat_session():
+def test_miniapp_draft_replaces_durable_active_chat_session():
     from datetime import date, timedelta
     from shared.vk_miniapp import validate_vk_trip
 
@@ -162,9 +161,27 @@ def test_miniapp_draft_still_blocks_durable_active_chat_session():
     bot.set_session(45, active)
     bot.user_data.pop(45, None)
 
+    bot._save_miniapp_draft(45, validate_vk_trip(raw))
+
+    assert bot.user_data[45]["state"] == bot.STATE_REVIEW
+    assert bot.get_session(45)["destination"] == "Шри-Ланка"
+
+
+def test_miniapp_draft_blocks_only_while_completion_is_in_progress():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True)
+    active = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_REVIEW,
+                  _completing=True)
+    bot.user_data[46] = active
+    bot.set_session(46, active)
+
     with pytest.raises(bot.MiniAppValidationError):
-        bot._save_miniapp_draft(45, validate_vk_trip(raw))
-    assert bot.get_session(45)["destination"] == "Египет"
+        bot._save_miniapp_draft(46, validate_vk_trip(raw))
+    assert bot.get_session(46)["destination"] == "Египет"
 
 
 def test_validate_people():

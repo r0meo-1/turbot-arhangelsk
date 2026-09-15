@@ -145,7 +145,7 @@ def create_blueprint(save_draft, settings):
         try:
             save_draft(uid, info)
         except MiniAppValidationError:
-            return jsonify(ok=False, error="У вас уже есть подбор в чате. Завершите его или нажмите «Отмена», затем повторите."), 409
+            return jsonify(ok=False, error="Заявка уже отправляется. Подождите несколько секунд и повторите."), 409
         except Exception:
             return jsonify(ok=False, error="Не удалось сохранить параметры. Повторите попытку."), 500
         return jsonify(ok=True, state="review", groupId=group_id)
