@@ -122,6 +122,8 @@ git fetch --depth=1 origin "$branch"
 target=$(git rev-parse "origin/$branch")
 
 if [[ "$target" == "$previous" ]]; then
+  chmod +x "$repo/deploy/verify-vk-miniapp.sh"
+  "$repo/deploy/verify-vk-miniapp.sh"
   echo "TurBot already runs $target"
   exit 0
 fi
@@ -173,6 +175,8 @@ cp "$repo/deploy/turbot-deploy.sh" /root/turbot-deploy.sh 2>/dev/null || true
 
 for _ in {1..12}; do
   if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/health >/dev/null; then
+    chmod +x "$repo/deploy/verify-vk-miniapp.sh"
+    "$repo/deploy/verify-vk-miniapp.sh"
     print_telegram_username
     git rev-parse HEAD
     exit 0
