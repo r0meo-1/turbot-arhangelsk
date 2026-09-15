@@ -43,49 +43,44 @@ jobs:
               raise SystemExit(f"MDT import marker count={body.count(old_import)}")
           body = body.replace(old_import, new_import, 1)
 
-          test = r'''
-
-
-def test_create_lead_includes_selected_tour():
-    captured = {}
-
-    def req(method, params):
-        captured["method"] = method
-        captured["params"] = params
-        return {"id": 321}
-
-    settings = MDTSettings(enabled=True, mode="lead", source="VK")
-    ok = create_lead(
-        settings,
-        31771632,
-        {
-            "destination": "Таиланд",
-            "dates": "2026-10-15",
-            "nights": "10",
-            "people": "2",
-            "budget": 270000,
-            "budget_scope": "total",
-            "selected_tour": {
-                "hotel": "Mandarava Resort & Spa Karon Beach 5★",
-                "date": "2026-10-29",
-                "nights": 10,
-                "meal": "Завтраки",
-                "price": 155000,
-                "tour_id": "th-6",
-            },
-        },
-        "+70000000000",
-        "Тест VK",
-        request_fn=req,
-    )
-
-    assert ok is True
-    assert captured["method"] == "add-lead"
-    fields = {field["name"]: field["values"][0] for field in captured["params"]["fields"]}
-    assert "Mandarava Resort & Spa Karon Beach 5★" in fields["Выбранный тур"]
-    assert "155000 ₽" in fields["Выбранный тур"]
-    assert "ID th-6" in fields["Выбранный тур"]
-'''
+          test = (
+              '\n\ndef test_create_lead_includes_selected_tour():\n'
+              '    captured = {}\n\n'
+              '    def req(method, params):\n'
+              '        captured["method"] = method\n'
+              '        captured["params"] = params\n'
+              '        return {"id": 321}\n\n'
+              '    settings = MDTSettings(enabled=True, mode="lead", source="VK")\n'
+              '    ok = create_lead(\n'
+              '        settings,\n'
+              '        424242,\n'
+              '        {\n'
+              '            "destination": "Таиланд",\n'
+              '            "dates": "2026-10-15",\n'
+              '            "nights": "10",\n'
+              '            "people": "2",\n'
+              '            "budget": 270000,\n'
+              '            "budget_scope": "total",\n'
+              '            "selected_tour": {\n'
+              '                "hotel": "Mandarava Resort & Spa Karon Beach 5★",\n'
+              '                "date": "2026-10-29",\n'
+              '                "nights": 10,\n'
+              '                "meal": "Завтраки",\n'
+              '                "price": 155000,\n'
+              '                "tour_id": "th-6",\n'
+              '            },\n'
+              '        },\n'
+              '        "+70000000000",\n'
+              '        "Тест VK",\n'
+              '        request_fn=req,\n'
+              '    )\n\n'
+              '    assert ok is True\n'
+              '    assert captured["method"] == "add-lead"\n'
+              '    fields = {field["name"]: field["values"][0] for field in captured["params"]["fields"]}\n'
+              '    assert "Mandarava Resort & Spa Karon Beach 5★" in fields["Выбранный тур"]\n'
+              '    assert "155000 ₽" in fields["Выбранный тур"]\n'
+              '    assert "ID th-6" in fields["Выбранный тур"]\n'
+          )
           if "def test_create_lead_includes_selected_tour" not in body:
               body += test
           tests.write_text(body, encoding="utf-8")
