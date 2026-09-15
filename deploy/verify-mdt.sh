@@ -46,9 +46,12 @@ def print_outbox_summary() -> None:
                 "SELECT mdt_status AS status, COUNT(*) AS count FROM leads GROUP BY mdt_status"
             ).fetchall()
         }
+        columns = {str(row['name']) for row in conn.execute("PRAGMA table_info(leads)").fetchall()}
+        preorder_expr = "mdt_preorder_id" if "mdt_preorder_id" in columns else "NULL AS mdt_preorder_id"
+        tourist_expr = "mdt_tourist_id" if "mdt_tourist_id" in columns else "NULL AS mdt_tourist_id"
         latest = conn.execute(
-            "SELECT id, mdt_status, mdt_attempts, mdt_next_retry_at, created_at "
-            "FROM leads ORDER BY id DESC LIMIT 1"
+            "SELECT id, mdt_status, mdt_attempts, mdt_next_retry_at, created_at, "
+            f"{preorder_expr}, {tourist_expr} FROM leads ORDER BY id DESC LIMIT 1"
         ).fetchone()
         counts_text = ','.join(f'{key}:{counts[key]}' for key in sorted(counts)) or 'none'
         if latest is None:
@@ -58,12 +61,16 @@ def print_outbox_summary() -> None:
         retry_at = latest['mdt_next_retry_at']
         retry_due = 'n/a' if retry_at is None else ('yes' if int(retry_at) <= now else 'no')
         age = max(0, now - int(latest['created_at'] or now))
+        preorder_id = latest['mdt_preorder_id']
+        tourist_id = latest['mdt_tourist_id']
         print(
             'MDT outbox: '
             f'counts={counts_text} '
             f'latest_id={int(latest["id"])} '
             f'latest_status={latest["mdt_status"] or "unset"} '
             f'latest_attempts={int(latest["mdt_attempts"] or 0)} '
+            f'preorder_id={int(preorder_id) if preorder_id is not None else "n/a"} '
+            f'tourist_id={int(tourist_id) if tourist_id is not None else "n/a"} '
             f'retry_due={retry_due} '
             f'age_seconds={age}'
         )
