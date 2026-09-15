@@ -16,7 +16,7 @@ apply_stdin_config() {
     return 0
   fi
 
-  if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" ]]; then
+  if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" && "$marker" != "TURBOT_DEPLOY_CONFIG_V2" ]]; then
     echo "Unsupported deploy payload" >&2
     return 1
   fi
@@ -38,12 +38,22 @@ from pathlib import Path
 payload_path = Path(sys.argv[1])
 lines = payload_path.read_text(encoding="utf-8").splitlines()
 
-if len(lines) != 3 or lines[0] != "TURBOT_DEPLOY_CONFIG_V1":
+if not lines or lines[0] not in {"TURBOT_DEPLOY_CONFIG_V1", "TURBOT_DEPLOY_CONFIG_V2"}:
+    raise SystemExit("Invalid deploy payload")
+
+marker = lines[0]
+expected_lines = 3 if marker == "TURBOT_DEPLOY_CONFIG_V1" else 4
+if len(lines) != expected_lines:
     raise SystemExit("Invalid deploy payload")
 
 try:
     app_id = base64.b64decode(lines[1], validate=True).decode("utf-8")
     secret = base64.b64decode(lines[2], validate=True).decode("utf-8")
+    mdt_api_key = (
+        base64.b64decode(lines[3], validate=True).decode("utf-8")
+        if marker == "TURBOT_DEPLOY_CONFIG_V2"
+        else ""
+    )
 except Exception:
     raise SystemExit("Invalid encoded deploy payload")
 
@@ -51,15 +61,30 @@ if not app_id.isdigit():
     raise SystemExit("Invalid VK Mini App ID")
 if not secret or "\n" in secret or "\r" in secret:
     raise SystemExit("Invalid VK Mini App secret")
+if marker == "TURBOT_DEPLOY_CONFIG_V2" and (
+    not mdt_api_key or "\n" in mdt_api_key or "\r" in mdt_api_key
+):
+    raise SystemExit("Invalid MDT API key")
 
 env_path = Path("/opt/turbot/.env")
 if not env_path.exists():
     raise SystemExit("Server .env not found")
 
+def quote_env(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
 values = {
     "VK_MINI_APP_ID": app_id,
-    "VK_MINI_APP_SECRET": '"' + secret.replace("\\", "\\\\").replace('"', '\\"') + '"',
+    "VK_MINI_APP_SECRET": quote_env(secret),
 }
+if marker == "TURBOT_DEPLOY_CONFIG_V2":
+    values.update(
+        {
+            "MDT_API_KEY": quote_env(mdt_api_key),
+            "MDT_ENABLED": "true",
+            "MDT_MODE": "lead",
+        }
+    )
 
 src = env_path.read_text(encoding="utf-8").splitlines()
 out = []
@@ -87,6 +112,8 @@ os.chmod(tmp, 0o600)
 os.replace(tmp, env_path)
 
 print("VK Mini App configuration installed")
+if marker == "TURBOT_DEPLOY_CONFIG_V2":
+    print("MDT production configuration installed")
 PY
   then
     rm -f "$payload"
@@ -98,20 +125,23 @@ PY
   chown turbot:turbot /opt/turbot/.env
   chmod 600 /opt/turbot/.env
 
+  systemctl restart turbot
   systemctl restart vk-turbot
 
   for _ in {1..10}; do
-    if curl --fail --silent --max-time 3 http://127.0.0.1:5100/vk/health >/dev/null; then
-      echo "VK Mini App service healthy"
+    if curl --fail --silent --max-time 3 http://127.0.0.1:8000/health >/dev/null \
+      && curl --fail --silent --max-time 3 http://127.0.0.1:5100/vk/health >/dev/null; then
+      echo "TurBot and VK Mini App services healthy"
       return 0
     fi
     sleep 1
   done
 
-  echo "VK service did not become healthy" >&2
+  echo "TurBot services did not become healthy after config update" >&2
 
+  systemctl status turbot --no-pager -l || true
   systemctl status vk-turbot --no-pager -l || true
-
+  journalctl -u turbot -n 80 --no-pager || true
   journalctl -u vk-turbot -n 80 --no-pager || true
   return 1
 }
