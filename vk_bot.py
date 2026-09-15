@@ -153,7 +153,7 @@ else:
 MDT_ENABLED    = os.getenv("MDT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
 MDT_ACCOUNT    = os.getenv("MDT_ACCOUNT", "")
 MDT_API_KEY    = os.getenv("MDT_API_KEY", "")
-MDT_SOURCE     = os.getenv("MDT_SOURCE", "VK Bot")
+MDT_SOURCE     = os.getenv("VK_MDT_SOURCE", "VK Bot").strip() or "VK Bot"
 MDT_BASE_URL   = os.getenv("MDT_BASE_URL", "")
 MDT_MODE       = os.getenv("MDT_MODE", "lead").lower().strip()
 MDT_NOTIFY_MANAGERS = os.getenv("MDT_NOTIFY_MANAGERS", "false").lower().strip() in ("1", "true", "yes")
@@ -1290,7 +1290,7 @@ def _mdt_settings() -> mdt_shared.MDTSettings:
         enabled=MDT_ENABLED,
         account=MDT_ACCOUNT,
         api_key=MDT_API_KEY,
-        source=MDT_SOURCE,
+        source=(os.getenv("VK_MDT_SOURCE", "VK Bot").strip() or "VK Bot"),
         base_url=MDT_BASE_URL,
         mode=MDT_MODE,
         notify_managers=MDT_NOTIFY_MANAGERS,
