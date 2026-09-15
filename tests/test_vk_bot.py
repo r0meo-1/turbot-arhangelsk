@@ -34,6 +34,7 @@ import pytest
 # настоящая: проверяется как раз то, что она подставляет клавиатуру по
 # состоянию. Ссылка берётся до подмены.
 _REAL_SEND_MESSAGE = bot.send_message
+_REAL_SEND_LEAD_TO_MDT = bot.send_lead_to_mdt
 
 
 @pytest.fixture(autouse=True)
@@ -1327,6 +1328,7 @@ def test_mdt_delivery_key_is_in_add_lead_fields(monkeypatch):
     monkeypatch.setattr(bot, "MDT_API_KEY", "test-key")
     monkeypatch.setattr(bot, "MDT_BASE_URL", "https://example.invalid")
     calls = []
+    monkeypatch.setattr(bot, "send_lead_to_mdt", _REAL_SEND_LEAD_TO_MDT)
     monkeypatch.setattr(bot, "_mdt_request", lambda method, params: calls.append((method, params)) or {"id": 1})
     assert bot.send_lead_to_mdt(42, {"destination": "Таиланд", "_mdt_delivery_key": "vk-lead-123"}, "vk:42", "Роман") is True
     assert calls[0][0] == "add-lead"
