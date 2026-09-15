@@ -1,0 +1,54 @@
+name: Apply stacked Telegram contact buttons
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-stacked-contact-buttons.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Stack contact buttons
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("bot.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''def kb_contact_methods() -> str:
+    """Inline: how the manager should reach the client."""
+    return inline_keyboard([
+        [_inline_btn(CONTACT_TG_TEXT, CB_CONTACT_TG)],
+        [_inline_btn(CONTACT_PHONE_TEXT, CB_CONTACT_PHONE)],
+        [_inline_btn(CONTACT_VK_TEXT, CB_CONTACT_VK)],
+        [
+            _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+            _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+        ],
+    ])
+'''
+          new = '''def kb_contact_methods() -> str:
+    """Inline: stacked contact choices and navigation for easier tapping."""
+    return inline_keyboard([
+        [_inline_btn(CONTACT_TG_TEXT, CB_CONTACT_TG)],
+        [_inline_btn(CONTACT_PHONE_TEXT, CB_CONTACT_PHONE)],
+        [_inline_btn(CONTACT_VK_TEXT, CB_CONTACT_VK)],
+        [_inline_btn(BACK_BUTTON_TEXT, CB_BACK)],
+        [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],
+    ])
+'''
+          if old not in text:
+              raise SystemExit("Target kb_contact_methods block not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+      - name: Commit change
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bot.py
+          git commit -m "Stack Telegram contact buttons"
+          git push origin HEAD:main
