@@ -1086,7 +1086,13 @@ def get_hot_tours(
     if any(k in dest_clean for k in ("пхукет", "паттайя", "краби", "самуи")):
         return catalog["таиланд"][:limit]
 
-    # Global curated mix for hot deals / general search
+    # An explicit destination must never fall back to unrelated countries.
+    # If live Tourvisor returned no offers and the curated catalog does not
+    # know this destination, let the caller show the honest no-results state.
+    if dest_clean:
+        return []
+
+    # Global curated mix is only for destination-free hot deals/general browse.
     all_mixed: List[TourOffer] = [
         catalog["турция"][0],
         catalog["египет"][0],
