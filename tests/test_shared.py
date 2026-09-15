@@ -221,6 +221,7 @@ def test_create_lead_maps_vk_contact_outside_phone_field():
         424242,
         {
             "destination": "Шри-Ланка",
+            "origin": "Архангельск",
             "dates": "2026-10-15",
             "people": "2",
             "budget": 270000,
@@ -234,7 +235,11 @@ def test_create_lead_maps_vk_contact_outside_phone_field():
     assert ok is True
     assert captured["method"] == "add-lead"
     params = captured["params"]
+    assert params["name"] == "Тест VK"
+    assert params["source"] == "VK Bot"
     assert params["phone"] == ""
+    fields = {field["name"]: field["values"][0] for field in params["fields"]}
+    assert fields["Вылет"] == "Архангельск"
     assert params["external_lead_id"] == "vk-lead-35"
     assert params["url"] == "https://vk.com/id424242"
     assert params["content"] == "Контакт: VK (чат id 424242) · Тест"

@@ -266,6 +266,8 @@ def create_lead(
     fields = []
     if info.get("destination"):
         fields.append({"name": "Направление", "values": [info["destination"]]})
+    if info.get("origin"):
+        fields.append({"name": "Вылет", "values": [str(info["origin"])]})
     if info.get("dates"):
         fields.append({"name": "Даты", "values": [info["dates"]]})
     if info.get("nights"):
