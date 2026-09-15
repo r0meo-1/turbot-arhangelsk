@@ -22,7 +22,7 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
-def test_telegram_miniapp_browser_posts_v2_payload_and_closes():
+def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
     handler = partial(_QuietHandler, directory=str(MINIAPP_DIR))
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -37,6 +37,8 @@ def test_telegram_miniapp_browser_posts_v2_payload_and_closes():
             context.add_init_script(
                 f"""
                 window.__tgClosed = false;
+                window.__tgBackVisible = false;
+                window.__tgBackHandler = null;
                 window.Telegram = {{
                   WebApp: {{
                     initData: {json.dumps(INIT_DATA)},
@@ -50,6 +52,11 @@ def test_telegram_miniapp_browser_posts_v2_payload_and_closes():
                     setBackgroundColor() {{}},
                     close() {{ window.__tgClosed = true; }},
                     sendData(data) {{ window.__tgSendData = data; }},
+                    BackButton: {{
+                      show() {{ window.__tgBackVisible = true; }},
+                      hide() {{ window.__tgBackVisible = false; }},
+                      onClick(handler) {{ window.__tgBackHandler = handler; }}
+                    }},
                     HapticFeedback: {{
                       selectionChanged() {{}},
                       notificationOccurred() {{}}
@@ -82,11 +89,35 @@ def test_telegram_miniapp_browser_posts_v2_payload_and_closes():
             page.locator("#adults").fill("2")
             page.locator("#children").fill("1")
             page.locator("#children-ages input").fill("5")
-            page.locator("#budget").evaluate("el => { el.value = '270000'; el.dispatchEvent(new Event('input', {bubbles:true})); }")
+            page.locator("#budget").evaluate(
+                "el => { el.value = '270000'; el.dispatchEvent(new Event('input', {bubbles:true})); }"
+            )
             page.locator("#direct").check()
             page.locator("#consent").check()
             page.locator("#submit").click()
 
+            # Review is local only: no backend write and no WebView close yet.
+            page.locator("#review").wait_for(state="visible")
+            assert captured == []
+            assert page.evaluate("window.__tgClosed") is False
+            assert page.evaluate("window.__tgBackVisible") is True
+            review_text = page.locator("#summary").inner_text()
+            for expected in (
+                "Таиланд", "Архангельск", "10", "2", "5", "270 000", "только прямой"
+            ):
+                assert expected in review_text
+
+            # Edit must return to the form without discarding entered values.
+            page.locator("#edit").click()
+            page.locator("#trip-form").wait_for(state="visible")
+            assert page.locator("#departure").input_value() == "Архангельск"
+            assert page.locator("#children-ages input").input_value() == "5"
+            assert page.evaluate("window.__tgBackVisible") is False
+
+            # Re-open review and explicitly save.
+            page.locator("#submit").click()
+            page.locator("#review").wait_for(state="visible")
+            page.locator("#save").click()
             page.wait_for_function("window.__tgClosed === true")
             browser.close()
     finally:
