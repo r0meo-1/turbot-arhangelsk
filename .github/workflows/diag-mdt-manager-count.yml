@@ -1,0 +1,64 @@
+name: MDT manager count diagnostic
+
+on:
+  push:
+    branches: [diag/mdt-manager-count]
+
+permissions:
+  contents: read
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Count active MDT managers without exposing identities
+        env:
+          MDT_API_KEY: ${{ secrets.MDT_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          key = os.environ.get("MDT_API_KEY", "").strip()
+          if not key:
+              raise SystemExit("MDT_API_KEY secret is missing")
+
+          params = {
+              "count": 100,
+              "offset": 0,
+              "fields": ["id", "dismissed", "office_id"],
+          }
+          body = urllib.parse.urlencode({
+              "params": json.dumps(params, ensure_ascii=False),
+              "key": key,
+          }).encode("utf-8")
+          req = urllib.request.Request(
+              "https://apreltour.moidokumenti.ru/api/get-manager-list",
+              data=body,
+              method="POST",
+          )
+          with urllib.request.urlopen(req, timeout=20) as response:
+              payload = json.loads(response.read().decode("utf-8"))
+
+          data = payload.get("data", payload) if isinstance(payload, dict) else payload
+          if isinstance(data, dict):
+              rows = list(data.values())
+          elif isinstance(data, list):
+              rows = data
+          else:
+              rows = []
+
+          def dismissed(value):
+              if isinstance(value, str):
+                  return value.strip().lower() in {"1", "true", "yes", "y"}
+              return bool(value)
+
+          active = [row for row in rows if isinstance(row, dict) and not dismissed(row.get("dismissed"))]
+          offices = {str(row.get("office_id")) for row in active if row.get("office_id") not in (None, "")}
+          print(f"MDT manager diagnostic: total={len(rows)} active={len(active)} active_offices={len(offices)}")
+          PY
