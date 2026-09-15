@@ -73,6 +73,6 @@ def test_vk_miniapp_browser_roundtrip_to_signed_draft():
     uid, info = saved[0]
     assert uid == USER_ID
     assert info["destination"] == "Таиланд"
-    assert info["departure"] == "Архангельск"
+    assert info["origin"] == "Архангельск"
     assert info["source"] == "vk_mini_app"
     assert info["budget_scope"] == "total"
