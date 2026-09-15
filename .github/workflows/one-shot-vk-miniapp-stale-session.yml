@@ -1,0 +1,149 @@
+name: One-shot VK Mini App stale session patch
+
+on:
+  push:
+    branches: [fix/vk-miniapp-stale-session]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/vk-miniapp-stale-session
+
+      - name: Reconcile Mini App draft state with SQLite
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("vk_bot.py")
+          text = path.read_text(encoding="utf-8")
+          old = '''def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
+    """Persist a review draft; never send messages or create a lead here."""
+    _, info["kids"], info["infants"] = party_bands(info)
+    info["state"] = STATE_REVIEW
+    set_consent(user_id)
+    with _lock:
+        previous = user_data.get(user_id)
+        if previous:
+            keys = ("destination", "origin", "dates", "nights", "people", "kids_ages", "budget", "budget_scope")
+            if previous.get("state") == STATE_REVIEW and not previous.get("_completing") and all(previous.get(k) == info.get(k) for k in keys):
+                return
+            raise MiniAppValidationError("Active draft")
+        info["updated_at"] = int(time.time())
+        set_session(user_id, info)
+        user_data[user_id] = info
+'''
+          new = '''def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
+    """Persist a review draft; never send messages or create a lead here.
+
+    SQLite is the durable source of truth for whether a chat draft still
+    exists.  A cancellation deletes that row synchronously, so an in-memory
+    entry without a matching row is stale and must not block Mini App save.
+    """
+    _, info["kids"], info["infants"] = party_bands(info)
+    info["state"] = STATE_REVIEW
+    set_consent(user_id)
+    with _lock:
+        previous = user_data.get(user_id)
+        persisted = get_session(user_id)
+
+        if previous and persisted is None:
+            # The chat flow was cancelled (or otherwise deleted) in durable
+            # state.  Do not let a stale cache resurrect that cancelled draft.
+            user_data.pop(user_id, None)
+            previous = None
+
+        if previous:
+            keys = ("destination", "origin", "dates", "nights", "people", "kids_ages", "budget", "budget_scope")
+            if previous.get("state") == STATE_REVIEW and not previous.get("_completing") and all(previous.get(k) == info.get(k) for k in keys):
+                return
+            raise MiniAppValidationError("Active draft")
+
+        # A durable chat draft may exist even if this process has no cached
+        # copy (for example immediately after a restart).  Preserve the same
+        # no-overwrite guarantee in that direction too.
+        if persisted is not None:
+            raise MiniAppValidationError("Active draft")
+
+        info["updated_at"] = int(time.time())
+        set_session(user_id, info)
+        user_data[user_id] = info
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f"unexpected _save_miniapp_draft block count: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          test_path = Path("tests/test_vk_bot.py")
+          tests = test_path.read_text(encoding="utf-8")
+          marker = '''    assert bot.get_session(42)["destination"] == "Египет"
+    # A real message in the existing chat resumes the existing review flow.
+'''
+          addition = '''    assert bot.get_session(42)["destination"] == "Египет"
+    # A real message in the existing chat resumes the existing review flow.
+'''
+          if tests.count(marker) != 1:
+              raise SystemExit("unexpected Mini App test marker")
+
+          insert_marker = '''\n\ndef test_validate_people():\n'''
+          extra = '''\n\ndef test_miniapp_draft_ignores_stale_memory_after_persistent_cancel():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True)
+    stale = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_DESTINATION)
+    bot.user_data[44] = stale
+    bot.delete_session(44)
+
+    bot._save_miniapp_draft(44, validate_vk_trip(raw))
+
+    assert bot.user_data[44]["state"] == bot.STATE_REVIEW
+    assert bot.user_data[44]["destination"] == "Шри-Ланка"
+    assert bot.get_session(44)["destination"] == "Шри-Ланка"
+
+
+def test_miniapp_draft_still_blocks_durable_active_chat_session():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True)
+    active = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_DESTINATION)
+    bot.set_session(45, active)
+    bot.user_data.pop(45, None)
+
+    with pytest.raises(bot.MiniAppValidationError):
+        bot._save_miniapp_draft(45, validate_vk_trip(raw))
+    assert bot.get_session(45)["destination"] == "Египет"
+'''
+          if tests.count(insert_marker) != 1:
+              raise SystemExit("unexpected test insertion marker")
+          test_path.write_text(tests.replace(insert_marker, extra + insert_marker, 1), encoding="utf-8")
+          PY
+
+          git diff --check
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run focused tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -q tests/test_vk_bot.py tests/test_vk_miniapp.py tests/test_vk_miniapp_attribution.py
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vk_bot.py tests/test_vk_bot.py
+          git commit -m "Reconcile cancelled VK drafts with SQLite"
+          git push origin HEAD:fix/vk-miniapp-stale-session
