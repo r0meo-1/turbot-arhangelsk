@@ -1565,3 +1565,49 @@ def test_git_revision_never_raises(tmp_path):
     """Диагностика не имеет права ронять health-check."""
     from shared import version
     assert version.git_revision(str(tmp_path)) == "unknown"
+
+
+def test_telegram_completion_passes_local_delivery_key_to_mdt(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        bot,
+        "_post_completion_side_effects",
+        lambda chat_id, info, phone, client_name: captured.update(
+            chat_id=chat_id, info=dict(info), phone=phone, client_name=client_name
+        ),
+    )
+    monkeypatch.setattr(bot, "_confirm_to_user", lambda *a, **k: None)
+    monkeypatch.setattr(bot, "_notify_admin", lambda *a, **k: None)
+
+    chat_id = 7301
+    bot.user_data[chat_id] = {
+        "state": bot.STATE_REVIEW,
+        "review_token": "delivery-key-token",
+        "destination": "Шри-Ланка",
+        "origin": "Москва",
+        "dates": "2026-10-16",
+        "nights": "10",
+        "people": "2",
+        "kids": 0,
+        "kids_ages": [],
+        "infants": 0,
+        "budget": 270000,
+        "budget_scope": "per_person",
+        "direct_only": True,
+        "phone": "Telegram @tester",
+    }
+
+    bot.handle_completion(
+        chat_id,
+        "Telegram @tester",
+        {"from": {"first_name": "Roman", "username": "tester"}},
+        review_token="delivery-key-token",
+    )
+
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT id FROM leads WHERE chat_id = ?", (chat_id,))
+        lead_id = cur.fetchone()[0]
+
+    assert captured["info"]["_mdt_delivery_key"] == f"tg-lead-{lead_id}"
+    assert captured["chat_id"] == chat_id
+    assert captured["phone"] == "Telegram @tester"
