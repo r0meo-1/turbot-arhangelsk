@@ -296,6 +296,7 @@ MDT_RETRY_POLL_SECONDS = max(5, _env_int("MDT_RETRY_POLL_SECONDS", 60))
 MDT_RETRY_BASE_SECONDS = max(5, _env_int("MDT_RETRY_BASE_SECONDS", 60))
 MDT_RETRY_MAX_SECONDS = max(MDT_RETRY_BASE_SECONDS, _env_int("MDT_RETRY_MAX_SECONDS", 3600))
 MDT_RETRY_BATCH_SIZE = max(1, _env_int("MDT_RETRY_BATCH_SIZE", 10))
+MDT_RETRY_ALERT_AFTER_SECONDS = max(0, _env_int("MDT_RETRY_ALERT_AFTER_SECONDS", 7200))
 
 if MDT_MODE not in ("lead", "preorder", "both"):
     logger.warning("MDT_MODE '%s' is unknown, defaulting to 'lead'", MDT_MODE)
@@ -1260,12 +1261,17 @@ def ensure_bot_profile() -> None:
 _last_error_alert: Dict[str, float] = {}
 
 
-def _alert_admin_error(error_msg: str, exc: Optional[Exception] = None) -> None:
+def _alert_admin_error(
+    error_msg: str,
+    exc: Optional[Exception] = None,
+    *,
+    alert_key: Optional[str] = None,
+) -> None:
     """Send a critical error alert to the admin via Telegram (rate-limited)."""
     if not ADMIN_ERROR_ALERTS or not ADMIN_ID or not BOT_TOKEN:
         return
     # Rate-limit: don't send the same error more than once per cooldown.
-    key = error_msg[:100]
+    key = (alert_key or error_msg)[:100]
     now = time.time()
     if _last_error_alert.get(key, 0) > now - ERROR_ALERT_COOLDOWN:
         return
@@ -1415,9 +1421,9 @@ def _send_lead_to_mdt_once(
     info: Dict[str, Any],
     phone: str,
     client_name: Optional[str],
-) -> None:
-    """Dispatch a completed request to MDT CRM based on MDT_MODE."""
-    mdt_shared.dispatch_lead(
+) -> bool:
+    """Dispatch a completed request to MDT CRM and return write success."""
+    return mdt_shared.dispatch_lead(
         _mdt_settings(),
         chat_id,
         info,
@@ -1642,6 +1648,32 @@ def _mdt_retry_health(now: Optional[float] = None) -> Dict[str, Any]:
     }
 
 
+def _alert_stale_mdt_retry_queue(now: Optional[float] = None) -> bool:
+    """Alert the admin when the Telegram MDT retry queue is persistently stale."""
+    if MDT_RETRY_ALERT_AFTER_SECONDS <= 0:
+        return False
+    stats = _mdt_retry_health(now)
+    age = stats.get("oldest_pending_seconds")
+    if (
+        not stats.get("enabled")
+        or not stats.get("available")
+        or not stats.get("pending")
+        or age is None
+        or int(age) < MDT_RETRY_ALERT_AFTER_SECONDS
+    ):
+        return False
+
+    message = (
+        "MDT retry queue stale: "
+        f"pending={int(stats.get('pending') or 0)}, "
+        f"due_now={int(stats.get('due_now') or 0)}, "
+        f"max_attempts={int(stats.get('max_attempts') or 0)}, "
+        f"oldest={int(age)}s"
+    )
+    _alert_admin_error(message, alert_key="mdt_retry_queue_stale")
+    return True
+
+
 def _start_mdt_retry_worker() -> None:
     if not (MDT_RETRY_ENABLED and MDT_ENABLED and MDT_MODE == "lead" and not DEMO_MODE):
         return
@@ -1650,6 +1682,7 @@ def _start_mdt_retry_worker() -> None:
         while True:
             try:
                 _retry_pending_mdt_once()
+                _alert_stale_mdt_retry_queue()
             except Exception:
                 logger.exception("Telegram MDT retry worker failed")
             time.sleep(MDT_RETRY_POLL_SECONDS)
