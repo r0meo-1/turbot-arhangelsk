@@ -16,6 +16,7 @@ os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 os.environ.setdefault("VK_MDT_RETRY_ENABLED", "false")
+os.environ.setdefault("ADMIN_ERROR_ALERTS", "false")
 os.environ.setdefault("AI_MODE", "template")
 os.environ.setdefault("CONSENT_MODE", "strict")  # classic consent in unit tests
 # Присваивание, а не setdefault: test_bot.py импортируется раньше и уже задал
@@ -207,6 +208,8 @@ def test_health_endpoint(client):
     assert data["status"] == "ok"
     assert data["platform"] == "vk"
     assert data["revision"]
+    assert data["mdt_delivery"]["available"] is True
+    assert data["mdt_delivery"]["total"] == 0
     assert "total_users" not in data
     assert "vk_group_id" not in data
 
@@ -1604,3 +1607,126 @@ def test_confirmed_mdt_lead_35_stops_retry_once(tmp_path, monkeypatch):
     with bot._db_cursor() as cur:
         row = cur.execute("SELECT mdt_status FROM leads WHERE id=35").fetchone()
     assert row["mdt_status"] == "pending"
+
+
+
+def test_vk_mdt_delivery_health_is_aggregate_and_pii_free(client):
+    now = int(time.time())
+    secret_phone = "+79990002233"
+    secret_name = "Private Person"
+
+    lead_ids = []
+    for chat_id in (8801, 8802, 8803, 8804):
+        lead_ids.append(
+            bot.save_lead(
+                chat_id,
+                {"destination": "Таиланд", "people": "2", "budget": 250000},
+                secret_phone,
+                first_name=secret_name,
+            )
+        )
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE leads SET mdt_status='synced', mdt_synced_at=? WHERE id=?",
+            (now - 30, lead_ids[0]),
+        )
+        cur.execute(
+            "UPDATE leads SET mdt_status='failed', created_at=? WHERE id=?",
+            (now - 120, lead_ids[1]),
+        )
+        cur.execute(
+            "UPDATE leads SET mdt_status='pending' WHERE id=?",
+            (lead_ids[2],),
+        )
+        cur.execute(
+            "UPDATE leads SET mdt_status='unset' WHERE id=?",
+            (lead_ids[3],),
+        )
+
+    resp = client.get("/vk/health")
+    assert resp.status_code == 200
+    raw = resp.get_data(as_text=True)
+    data = resp.get_json()["mdt_delivery"]
+    assert data["available"] is True
+    assert data["total"] == 4
+    assert data["synced"] == 1
+    assert data["failed"] == 1
+    assert data["pending"] == 1
+    assert data["unset"] == 1
+    assert 119 <= data["latest_failed_seconds"] <= 121
+    assert secret_phone not in raw
+    assert secret_name not in raw
+
+
+def test_vk_failed_preorder_alert_is_aggregate_and_pii_free(monkeypatch):
+    secret_phone = "+79990004455"
+    secret_name = "Hidden Customer"
+    lead_id = bot.save_lead(
+        8810,
+        {"destination": "Вьетнам", "people": "2", "budget": 270000},
+        secret_phone,
+        first_name=secret_name,
+    )
+
+    alerts = []
+    monkeypatch.setattr(
+        bot,
+        "_notify_ops_alert",
+        lambda message, *, alert_key: alerts.append((message, alert_key)) or True,
+    )
+
+    bot._record_mdt_preorder_result(lead_id, None, None)
+
+    assert len(alerts) == 1
+    message, alert_key = alerts[0]
+    assert alert_key == "vk_mdt_preorder_failed"
+    assert "failed=1" in message
+    assert "synced=0" in message
+    assert secret_phone not in message
+    assert secret_name not in message
+
+
+def test_vk_successful_preorder_does_not_alert(monkeypatch):
+    lead_id = bot.save_lead(
+        8811,
+        {"destination": "Египет", "people": "2", "budget": 220000},
+        "vk:8811",
+    )
+    alerts = []
+    monkeypatch.setattr(bot, "_alert_mdt_preorder_failure", lambda: alerts.append(True))
+
+    bot._record_mdt_preorder_result(lead_id, 12345, 67890)
+
+    assert alerts == []
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_preorder_id, mdt_tourist_id FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+    assert tuple(row) == ("synced", 12345, 67890)
+
+
+def test_vk_ops_alert_uses_stable_cooldown_key(monkeypatch):
+    monkeypatch.setattr(bot, "ADMIN_ERROR_ALERTS", True)
+    monkeypatch.setattr(bot, "ERROR_ALERT_COOLDOWN", 300)
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+    monkeypatch.setenv("BOT_TOKEN", "dummy-token")
+    bot._last_ops_alert.clear()
+
+    posts = []
+
+    class Resp:
+        status_code = 200
+
+    monkeypatch.setattr(
+        bot.http_session,
+        "post",
+        lambda *args, **kwargs: posts.append((args, kwargs)) or Resp(),
+    )
+
+    assert bot._notify_ops_alert("failed=1", alert_key="vk_mdt_preorder_failed") is True
+    assert bot._notify_ops_alert("failed=2", alert_key="vk_mdt_preorder_failed") is False
+    assert len(posts) == 1
+    payload = posts[0][1]["json"]
+    assert payload["chat_id"] == 999
+    assert "failed=1" in payload["text"]
