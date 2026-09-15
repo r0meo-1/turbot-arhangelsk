@@ -1,0 +1,57 @@
+name: Verify MDT auto manager
+
+on:
+  push:
+    branches: [feat/mdt-auto-manager]
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+      - name: Full pytest
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest -q
+
+  edge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r edge_bot_requirements.txt "Flask>=3.0.0" pytest
+      - name: Install Microsoft Edge
+        run: python -m playwright install msedge
+      - name: Smoke imports
+        run: |
+          python - <<'PY'
+          import importlib, sys
+          mods = ['telegram','playwright','dotenv','edge_bot_playwright','edge_bot_bot']
+          errors = []
+          for module in mods:
+              try:
+                  importlib.import_module(module)
+              except Exception as exc:
+                  errors.append(f"{module}: {exc}")
+          if errors:
+              print('\n'.join(errors))
+              sys.exit(2)
+          print('smoke: ok')
+          PY
+      - name: VK Mini App browser roundtrip
+        run: python -m pytest -q tests/test_vk_miniapp_e2e.py
