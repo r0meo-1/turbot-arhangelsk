@@ -1,0 +1,84 @@
+name: One-shot VK Mini App SQLite resume patch
+
+on:
+  push:
+    branches: [fix/vk-miniapp-resume-from-sqlite]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/vk-miniapp-resume-from-sqlite
+
+      - name: Restore Mini App review from SQLite
+        env:
+          OLD_GET_B64: ZGVmIGdldF9zZXNzaW9uKGNoYXRfaWQ6IGludCkgLT4gT3B0aW9uYWxbRGljdFtzdHIsIEFueV1dOgogICAgd2l0aCBfZGJfY3Vyc29yKCkgYXMgY3VyOgogICAgICAgIGN1ci5leGVjdXRlKCJTRUxFQ1QgKiBGUk9NIHNlc3Npb25zIFdIRVJFIGNoYXRfaWQgPSA/IiwgKGNoYXRfaWQsKSkKICAgICAgICByb3cgPSBjdXIuZmV0Y2hvbmUoKQogICAgICAgIHJldHVybiBkaWN0KHJvdykgaWYgcm93IGVsc2UgTm9uZQoKCmRlZiBkZWxldGVfc2Vzc2lvbihjaGF0X2lkOiBpbnQpIC0+IE5vbmU6Cg==
+          NEW_GET_B64: ZGVmIGdldF9zZXNzaW9uKGNoYXRfaWQ6IGludCkgLT4gT3B0aW9uYWxbRGljdFtzdHIsIEFueV1dOgogICAgd2l0aCBfZGJfY3Vyc29yKCkgYXMgY3VyOgogICAgICAgIGN1ci5leGVjdXRlKCJTRUxFQ1QgKiBGUk9NIHNlc3Npb25zIFdIRVJFIGNoYXRfaWQgPSA/IiwgKGNoYXRfaWQsKSkKICAgICAgICByb3cgPSBjdXIuZmV0Y2hvbmUoKQogICAgICAgIHJldHVybiBkaWN0KHJvdykgaWYgcm93IGVsc2UgTm9uZQoKCmRlZiBfZGVjb2RlX3Nlc3Npb25fc3RhdGUocmF3OiBEaWN0W3N0ciwgQW55XSkgLT4gRGljdFtzdHIsIEFueV06CiAgICAiIiJDb252ZXJ0IFNRTGl0ZSBzZXNzaW9uIGNvbHVtbnMgYmFjayB0byB0aGUgaW4tbWVtb3J5IGRpYWxvZyBzaGFwZS4iIiIKICAgIGRhdGEgPSBkaWN0KHJhdykKICAgIGRhdGEucG9wKCJjaGF0X2lkIiwgTm9uZSkKICAgIGRhdGFbImtpZHNfYWdlcyJdID0gX2FnZXNfZnJvbV9kYihkYXRhLmdldCgia2lkc19hZ2VzIikpCiAgICBkYXRhWyJuZWVkc19jb25zdWx0YXRpb24iXSA9IGJvb2woZGF0YS5nZXQoIm5lZWRzX2NvbnN1bHRhdGlvbiIpKQogICAgaWYgZGF0YS5nZXQoImRhdGVzX2FyZV90cmlwIikgaXMgbm90IE5vbmU6CiAgICAgICAgZGF0YVsiZGF0ZXNfYXJlX3RyaXAiXSA9IGJvb2woZGF0YVsiZGF0ZXNfYXJlX3RyaXAiXSkKICAgIGRhdGFbInNlbGVjdGVkX3RvdXIiXSA9IF90b3VyX2Zyb21fZGIoZGF0YS5nZXQoInNlbGVjdGVkX3RvdXIiKSkKICAgIHJldHVybiBkYXRhCgoKZGVmIF9yZXN0b3JlX3Nlc3Npb25fZnJvbV9kYihjaGF0X2lkOiBpbnQpIC0+IE9wdGlvbmFsW0RpY3Rbc3RyLCBBbnldXToKICAgICIiIkh5ZHJhdGUgYSBwZXJzaXN0ZWQgZGlhbG9nIHdoZW4gdGhlIHByb2Nlc3MgY2FjaGUgZG9lcyBub3QgaGF2ZSBpdC4iIiIKICAgIHJhdyA9IGdldF9zZXNzaW9uKGNoYXRfaWQpCiAgICBpZiByYXcgaXMgTm9uZToKICAgICAgICByZXR1cm4gTm9uZQogICAgZGF0YSA9IF9kZWNvZGVfc2Vzc2lvbl9zdGF0ZShyYXcpCiAgICB3aXRoIF9sb2NrOgogICAgICAgIHVzZXJfZGF0YVtjaGF0X2lkXSA9IGRhdGEKICAgIHJldHVybiBkYXRhCgoKZGVmIGRlbGV0ZV9zZXNzaW9uKGNoYXRfaWQ6IGludCkgLT4gTm9uZToK
+          OLD_MENU_B64: ICAgIGlmIGNvbW1hbmQgPT0gIm1lbnUiOgogICAgICAgICMg0J/QvtCy0YLQvtGA0LjRgtGMINGC0LXQutGD0YnQuNC5INCy0L7Qv9GA0L7RgSDQstC80LXRgdGC0LUg0YEg0LXQs9C+INC60L3QvtC/0LrQsNC80LguINCd0LjRh9C10LPQviDQvdC1INC80LXQvdGP0LXRgiDQsgogICAgICAgICMg0YHQvtGB0YLQvtGP0L3QuNC4OiDRh9C10LvQvtCy0LXQuiDQt9Cw0YHRgtGA0Y/QuyDQvdCwINGI0LDQs9C1LCDQsCDQvdC1INGF0L7Rh9C10YIg0LXQs9C+INC/0YDQvtC50YLQuCDQt9Cw0L3QvtCy0L4uCiAgICAgICAgc3RhdGUgPSAodXNlcl9kYXRhLmdldCh1c2VyX2lkKSBvciB7fSkuZ2V0KCJzdGF0ZSIpCiAgICAgICAgaWYgc3RhdGU6CiAgICAgICAgICAgIF9wcm9tcHRfZm9yX3N0YXRlKHVzZXJfaWQsIHN0YXRlKQogICAgICAgIGVsc2U6CiAgICAgICAgICAgIHNlbmRfbWVzc2FnZSh1c2VyX2lkLCBISU5UX1NUQVJULCBrZXlib2FyZD1fc29mdF9zdGFydF9rZXlib2FyZCgpKQogICAgICAgIHJldHVybgo=
+          NEW_MENU_B64: ICAgIGlmIGNvbW1hbmQgPT0gIm1lbnUiOgogICAgICAgICMg0J/QvtCy0YLQvtGA0LjRgtGMINGC0LXQutGD0YnQuNC5INCy0L7Qv9GA0L7RgSDQstC80LXRgdGC0LUg0YEg0LXQs9C+INC60L3QvtC/0LrQsNC80LguIE1pbmkgQXBwIHBlcnNpc3RzIGl0cwogICAgICAgICMgcmV2aWV3IGluIFNRTGl0ZSwgc28gcmVjb3ZlciBpdCBpZiB0aGUgcHJvY2VzcyBjYWNoZSBpcyBlbXB0eSAoZm9yCiAgICAgICAgIyBleGFtcGxlIGFmdGVyIGEgcmVzdGFydCBvciB3aGVuIHJldHVybmluZyBmcm9tIHRoZSBlbWJlZGRlZCBhcHApLgogICAgICAgIGluZm8gPSB1c2VyX2RhdGEuZ2V0KHVzZXJfaWQpIG9yIF9yZXN0b3JlX3Nlc3Npb25fZnJvbV9kYih1c2VyX2lkKQogICAgICAgIHN0YXRlID0gKGluZm8gb3Ige30pLmdldCgic3RhdGUiKQogICAgICAgIGlmIHN0YXRlOgogICAgICAgICAgICBfcHJvbXB0X2Zvcl9zdGF0ZSh1c2VyX2lkLCBzdGF0ZSkKICAgICAgICBlbHNlOgogICAgICAgICAgICBzZW5kX21lc3NhZ2UodXNlcl9pZCwgSElOVF9TVEFSVCwga2V5Ym9hcmQ9X3NvZnRfc3RhcnRfa2V5Ym9hcmQoKSkKICAgICAgICByZXR1cm4K
+          OLD_HANDLE_B64: ZGVmIGhhbmRsZV9kaWFsb2codXNlcl9pZDogaW50LCB0ZXh0OiBzdHIsIG1lc3NhZ2U6IERpY3Rbc3RyLCBBbnldKSAtPiBOb25lOgogICAgaW5mbyA9IHVzZXJfZGF0YS5nZXQodXNlcl9pZCwge30pCiAgICBzdGF0ZSA9IGluZm8uZ2V0KCJzdGF0ZSIpCg==
+          NEW_HANDLE_B64: ZGVmIGhhbmRsZV9kaWFsb2codXNlcl9pZDogaW50LCB0ZXh0OiBzdHIsIG1lc3NhZ2U6IERpY3Rbc3RyLCBBbnldKSAtPiBOb25lOgogICAgaW5mbyA9IHVzZXJfZGF0YS5nZXQodXNlcl9pZCkgb3IgX3Jlc3RvcmVfc2Vzc2lvbl9mcm9tX2RiKHVzZXJfaWQpIG9yIHt9CiAgICBzdGF0ZSA9IGluZm8uZ2V0KCJzdGF0ZSIpCg==
+          OLD_TEST_B64: ICAgIHVzZXJfaWQgPSA0MjQyNDIKICAgIGJvdC51c2VyX2RhdGFbdXNlcl9pZF0gPSB7InN0YXRlIjogYm90LlNUQVRFX1JFVklFV30KICAgIHByb21wdGVkID0gW10K
+          NEW_TEST_B64: ICAgIHVzZXJfaWQgPSA0MjQyNDIKICAgICMgTWF0Y2ggdGhlIHJlYWwgTWluaSBBcHAgcmV0dXJuIHBhdGg6IHRoZSBkdXJhYmxlIHJldmlldyBleGlzdHMgZXZlbiB3aGVuCiAgICAjIHRoZSBpbi1wcm9jZXNzIGNhY2hlIGlzIGVtcHR5LgogICAgYm90LmRlbGV0ZV9zZXNzaW9uKHVzZXJfaWQpCiAgICBib3Quc2V0X3Nlc3Npb24odXNlcl9pZCwgewogICAgICAgICJzdGF0ZSI6IGJvdC5TVEFURV9SRVZJRVcsCiAgICAgICAgImRlc3RpbmF0aW9uIjogItCo0YDQuC3Qm9Cw0L3QutCwIiwKICAgICAgICAib3JpZ2luIjogItCQ0YDRhdCw0L3Qs9C10LvRjNGB0LoiLAogICAgICAgICJ1cGRhdGVkX2F0IjogMSwKICAgIH0pCiAgICBib3QudXNlcl9kYXRhLnBvcCh1c2VyX2lkLCBOb25lKQogICAgcHJvbXB0ZWQgPSBbXQo=
+          OLD_FINALLY_B64: ICAgIGZpbmFsbHk6CiAgICAgICAgYm90LnVzZXJfZGF0YS5wb3AodXNlcl9pZCwgTm9uZSkK
+          NEW_FINALLY_B64: ICAgIGZpbmFsbHk6CiAgICAgICAgYm90LnVzZXJfZGF0YS5wb3AodXNlcl9pZCwgTm9uZSkKICAgICAgICBib3QuZGVsZXRlX3Nlc3Npb24odXNlcl9pZCkK
+        run: |
+          python - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          def decode(name):
+              return base64.b64decode(os.environ[name + "_B64"]).decode("utf-8")
+
+          path = Path("vk_bot.py")
+          text = path.read_text(encoding="utf-8")
+          for old_name, new_name in [
+              ("OLD_GET", "NEW_GET"),
+              ("OLD_MENU", "NEW_MENU"),
+              ("OLD_HANDLE", "NEW_HANDLE"),
+          ]:
+              old = decode(old_name)
+              new = decode(new_name)
+              if text.count(old) != 1:
+                  raise SystemExit(f"{old_name} count={text.count(old)}")
+              text = text.replace(old, new, 1)
+          path.write_text(text, encoding="utf-8")
+
+          test_path = Path("tests/test_vk_miniapp_review_return.py")
+          tests = test_path.read_text(encoding="utf-8")
+          for old_name, new_name in [
+              ("OLD_TEST", "NEW_TEST"),
+              ("OLD_FINALLY", "NEW_FINALLY"),
+          ]:
+              old = decode(old_name)
+              new = decode(new_name)
+              if tests.count(old) != 1:
+                  raise SystemExit(f"{old_name} count={tests.count(old)}")
+              tests = tests.replace(old, new, 1)
+          test_path.write_text(tests, encoding="utf-8")
+          PY
+
+          git diff --check
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run focused tests
+        run: |
+          python -m pytest -q tests/test_vk_miniapp_review_return.py tests/test_vk_bot.py
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vk_bot.py tests/test_vk_miniapp_review_return.py
+          git commit -m "Restore VK Mini App reviews from SQLite"
+          git push
