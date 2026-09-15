@@ -1611,3 +1611,78 @@ def test_telegram_completion_passes_local_delivery_key_to_mdt(monkeypatch):
     assert captured["info"]["_mdt_delivery_key"] == f"tg-lead-{lead_id}"
     assert captured["chat_id"] == chat_id
     assert captured["phone"] == "Telegram @tester"
+
+
+
+def test_telegram_mdt_retry_persists_and_recovers(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    monkeypatch.setattr(bot, "MDT_RETRY_BASE_SECONDS", 5)
+    monkeypatch.setattr(bot, "MDT_RETRY_MAX_SECONDS", 60)
+
+    info = {
+        "destination": "Шри-Ланка",
+        "origin": "Москва",
+        "dates": "2026-10-16",
+        "nights": "10",
+        "people": "2",
+        "kids": 0,
+        "budget": 270000,
+        "budget_scope": "per_person",
+        "direct_only": True,
+        "_mdt_delivery_key": "tg-lead-placeholder",
+    }
+    lead_id = bot.save_lead(
+        7401, info, "Telegram @retry", first_name="Roman", username="retry"
+    )
+    info["_local_lead_id"] = lead_id
+    info["_mdt_delivery_key"] = f"tg-lead-{lead_id}"
+    bot._queue_mdt_lead(lead_id, 7401, info, "Telegram @retry", "Roman")
+
+    calls = []
+    monkeypatch.setattr(
+        bot,
+        "_send_lead_to_mdt_once",
+        lambda chat_id, payload, phone, client_name: calls.append(
+            (chat_id, dict(payload), phone, client_name)
+        ) or False,
+    )
+    assert bot._deliver_mdt_lead(lead_id) is False
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_attempts, mdt_next_retry_at FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+    assert row["mdt_status"] == "pending"
+    assert row["mdt_attempts"] == 1
+    assert row["mdt_next_retry_at"] is not None
+    assert calls[-1][1]["_mdt_delivery_key"] == f"tg-lead-{lead_id}"
+
+    monkeypatch.setattr(
+        bot,
+        "_send_lead_to_mdt_once",
+        lambda chat_id, payload, phone, client_name: calls.append(
+            (chat_id, dict(payload), phone, client_name)
+        ) or True,
+    )
+    assert bot._deliver_mdt_lead(lead_id) is True
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+    assert row["mdt_status"] == "synced"
+    assert row["mdt_attempts"] == 2
+    assert row["mdt_next_retry_at"] is None
+    assert row["mdt_synced_at"] is not None
+    assert calls[-1][1]["_mdt_delivery_key"] == f"tg-lead-{lead_id}"
+
+
+def test_telegram_mdt_retry_does_not_run_for_preorder(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "preorder")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    assert bot._retry_pending_mdt_once(now=123456) == 0
