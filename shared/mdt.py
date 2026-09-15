@@ -293,18 +293,51 @@ def create_lead(
         if selected_text:
             fields.append({"name": "Выбранный тур", "values": [selected_text]})
 
+    raw_contact = str(phone or "").strip()
+    compact_contact = re.sub(r"[\s().-]+", "", raw_contact)
+    is_phone = bool(re.fullmatch(r"\+?\d{7,15}", compact_contact))
+
     params = {
         "name": client_name or f"{settings.name_prefix} {chat_id}",
-        "phone": phone,
+        "phone": raw_contact if is_phone else "",
         "email": "",
         "source": settings.source,
         "fields": fields,
     }
+    if delivery_key:
+        # MDT exposes this as the stable external CRM key. Keep the custom
+        # field above for managers while also giving the API a machine key.
+        params["external_lead_id"] = delivery_key
+    if raw_contact and not is_phone:
+        # Messenger contacts are not phone numbers. Sending e.g. "VK (chat id
+        # ...)" in `phone` can be rejected by MDT while still returning JSON.
+        params["content"] = f"Контакт: {raw_contact}"
+    if settings.name_prefix.strip().casefold() == "vk":
+        params["url"] = f"https://vk.com/id{chat_id}"
+
     result = request_fn("add-lead", params)
-    if result is not None:
-        log.info("Lead sent to MDT for chat %s", chat_id)
+    lead_id = extract_id(result, "id", "lead_id")
+    if lead_id is not None:
+        log.info("Lead sent to MDT for chat %s (ID: %s)", chat_id, lead_id)
         return True
-    log.warning("Failed to send lead to MDT for chat %s", chat_id)
+    if isinstance(result, dict):
+        # Never log the response body: validation errors can echo submitted
+        # customer data. Keys are enough to distinguish an API rejection from
+        # a transport failure without leaking PII.
+        shape = ",".join(sorted(str(key) for key in result.keys())) or "empty-object"
+        log.warning(
+            "MDT add-lead returned no lead ID for chat %s (response keys: %s)",
+            chat_id,
+            shape,
+        )
+    elif result is not None:
+        log.warning(
+            "MDT add-lead returned no lead ID for chat %s (response type: %s)",
+            chat_id,
+            type(result).__name__,
+        )
+    else:
+        log.warning("Failed to send lead to MDT for chat %s", chat_id)
     return False
 
 

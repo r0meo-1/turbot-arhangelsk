@@ -189,3 +189,74 @@ def test_create_lead_includes_selected_tour():
     assert "Mandarava Resort & Spa Karon Beach 5★" in fields["Выбранный тур"]
     assert "155000 ₽" in fields["Выбранный тур"]
     assert "ID th-6" in fields["Выбранный тур"]
+
+
+
+def test_create_lead_rejects_error_json_without_id():
+    settings = MDTSettings(enabled=True, mode="lead", source="VK", name_prefix="VK")
+
+    ok = create_lead(
+        settings,
+        424242,
+        {"destination": "Шри-Ланка", "_mdt_delivery_key": "vk-lead-35"},
+        "VK (чат id 424242) · Тест",
+        "Тест VK",
+        request_fn=lambda method, params: {"error": "validation_failed"},
+    )
+
+    assert ok is False
+
+
+def test_create_lead_maps_vk_contact_outside_phone_field():
+    captured = {}
+
+    def req(method, params):
+        captured["method"] = method
+        captured["params"] = params
+        return {"data": {"id": 654}}
+
+    settings = MDTSettings(enabled=True, mode="lead", source="VK Bot", name_prefix="VK")
+    ok = create_lead(
+        settings,
+        424242,
+        {
+            "destination": "Шри-Ланка",
+            "dates": "2026-10-15",
+            "people": "2",
+            "budget": 270000,
+            "_mdt_delivery_key": "vk-lead-35",
+        },
+        "VK (чат id 424242) · Тест",
+        "Тест VK",
+        request_fn=req,
+    )
+
+    assert ok is True
+    assert captured["method"] == "add-lead"
+    params = captured["params"]
+    assert params["phone"] == ""
+    assert params["external_lead_id"] == "vk-lead-35"
+    assert params["url"] == "https://vk.com/id424242"
+    assert params["content"] == "Контакт: VK (чат id 424242) · Тест"
+
+
+def test_create_lead_keeps_real_phone_in_phone_field():
+    captured = {}
+
+    def req(method, params):
+        captured.update(params)
+        return {"id": 777}
+
+    settings = MDTSettings(enabled=True, mode="lead", source="Test")
+    ok = create_lead(
+        settings,
+        7,
+        {"destination": "Турция"},
+        "+7 (900) 123-45-67",
+        "Тест",
+        request_fn=req,
+    )
+
+    assert ok is True
+    assert captured["phone"] == "+7 (900) 123-45-67"
+    assert "content" not in captured
