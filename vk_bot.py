@@ -489,6 +489,13 @@ def init_db() -> None:
                 created_at INTEGER NOT NULL
             )
         """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS miniapp_drafts (
+                chat_id INTEGER PRIMARY KEY,
+                payload TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )
+        """)
         # Additive migration for databases created before the origin step.
         for _t in ("sessions", "leads"):
             cur.execute(f"PRAGMA table_info({_t})")
@@ -622,6 +629,52 @@ def _restore_session_from_db(chat_id: int) -> Optional[Dict[str, Any]]:
 def delete_session(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+
+
+_MINIAPP_SNAPSHOT_FIELDS = (
+    "destination", "origin", "dates", "nights", "dates_are_trip",
+    "hotel_query", "people", "kids", "kids_ages", "infants",
+    "budget", "budget_scope", "source", "vk_ref", "vk_platform",
+    "needs_consultation",
+)
+
+
+def _save_miniapp_snapshot(chat_id: int, info: Dict[str, Any]) -> None:
+    payload = {key: info.get(key) for key in _MINIAPP_SNAPSHOT_FIELDS}
+    now = int(time.time())
+    with _db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            INSERT INTO miniapp_drafts (chat_id, payload, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(chat_id) DO UPDATE SET
+                payload=excluded.payload, updated_at=excluded.updated_at
+            """,
+            (chat_id, json.dumps(payload, ensure_ascii=False, separators=(",", ":")), now),
+        )
+
+
+def _load_miniapp_snapshot(chat_id: int) -> Optional[Dict[str, Any]]:
+    with _db_cursor() as cur:
+        cur.execute("SELECT payload FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row[0])
+    except (TypeError, ValueError):
+        logger.warning("Invalid Mini App snapshot for chat_id=%s", chat_id)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    payload["state"] = STATE_REVIEW
+    payload["updated_at"] = int(time.time())
+    return payload
+
+
+def _delete_miniapp_snapshot(chat_id: int) -> None:
+    with _db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))
 
 
 def list_stale_sessions(cutoff: int) -> List[int]:
@@ -767,6 +820,7 @@ def delete_user_data(chat_id: int) -> None:
         _dirty_users.discard(chat_id)
     with _db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+        cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))
 
@@ -1546,9 +1600,11 @@ def _begin_destination(user_id: int, first_name: str = "") -> None:
 
 
 def handle_cancel(user_id: int) -> None:
+    snapshot_existed = _load_miniapp_snapshot(user_id) is not None
     with _lock:
         existed = user_data.pop(user_id, None) is not None
-    if existed:
+    _delete_miniapp_snapshot(user_id)
+    if existed or snapshot_existed:
         _mark_dirty(user_id)
         delete_session(user_id)
         send_message(
@@ -3106,6 +3162,7 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     with _lock:
         user_data.pop(user_id, None)
     delete_session(user_id)
+    _delete_miniapp_snapshot(user_id)
 
     if SYNC_COMPLETION:
         _post_completion_side_effects(user_id, info, phone, client_name, lead_id)
@@ -3189,8 +3246,7 @@ _COMMAND_ALIASES = {
     # сообщением, но человек, у которого кнопки «пропали», ищет команду, а не
     # догадывается написать что угодно.
     "кнопки": "menu", "меню": "menu", "продолжить": "menu", "где кнопки": "menu",
-    "проверить заявку": "menu", "проверить": "menu",
-    "проверить заявку": "menu", "проверить": "menu",
+    "проверить заявку": "review", "проверить": "review",
     "помощь": "help", "справка": "help",
     "политика": "privacy",
     "удалить": "delete",
@@ -3341,6 +3397,52 @@ def _process_message(message: Dict[str, Any]) -> None:
     if command == "cancel":
         handle_cancel(user_id)
         return
+    if command == "review":
+        # `sessions` is mutable FSM state. Keep Mini App's saved review separate
+        # so chat navigation cannot destroy it.
+        snapshot = _load_miniapp_snapshot(user_id)
+        if snapshot is not None:
+            with _lock:
+                user_data[user_id] = snapshot
+            set_session(user_id, snapshot)
+            _ask_review(user_id)
+            return
+
+        # Backward compatibility for drafts saved before miniapp_drafts existed.
+        info = user_data.get(user_id) or _restore_session_from_db(user_id)
+        if info and info.get("source") == "vk_mini_app":
+            destination = str(info.get("destination") or "")
+            legacy_complete = bool(
+                destination
+                and destination not in (DEST_HOT_TOURS_LABEL, DEST_DIRECT_FLIGHTS_LABEL)
+                and info.get("origin") and info.get("dates") and info.get("people")
+                and (info.get("budget") is not None or info.get("budget_open_ended"))
+            )
+            if legacy_complete:
+                info["state"] = STATE_REVIEW
+                info.pop("selected_tour", None)
+                info.pop("_tour_offers", None)
+                info.pop("_tour_offers_base", None)
+                info["updated_at"] = int(time.time())
+                set_session(user_id, info)
+                _ask_review(user_id)
+                return
+            send_message(
+                user_id,
+                "Черновик Mini App был изменён старой навигацией. "
+                "Откройте приложение, проверьте параметры и сохраните их ещё раз — "
+                "после этого команда «Проверить заявку» восстановит их независимо от кнопок чата.",
+                keyboard=_soft_start_keyboard(),
+            )
+            return
+
+        state = (info or {}).get("state")
+        if state:
+            _prompt_for_state(user_id, state)
+        else:
+            send_message(user_id, HINT_START, keyboard=_soft_start_keyboard())
+        return
+
     if command == "menu":
         # Повторить текущий вопрос вместе с его кнопками. Mini App persists its
         # review in SQLite, so recover it if the process cache is empty (for
@@ -3461,6 +3563,7 @@ def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
             raise MiniAppValidationError("Draft completion in progress")
 
         info["updated_at"] = int(time.time())
+        _save_miniapp_snapshot(user_id, info)
         set_session(user_id, info)
         user_data[user_id] = info
 
