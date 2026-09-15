@@ -93,6 +93,7 @@ def test_vk_send_preorder_assigns_sole_manager(monkeypatch):
             "people": "2",
             "budget": 270000,
             "budget_scope": "total",
+            "_mdt_delivery_key": "vk-lead-36",
             "selected_tour": {
                 "hotel": "Mandarava Resort",
                 "date": "2027-01-15",
@@ -126,6 +127,7 @@ def test_vk_send_preorder_assigns_sole_manager(monkeypatch):
     assert preorder["nights_to"] == 10
     assert "Вылет: Архангельск" in preorder["comment"]
     assert "Источник: VK Bot" in preorder["comment"]
+    assert "ID заявки бота: vk-lead-36" in preorder["comment"]
     assert "Mandarava Resort" in preorder["comment"]
     assert "ID tv-42" in preorder["comment"]
 

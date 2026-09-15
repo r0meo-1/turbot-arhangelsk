@@ -3154,12 +3154,16 @@ def _post_completion_side_effects(
 ) -> None:
     """MDT push + live offers + AI blurb — off the VK Callback hot path."""
     try:
+        delivery_info = info
+        if lead_id is not None:
+            delivery_info = dict(info)
+            delivery_info["_mdt_delivery_key"] = f"vk-lead-{lead_id}"
         if lead_id is not None and MDT_MODE == "lead":
             _deliver_mdt_lead(lead_id)
         elif MDT_ENABLED and not DEMO_MODE:
             # preorder/both remain one-shot because their multi-call transaction
             # cannot be retried safely without server-side idempotency.
-            send_lead_to_mdt(user_id, info, phone, client_name)
+            send_lead_to_mdt(user_id, delivery_info, phone, client_name)
 
         # The client already chose a complete package. Sending an unrelated
         # flight-only estimate or an AI placeholder after confirmation would

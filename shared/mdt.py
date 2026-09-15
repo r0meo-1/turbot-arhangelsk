@@ -312,6 +312,9 @@ def create_preorder(
         comment_parts.append(f"Бюджет: {_budget_label(info)}")
     if settings.source:
         comment_parts.append(f"Источник: {settings.source}")
+    delivery_key = str(info.get("_mdt_delivery_key") or "").strip()
+    if delivery_key:
+        comment_parts.append(f"ID заявки бота: {delivery_key}")
     selected = info.get("selected_tour")
     if isinstance(selected, dict):
         selected_text = " · ".join(
