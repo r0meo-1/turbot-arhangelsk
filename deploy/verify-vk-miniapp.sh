@@ -5,6 +5,14 @@ repo=${TURBOT_ROOT:-/opt/turbot}
 venv=${TURBOT_VENV:-$repo/venv/bin}
 env_file=${TURBOT_ENV_FILE:-$repo/.env}
 
+run_mdt_check() {
+  if [[ -f "$repo/deploy/verify-mdt.sh" ]]; then
+    chmod +x "$repo/deploy/verify-mdt.sh" 2>/dev/null || true
+    "$repo/deploy/verify-mdt.sh" || true
+  fi
+}
+trap run_mdt_check EXIT
+
 if [[ ! -x "$venv/python" ]]; then
   echo "Python runtime not found: $venv/python" >&2
   exit 1
