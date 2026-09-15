@@ -164,18 +164,94 @@ def _budget_field_value(info: Dict[str, Any]) -> str:
     return f"{info.get('budget')}{suffix}"
 
 
+def _manager_rows(result: Any) -> List[Dict[str, Any]]:
+    """Normalize get-manager-list response shapes without exposing identities."""
+    if result is None:
+        return []
+    data = result.get("data", result) if isinstance(result, dict) else result
+    rows: List[Dict[str, Any]] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if not isinstance(value, dict):
+                continue
+            row = dict(value)
+            row.setdefault("id", key)
+            rows.append(row)
+    elif isinstance(data, list):
+        rows = [dict(value) for value in data if isinstance(value, dict)]
+    return rows
+
+
+def _mdt_flag(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def resolve_manager_id(
+    settings: MDTSettings,
+    request_fn: RequestFn,
+    log: Optional[logging.Logger] = None,
+) -> Optional[int]:
+    """Resolve an explicit manager, or the sole active MDT manager.
+
+    Automatic resolution is deliberately conservative: if MDT has more than
+    one active manager we leave the request unassigned instead of guessing.
+    """
+    log = log or logger
+    for raw in settings.manager_ids:
+        try:
+            manager_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if manager_id > 0:
+            return manager_id
+
+    result = request_fn(
+        "get-manager-list",
+        {
+            "count": 100,
+            "offset": 0,
+            "fields": ["id", "dismissed", "office_id"],
+        },
+    )
+    active: List[int] = []
+    for row in _manager_rows(result):
+        if _mdt_flag(row.get("dismissed")):
+            continue
+        try:
+            manager_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if manager_id > 0 and manager_id not in active:
+            active.append(manager_id)
+
+    if len(active) == 1:
+        log.info("Resolved sole active MDT manager")
+        return active[0]
+    if not active:
+        log.warning("MDT manager auto-assignment skipped: no active managers")
+    else:
+        log.warning(
+            "MDT manager auto-assignment skipped: %s active managers",
+            len(active),
+        )
+    return None
+
+
 def add_tourist_temp(
     settings: MDTSettings,
     name: str,
     phone: str,
     request_fn: RequestFn,
     log: Optional[logging.Logger] = None,
+    manager_id: Optional[int] = None,
 ) -> Optional[int]:
     log = log or logger
-    result = request_fn(
-        "add-tourist-temp",
-        {"name": name, "tel": phone, "tags": settings.tourist_tags},
-    )
+    params: Dict[str, Any] = {"name": name, "tel": phone, "tags": settings.tourist_tags}
+    if manager_id is not None:
+        params["manager_id"] = manager_id
+    result = request_fn("add-tourist-temp", params)
     tid = extract_id(result, "id", "tourist_id")
     if tid is None and result is not None:
         log.warning("Could not extract tourist ID from add-tourist-temp: %s", result)
@@ -195,7 +271,12 @@ def create_preorder(
     """Create temp tourist + preorder. Returns (preorder_id, tourist_id)."""
     log = log or logger
     name = client_name or f"{settings.name_prefix} {chat_id}"
-    tourist_id = add_tourist_temp(settings, name, phone, request_fn, log=log)
+    manager_id = None
+    if settings.manager_ids or settings.name_prefix.strip().casefold() == "vk":
+        manager_id = resolve_manager_id(settings, request_fn, log=log)
+    tourist_id = add_tourist_temp(
+        settings, name, phone, request_fn, log=log, manager_id=manager_id
+    )
     if tourist_id is None:
         log.warning("Failed to create temp tourist in MDT for chat %s", chat_id)
         return None, None
@@ -204,10 +285,23 @@ def create_preorder(
     date_from, date_to = parse_russian_dates(info.get("dates", "") or "")
     persons = _parse_persons(info.get("people"))
     budget = _parse_budget(info.get("budget", 0))
+    try:
+        children = max(0, int(info.get("kids") or 0))
+    except (TypeError, ValueError):
+        children = 0
+    child_ages: List[int] = []
+    for value in info.get("kids_ages") or []:
+        try:
+            child_ages.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    night_values = [int(value) for value in re.findall(r"\d+", str(info.get("nights") or ""))[:2]]
 
     comment_parts = []
     if info.get("destination"):
         comment_parts.append(f"Направление: {info['destination']}")
+    if info.get("origin"):
+        comment_parts.append(f"Вылет: {info['origin']}")
     if info.get("dates"):
         comment_parts.append(f"Даты: {info['dates']}")
     if info.get("nights"):
@@ -218,6 +312,27 @@ def create_preorder(
         comment_parts.append(f"Человек: {info['people']}")
     if budget:
         comment_parts.append(f"Бюджет: {_budget_label(info)}")
+    if settings.source:
+        comment_parts.append(f"Источник: {settings.source}")
+    delivery_key = str(info.get("_mdt_delivery_key") or "").strip()
+    if delivery_key:
+        comment_parts.append(f"ID заявки бота: {delivery_key}")
+    selected = info.get("selected_tour")
+    if isinstance(selected, dict):
+        selected_text = " · ".join(
+            str(value)
+            for value in (
+                selected.get("hotel"),
+                selected.get("date"),
+                f"{selected.get('nights')} ночей" if selected.get("nights") else "",
+                selected.get("meal"),
+                str(selected.get("price") or "") + " ₽" if selected.get("price") else "",
+                f"ID {selected.get('tour_id')}" if selected.get("tour_id") else "",
+            )
+            if value
+        )
+        if selected_text:
+            comment_parts.append(f"Выбранный тур: {selected_text}")
 
     params: Dict[str, Any] = {
         "tourist_type": "tourist_temp",
@@ -226,8 +341,8 @@ def create_preorder(
         "country_id2": 0,
         "country_id3": 0,
         "persons": persons,
-        "children": 0,
-        "children_ages": [],
+        "children": children,
+        "children_ages": child_ages,
         "price_from": 0,
         "price_to": budget,
         "comment": " | ".join(comment_parts),
@@ -237,6 +352,13 @@ def create_preorder(
         params["flightdate_from"] = date_from
     if date_to:
         params["flightdate_to"] = date_to
+    if night_values:
+        params["nights_from"] = night_values[0]
+        params["nights_to"] = night_values[-1]
+    if manager_id is not None:
+        params["preorder_manager_id"] = manager_id
+    if settings.name_prefix.strip().casefold() == "vk":
+        params["link"] = f"https://vk.com/id{chat_id}"
 
     result = request_fn("create-preorder", params)
     if result is None:

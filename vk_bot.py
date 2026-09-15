@@ -155,7 +155,7 @@ MDT_ACCOUNT    = os.getenv("MDT_ACCOUNT", "")
 MDT_API_KEY    = os.getenv("MDT_API_KEY", "")
 MDT_SOURCE     = os.getenv("VK_MDT_SOURCE", "VK Bot").strip() or "VK Bot"
 MDT_BASE_URL   = os.getenv("MDT_BASE_URL", "")
-MDT_MODE       = os.getenv("MDT_MODE", "lead").lower().strip()
+MDT_MODE       = os.getenv("VK_MDT_MODE", os.getenv("MDT_MODE", "lead")).lower().strip()
 MDT_NOTIFY_MANAGERS = os.getenv("MDT_NOTIFY_MANAGERS", "false").lower().strip() in ("1", "true", "yes")
 MDT_MANAGER_IDS = [int(x.strip()) for x in os.getenv("MDT_MANAGER_IDS", "").split(",") if x.strip()]
 MDT_REMINDER_ENABLED = os.getenv("MDT_REMINDER_ENABLED", "true").lower().strip() in ("1", "true", "yes")
@@ -3154,12 +3154,16 @@ def _post_completion_side_effects(
 ) -> None:
     """MDT push + live offers + AI blurb — off the VK Callback hot path."""
     try:
+        delivery_info = info
+        if lead_id is not None:
+            delivery_info = dict(info)
+            delivery_info["_mdt_delivery_key"] = f"vk-lead-{lead_id}"
         if lead_id is not None and MDT_MODE == "lead":
             _deliver_mdt_lead(lead_id)
         elif MDT_ENABLED and not DEMO_MODE:
             # preorder/both remain one-shot because their multi-call transaction
             # cannot be retried safely without server-side idempotency.
-            send_lead_to_mdt(user_id, info, phone, client_name)
+            send_lead_to_mdt(user_id, delivery_info, phone, client_name)
 
         # The client already chose a complete package. Sending an unrelated
         # flight-only estimate or an AI placeholder after confirmation would

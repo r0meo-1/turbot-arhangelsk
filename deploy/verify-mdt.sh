@@ -77,6 +77,7 @@ def print_outbox_summary() -> None:
 
 enabled = truthy(os.getenv('MDT_ENABLED', 'false'))
 mode = (os.getenv('MDT_MODE', 'lead') or 'lead').strip().lower()
+vk_mode = (os.getenv('VK_MDT_MODE', mode) or mode).strip().lower()
 account = (os.getenv('MDT_ACCOUNT', '') or '').strip()
 base = (os.getenv('MDT_BASE_URL', '') or '').strip().rstrip('/')
 api_key = (os.getenv('MDT_API_KEY', '') or '').strip()
@@ -88,6 +89,7 @@ print(
     'MDT config: '
     f'enabled={"yes" if enabled else "no"} '
     f'mode={mode} '
+    f'vk_mode={vk_mode} '
     f'endpoint_host={endpoint_host} '
     f'api_key={"set" if api_key else "missing"}'
 )
@@ -99,6 +101,9 @@ if not enabled:
 
 if mode not in {'lead', 'preorder', 'both'}:
     print(f'MDT check: WARNING invalid MDT_MODE={mode!r}')
+    raise SystemExit(0)
+if vk_mode not in {'lead', 'preorder', 'both'}:
+    print(f'MDT check: WARNING invalid VK_MDT_MODE={vk_mode!r}')
     raise SystemExit(0)
 
 if not endpoint or not api_key:
