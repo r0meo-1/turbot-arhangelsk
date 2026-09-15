@@ -81,7 +81,7 @@
 
       <section class="card">
         <div class="section-row">
-          <label for="budget">Бюджет до</label>
+          <label for="budget">Бюджет до, на человека</label>
           <output id="budget-output" for="budget">270 000 ₽</output>
         </div>
         <input id="budget" name="budget" type="range" min="100000" max="600000" step="10000" value="270000">
@@ -102,9 +102,21 @@
       </label>
 
       <p id="error" class="error" role="alert" aria-live="polite"></p>
-      <button id="submit" class="primary" type="submit">Продолжить в TurBot</button>
-      <p class="privacy-note">После отправки TurBot попросит выбрать способ связи и покажет заявку перед передачей менеджеру. Оплата в Mini App не производится.</p>
+      <button id="submit" class="primary" type="submit">Проверить параметры</button>
+      <p class="privacy-note">Сначала проверьте параметры. После сохранения TurBot попросит выбрать способ связи и покажет финальную заявку перед передачей менеджеру.</p>
     </form>
+
+    <section id="review" class="card review-card" hidden aria-labelledby="review-title">
+      <p class="review-kicker">Почти готово</p>
+      <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
+      <p class="review-note">Менеджеру пока ничего не отправлено.</p>
+      <dl id="summary" class="review-summary"></dl>
+      <div class="review-actions">
+        <button id="edit" class="secondary" type="button">Изменить</button>
+        <button id="save" class="primary" type="button">Сохранить и продолжить</button>
+      </div>
+      <p id="status" class="review-status" role="status" aria-live="polite"></p>
+    </section>
   </main>
 
   <script src="./app.js"></script>

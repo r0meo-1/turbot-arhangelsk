@@ -11,6 +11,18 @@
   const errorBox = document.getElementById('error');
   const submit = document.getElementById('submit');
   const welcome = document.getElementById('welcome');
+  const review = document.getElementById('review');
+  const reviewTitle = document.getElementById('review-title');
+  const summary = document.getElementById('summary');
+  const edit = document.getElementById('edit');
+  const save = document.getElementById('save');
+  const status = document.getElementById('status');
+  let pendingPayload = null;
+
+  const startParam =
+    tg?.initDataUnsafe?.start_param ||
+    new URLSearchParams(window.location.search).get('tgWebAppStartParam') ||
+    'landing';
 
   const formatRub = (value) => `${Number(value).toLocaleString('ru-RU')} ₽`;
   const formatDateInput = (value) => {
@@ -20,7 +32,9 @@
     return `${year}-${month}-${day}`;
   };
 
-  const setBudget = () => { budgetOutput.textContent = formatRub(budget.value); };
+  const setBudget = () => {
+    budgetOutput.textContent = formatRub(budget.value);
+  };
 
   const setMinDate = () => {
     const now = new Date();
@@ -39,7 +53,9 @@
     tg.ready();
     tg.expand();
     const firstName = tg.initDataUnsafe?.user?.first_name;
-    if (firstName) welcome.textContent = `${firstName}, соберём параметры поездки за минуту.`;
+    if (firstName) {
+      welcome.textContent = `${firstName}, соберём параметры поездки за минуту.`;
+    }
     try {
       tg.setHeaderColor('secondary_bg_color');
       tg.setBackgroundColor('bg_color');
@@ -52,6 +68,17 @@
     document.querySelectorAll('.chip').forEach((chip) => {
       chip.classList.toggle('active', chip.dataset.destination === value);
     });
+  };
+
+  const applyDeepLink = () => {
+    const mapped = {
+      thailand: 'Таиланд',
+      vietnam: 'Вьетнам',
+      sri_lanka: 'Шри-Ланка'
+    }[startParam];
+    if (!mapped) return;
+    destination.value = mapped;
+    markDestinationChip(mapped);
   };
 
   const renderChildAges = () => {
@@ -79,51 +106,11 @@
     }
   };
 
-  document.querySelectorAll('.chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      destination.value = chip.dataset.destination;
-      markDestinationChip(chip.dataset.destination);
-      tg?.HapticFeedback?.selectionChanged();
-    });
-  });
-
-  destination.addEventListener('input', () => markDestinationChip(destination.value.trim()));
-  children.addEventListener('input', renderChildAges);
-  budget.addEventListener('input', setBudget);
-
-  const restoreSubmit = () => {
-    submit.disabled = false;
-    submit.textContent = 'Продолжить в TurBot';
-  };
-
-  const submitViaBackend = async (payload) => {
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initData: tg.initData, payload })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || result.ok !== true) {
-      throw new Error(result.error || 'Не удалось передать заявку в TurBot.');
-    }
-    tg.HapticFeedback?.notificationOccurred('success');
-    tg.close();
-  };
-
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    errorBox.textContent = '';
-
-    if (!form.reportValidity()) {
-      errorBox.textContent = 'Проверьте обязательные поля и согласие.';
-      tg?.HapticFeedback?.notificationOccurred('error');
-      return;
-    }
-
+  const buildPayload = () => {
     const data = new FormData(form);
     const childCount = Number(data.get('children'));
     const childAgeValues = Array.from(childrenAges.querySelectorAll('input')).map((input) => Number(input.value));
-    const payload = {
+    return {
       type: 'trip_request',
       version: 2,
       destination: String(data.get('destination') || '').trim(),
@@ -138,36 +125,135 @@
       consent: data.get('consent') === 'on',
       source: 'telegram_mini_app'
     };
+  };
 
-    if (!payload.destination || !payload.departure || !payload.date || childAgeValues.length !== childCount) {
+  const summaryRow = (label, value) => {
+    const row = document.createElement('div');
+    row.className = 'review-row';
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const detail = document.createElement('dd');
+    detail.textContent = value;
+    row.append(term, detail);
+    return row;
+  };
+
+  const renderSummary = (payload) => {
+    const childrenText = payload.children
+      ? `${payload.children} (${payload.childrenAges.join(', ')} лет)`
+      : 'нет';
+    summary.replaceChildren(
+      summaryRow('Направление', payload.destination),
+      summaryRow('Вылет', payload.departure),
+      summaryRow('Дата', payload.date),
+      summaryRow('Ночей', String(payload.nights)),
+      summaryRow('Взрослых', String(payload.adults)),
+      summaryRow('Детей', childrenText),
+      summaryRow('Бюджет', `${formatRub(payload.budgetMaxRub)} на человека`),
+      summaryRow('Перелёт', payload.directOnly ? 'только прямой' : 'любой подходящий')
+    );
+  };
+
+  const showReview = (payload) => {
+    pendingPayload = payload;
+    renderSummary(payload);
+    form.hidden = true;
+    review.hidden = false;
+    status.textContent = '';
+    save.disabled = false;
+    save.textContent = 'Сохранить и продолжить';
+    tg?.BackButton?.show?.();
+    reviewTitle.focus({ preventScroll: true });
+    review.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  const showForm = () => {
+    review.hidden = true;
+    form.hidden = false;
+    status.textContent = '';
+    tg?.BackButton?.hide?.();
+    submit.focus({ preventScroll: true });
+  };
+
+  document.querySelectorAll('.chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      destination.value = chip.dataset.destination;
+      markDestinationChip(chip.dataset.destination);
+      tg?.HapticFeedback?.selectionChanged();
+    });
+  });
+
+  destination.addEventListener('input', () => markDestinationChip(destination.value.trim()));
+  children.addEventListener('input', renderChildAges);
+  budget.addEventListener('input', setBudget);
+  edit.addEventListener('click', showForm);
+  tg?.BackButton?.onClick?.(showForm);
+
+  const submitViaBackend = async (payload) => {
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData: tg.initData, payload })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok !== true) {
+      throw new Error(result.error || 'Не удалось передать заявку в TurBot.');
+    }
+  };
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    errorBox.textContent = '';
+
+    if (!form.reportValidity()) {
+      errorBox.textContent = 'Проверьте обязательные поля и согласие.';
+      tg?.HapticFeedback?.notificationOccurred('error');
+      return;
+    }
+
+    const payload = buildPayload();
+    if (!payload.destination || !payload.departure || !payload.date || payload.childrenAges.length !== payload.children) {
       errorBox.textContent = 'Проверьте направление, город вылета, дату и возраст детей.';
       return;
     }
 
-    submit.disabled = true;
-    submit.textContent = 'Передаём в TurBot…';
+    showReview(payload);
+    tg?.HapticFeedback?.selectionChanged();
+  });
+
+  save.addEventListener('click', async () => {
+    if (!pendingPayload || save.disabled) return;
+    save.disabled = true;
+    save.textContent = 'Сохраняем…';
+    status.textContent = 'Передаём параметры в TurBot…';
 
     try {
       if (tg?.initData) {
-        await submitViaBackend(payload);
+        await submitViaBackend(pendingPayload);
+        status.textContent = 'Параметры сохранены. Возвращаемся в TurBot…';
+        tg.HapticFeedback?.notificationOccurred('success');
+        tg.BackButton?.hide?.();
+        tg.close();
         return;
       }
 
-      // Telegram simple WebView / reply-keyboard fallback. sendData is intended
-      // for Keyboard Button Mini Apps, not the persistent bot menu button.
+      // Fallback for reply-keyboard Mini Apps. The persistent menu button uses
+      // the signed backend path above.
       if (tg?.sendData) {
-        tg.sendData(JSON.stringify(payload));
+        tg.sendData(JSON.stringify(pendingPayload));
         return;
       }
 
-      console.info('TurBot Mini App payload', payload);
-      errorBox.textContent = 'Предпросмотр: откройте приложение из Telegram для отправки заявки.';
-      restoreSubmit();
+      console.info('TurBot Mini App payload', pendingPayload);
+      status.textContent = 'Предпросмотр: откройте приложение из Telegram для сохранения заявки.';
+      save.disabled = false;
+      save.textContent = 'Сохранить и продолжить';
     } catch (error) {
       console.error('TurBot Mini App submit failed', error);
-      errorBox.textContent = error instanceof Error ? error.message : 'Не удалось передать заявку.';
+      status.textContent = error instanceof Error ? error.message : 'Не удалось передать заявку.';
       tg?.HapticFeedback?.notificationOccurred('error');
-      restoreSubmit();
+      save.disabled = false;
+      save.textContent = 'Повторить сохранение';
     }
   });
 
@@ -175,4 +261,5 @@
   setMinDate();
   renderChildAges();
   applyTelegramContext();
+  applyDeepLink();
 })();
