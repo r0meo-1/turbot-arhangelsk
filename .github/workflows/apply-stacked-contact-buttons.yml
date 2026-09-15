@@ -22,14 +22,14 @@ jobs:
           path = Path("bot.py")
           text = path.read_text(encoding="utf-8")
           start = text.index("def kb_contact_methods() -> str:")
-          end = text.index("\n\ndef kb_destinations() -> str:", start)
+          end = text.index("\n\ndef ", start + 1)
           block = text[start:end]
           old = """        [
-              _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
-              _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
-          ],"""
+            _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
+            _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
+        ],"""
           new = """        [_inline_btn(BACK_BUTTON_TEXT, CB_BACK)],
-          [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],"""
+        [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],"""
           if old not in block:
               raise SystemExit("Target contact navigation row not found")
           block = block.replace(old, new, 1)
