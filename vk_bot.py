@@ -2901,7 +2901,12 @@ def _send_tutu_to_admin(user_id: int, result: Any, client_name: Optional[str]) -
         try:
             http_session.post(
                 f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                json={"chat_id": recipient, "text": text, "parse_mode": "HTML"},
+                json={
+                    "chat_id": recipient,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
                 timeout=HTTP_TIMEOUT,
             )
         except Exception as exc:

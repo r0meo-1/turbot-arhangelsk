@@ -12,6 +12,7 @@ from shared.mdt import (
     extract_id,
     dispatch_lead,
     create_preorder,
+    create_lead,
 )
 
 
@@ -147,3 +148,44 @@ def test_create_preorder_flow():
     assert preorder_id == 20
     assert tourist_id == 10
     assert calls == ["add-tourist-temp", "create-preorder"]
+
+
+def test_create_lead_includes_selected_tour():
+    captured = {}
+
+    def req(method, params):
+        captured["method"] = method
+        captured["params"] = params
+        return {"id": 321}
+
+    settings = MDTSettings(enabled=True, mode="lead", source="VK")
+    ok = create_lead(
+        settings,
+        424242,
+        {
+            "destination": "Таиланд",
+            "dates": "2026-10-15",
+            "nights": "10",
+            "people": "2",
+            "budget": 270000,
+            "budget_scope": "total",
+            "selected_tour": {
+                "hotel": "Mandarava Resort & Spa Karon Beach 5★",
+                "date": "2026-10-29",
+                "nights": 10,
+                "meal": "Завтраки",
+                "price": 155000,
+                "tour_id": "th-6",
+            },
+        },
+        "+70000000000",
+        "Тест VK",
+        request_fn=req,
+    )
+
+    assert ok is True
+    assert captured["method"] == "add-lead"
+    fields = {field["name"]: field["values"][0] for field in captured["params"]["fields"]}
+    assert "Mandarava Resort & Spa Karon Beach 5★" in fields["Выбранный тур"]
+    assert "155000 ₽" in fields["Выбранный тур"]
+    assert "ID th-6" in fields["Выбранный тур"]
