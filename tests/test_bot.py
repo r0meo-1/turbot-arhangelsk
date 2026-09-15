@@ -1732,3 +1732,99 @@ def test_telegram_mdt_retry_does_not_run_for_preorder(monkeypatch):
     monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
     monkeypatch.setattr(bot, "DEMO_MODE", False)
     assert bot._retry_pending_mdt_once(now=123456) == 0
+
+
+
+def test_mdt_retry_stale_alert_is_pii_free_and_uses_stable_key(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    monkeypatch.setattr(bot, "MDT_RETRY_ALERT_AFTER_SECONDS", 60)
+
+    now = int(time.time())
+    secret_phone = "+79990001122"
+    lead_id = bot.save_lead(
+        7901,
+        {"destination": "Вьетнам", "people": "2", "budget": 250000},
+        secret_phone,
+        first_name="Secret",
+        username="secret_user",
+    )
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            UPDATE leads
+            SET mdt_status='pending', mdt_attempts=4,
+                mdt_next_retry_at=?, created_at=?
+            WHERE id=?
+            """,
+            (now - 10, now - 120, lead_id),
+        )
+
+    alerts = []
+    monkeypatch.setattr(
+        bot,
+        "_alert_admin_error",
+        lambda message, exc=None, *, alert_key=None: alerts.append(
+            (message, exc, alert_key)
+        ),
+    )
+
+    assert bot._alert_stale_mdt_retry_queue(now=now) is True
+    assert len(alerts) == 1
+    message, exc, alert_key = alerts[0]
+    assert alert_key == "mdt_retry_queue_stale"
+    assert exc is None
+    assert "pending=1" in message
+    assert "due_now=1" in message
+    assert "max_attempts=4" in message
+    assert "oldest=120s" in message
+    assert secret_phone not in message
+    assert "Secret" not in message
+    assert "secret_user" not in message
+
+
+def test_mdt_retry_stale_alert_ignores_fresh_queue(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    monkeypatch.setattr(bot, "MDT_RETRY_ALERT_AFTER_SECONDS", 300)
+
+    now = int(time.time())
+    lead_id = bot.save_lead(
+        7902,
+        {"destination": "Таиланд", "people": "2", "budget": 250000},
+        "Telegram @fresh",
+    )
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            UPDATE leads
+            SET mdt_status='pending', mdt_attempts=1,
+                mdt_next_retry_at=?, created_at=?
+            WHERE id=?
+            """,
+            (now + 30, now - 60, lead_id),
+        )
+
+    alerts = []
+    monkeypatch.setattr(
+        bot,
+        "_alert_admin_error",
+        lambda *args, **kwargs: alerts.append((args, kwargs)),
+    )
+
+    assert bot._alert_stale_mdt_retry_queue(now=now) is False
+    assert alerts == []
+
+
+def test_mdt_retry_stale_alert_can_be_disabled(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_RETRY_ALERT_AFTER_SECONDS", 0)
+    monkeypatch.setattr(
+        bot,
+        "_mdt_retry_health",
+        lambda now=None: (_ for _ in ()).throw(AssertionError("health should not be read")),
+    )
+    assert bot._alert_stale_mdt_retry_queue(now=123) is False
