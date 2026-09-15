@@ -564,6 +564,29 @@ def init_db() -> None:
                 (repair_name, repair_now),
             )
 
+        # The CRM UI later confirmed that this exact lead already exists as
+        # inquiry #1815 with external key vk-lead-35. Stop retrying that row: a
+        # retry cannot improve an already-created CRM record and could create a
+        # duplicate on endpoints that do not enforce external-key uniqueness.
+        confirm_name = "20260915_confirm_existing_mdt_lead_35"
+        cur.execute("SELECT 1 FROM maintenance_migrations WHERE name = ?", (confirm_name,))
+        if cur.fetchone() is None:
+            confirm_now = int(time.time())
+            cur.execute(
+                """
+                UPDATE leads
+                SET mdt_status='synced', mdt_next_retry_at=NULL, mdt_synced_at=?
+                WHERE id=35 AND mdt_status='pending' AND mdt_attempts > 0
+                """,
+                (confirm_now,),
+            )
+            if cur.rowcount:
+                logger.warning("Stopped retries for MDT lead 35 after CRM confirmation")
+            cur.execute(
+                "INSERT INTO maintenance_migrations (name, applied_at) VALUES (?, ?)",
+                (confirm_name, confirm_now),
+            )
+
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
