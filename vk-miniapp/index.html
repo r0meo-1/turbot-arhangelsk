@@ -89,6 +89,14 @@
         <div class="range-labels"><span>100 000 ₽</span><span>600 000 ₽</span></div>
       </section>
 
+      <label class="toggle-card card" for="direct">
+        <span>
+          <strong>Только прямой рейс</strong>
+          <span>Если доступен подходящий вариант</span>
+        </span>
+        <input id="direct" name="direct" type="checkbox">
+      </label>
+
       <label class="consent-card card">
         <input id="consent" name="consent" type="checkbox" required>
         <span>Согласен на обработку данных заявки по <a href="https://bot.r0meo1.ru/privacy" target="_blank" rel="noopener noreferrer">политике «АПРЕЛЬ тур»</a>.</span>
@@ -96,7 +104,7 @@
 
       <p id="error" class="error" role="alert" aria-live="polite"></p>
       <button id="submit" class="primary" type="submit">Проверить параметры</button>
-<p class="privacy-note">Сначала проверим параметры. Отели и цены покажет бот в сообщениях сообщества. Заявка менеджеру отправляется отдельно в чате.</p>
+      <p class="privacy-note">Сначала проверим параметры. Отели и цены покажет бот в сообщениях сообщества. Заявка менеджеру отправляется отдельно в чате.</p>
     </form>
     <section id="review" class="card" hidden aria-labelledby="review-title">
       <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
