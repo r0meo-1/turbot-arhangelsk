@@ -1,0 +1,54 @@
+name: Patch VK MDT source
+
+on:
+  push:
+    branches: [fix/vk-mdt-write-coverage]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/vk-mdt-write-coverage
+          fetch-depth: 0
+      - name: Apply platform-specific MDT source
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('vk_bot.py')
+          text = path.read_text(encoding='utf-8')
+          old_config = 'MDT_SOURCE     = os.getenv("MDT_SOURCE", "VK Bot")'
+          new_config = 'MDT_SOURCE     = os.getenv("VK_MDT_SOURCE", "VK Bot").strip() or "VK Bot"'
+          old_setting = '        source=MDT_SOURCE,'
+          new_setting = '        source=(os.getenv("VK_MDT_SOURCE", "VK Bot").strip() or "VK Bot"),'
+
+          changed = False
+          if old_config in text:
+              text = text.replace(old_config, new_config, 1)
+              changed = True
+          if old_setting in text:
+              text = text.replace(old_setting, new_setting, 1)
+              changed = True
+
+          if changed:
+              path.write_text(text, encoding='utf-8')
+          elif new_config not in text or new_setting not in text:
+              raise SystemExit('Expected VK MDT source anchors were not found')
+          PY
+
+          if git diff --quiet -- vk_bot.py; then
+            echo "VK MDT source already patched"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add vk_bot.py
+          git commit -m "Use VK-specific MDT source"
+          git push origin HEAD:fix/vk-mdt-write-coverage
