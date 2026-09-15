@@ -44,17 +44,21 @@ jobs:
         env:
           VK_MINI_APP_ID: ${{ secrets.VK_MINI_APP_ID }}
           VK_MINI_APP_SECRET: ${{ secrets.VK_MINI_APP_SECRET }}
+          MDT_API_KEY: ${{ secrets.MDT_API_KEY }}
         run: |
           set -Eeuo pipefail
 
           test -n "$VK_MINI_APP_ID"
           test -n "$VK_MINI_APP_SECRET"
+          test -n "$MDT_API_KEY"
 
           app_id_b64="$(printf '%s' "$VK_MINI_APP_ID" | base64 -w0)"
           secret_b64="$(printf '%s' "$VK_MINI_APP_SECRET" | base64 -w0)"
+          mdt_key_b64="$(printf '%s' "$MDT_API_KEY" | base64 -w0)"
 
-          printf 'TURBOT_DEPLOY_CONFIG_V1\n%s\n%s\n' \
+          printf 'TURBOT_DEPLOY_CONFIG_V2\n%s\n%s\n%s\n' \
             "$app_id_b64" \
-            "$secret_b64" |
+            "$secret_b64" \
+            "$mdt_key_b64" |
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
