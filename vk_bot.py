@@ -577,6 +577,29 @@ def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
         return dict(row) if row else None
 
 
+def _decode_session_state(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert SQLite session columns back to the in-memory dialog shape."""
+    data = dict(raw)
+    data.pop("chat_id", None)
+    data["kids_ages"] = _ages_from_db(data.get("kids_ages"))
+    data["needs_consultation"] = bool(data.get("needs_consultation"))
+    if data.get("dates_are_trip") is not None:
+        data["dates_are_trip"] = bool(data["dates_are_trip"])
+    data["selected_tour"] = _tour_from_db(data.get("selected_tour"))
+    return data
+
+
+def _restore_session_from_db(chat_id: int) -> Optional[Dict[str, Any]]:
+    """Hydrate a persisted dialog when the process cache does not have it."""
+    raw = get_session(chat_id)
+    if raw is None:
+        return None
+    data = _decode_session_state(raw)
+    with _lock:
+        user_data[chat_id] = data
+    return data
+
+
 def delete_session(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
@@ -2725,7 +2748,7 @@ def _go_back(user_id: int) -> None:
 
 
 def handle_dialog(user_id: int, text: str, message: Dict[str, Any]) -> None:
-    info = user_data.get(user_id, {})
+    info = user_data.get(user_id) or _restore_session_from_db(user_id) or {}
     state = info.get("state")
     if state is None:
         send_message(user_id, HINT_START)
@@ -3186,9 +3209,11 @@ def _process_message(message: Dict[str, Any]) -> None:
         handle_cancel(user_id)
         return
     if command == "menu":
-        # Повторить текущий вопрос вместе с его кнопками. Ничего не меняет в
-        # состоянии: человек застрял на шаге, а не хочет его пройти заново.
-        state = (user_data.get(user_id) or {}).get("state")
+        # Повторить текущий вопрос вместе с его кнопками. Mini App persists its
+        # review in SQLite, so recover it if the process cache is empty (for
+        # example after a restart or when returning from the embedded app).
+        info = user_data.get(user_id) or _restore_session_from_db(user_id)
+        state = (info or {}).get("state")
         if state:
             _prompt_for_state(user_id, state)
         else:
