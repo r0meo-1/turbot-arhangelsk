@@ -1452,10 +1452,8 @@ def kb_contact_methods() -> str:
         [_inline_btn(CONTACT_TG_TEXT, CB_CONTACT_TG)],
         [_inline_btn(CONTACT_PHONE_TEXT, CB_CONTACT_PHONE)],
         [_inline_btn(CONTACT_VK_TEXT, CB_CONTACT_VK)],
-        [
-            _inline_btn(BACK_BUTTON_TEXT, CB_BACK),
-            _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL),
-        ],
+            [_inline_btn(BACK_BUTTON_TEXT, CB_BACK)],
+            [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],
     ])
 
 
