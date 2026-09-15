@@ -25,9 +25,15 @@ jobs:
 
           old = "                budget INTEGER,\n                budget_scope TEXT,\n                phone TEXT,\n"
           new = "                budget INTEGER,\n                budget_scope TEXT,\n                source TEXT,\n                vk_ref TEXT,\n                vk_platform TEXT,\n                phone TEXT,\n"
-          if text.count(old) != 2:
-              raise SystemExit(f"unexpected schema block count: {text.count(old)}")
-          text = text.replace(old, new)
+          if text.count(old) != 1:
+              raise SystemExit(f"unexpected sessions schema block count: {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          old = "                budget INTEGER,\n                budget_scope TEXT,\n                phone TEXT NOT NULL,\n"
+          new = "                budget INTEGER,\n                budget_scope TEXT,\n                source TEXT,\n                vk_ref TEXT,\n                vk_platform TEXT,\n                phone TEXT NOT NULL,\n"
+          if text.count(old) != 1:
+              raise SystemExit(f"unexpected leads schema block count: {text.count(old)}")
+          text = text.replace(old, new, 1)
 
           old = "            if \"budget_scope\" not in _cols:\n                cur.execute(f\"ALTER TABLE {_t} ADD COLUMN budget_scope TEXT\")\n"
           new = "            if \"budget_scope\" not in _cols:\n                cur.execute(f\"ALTER TABLE {_t} ADD COLUMN budget_scope TEXT\")\n            for _c in (\"source\", \"vk_ref\", \"vk_platform\"):\n                if _c not in _cols:\n                    cur.execute(f\"ALTER TABLE {_t} ADD COLUMN {_c} TEXT\")\n"
