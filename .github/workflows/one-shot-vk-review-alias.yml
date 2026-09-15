@@ -1,17 +1,13 @@
 name: One-shot VK Mini App review return patch
 
-on:
-  push:
-    branches:
-      - fix/vk-miniapp-review-return
-    paths:
-      - .github/vk-review-alias-trigger
+on: push
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -29,7 +25,7 @@ jobs:
               '    "кнопки": "menu", "меню": "menu", "продолжить": "menu", "где кнопки": "menu",\n'
               '    "проверить заявку": "menu", "проверить": "menu",\n'
           )
-          if text.count(old) != 1:
+          if old not in text:
               raise SystemExit('unexpected command alias block')
           bot.write_text(text.replace(old, new, 1), encoding='utf-8')
 
