@@ -1,4 +1,4 @@
-"""VK Mini App authentication and same-origin draft API (no messaging)."""
+"""VK Mini App authentication, bot entry button, and same-origin draft API."""
 import base64
 import hashlib
 import hmac
@@ -8,6 +8,37 @@ from urllib.parse import parse_qsl, urlencode
 
 from flask import Blueprint, jsonify, request, send_from_directory
 from shared.telegram_webapp import MiniAppValidationError, validate_trip_request
+
+
+MINIAPP_BUTTON_TEXT = "🧳 Подобрать тур в приложении"
+
+
+def build_open_app_button(app_id, group_id, *, enabled=True, hash_value="bot"):
+    """Build a native VK ``open_app`` keyboard button when Mini App is ready.
+
+    ``owner_id`` is the negative community id because the application is
+    installed and opened in the community context.  Returning ``None`` keeps
+    the ordinary chat flow intact on hosts where the app ID/secret are not
+    configured yet.
+    """
+    if not enabled:
+        return None
+    try:
+        app_id = int(app_id)
+        group_id = int(group_id)
+    except (TypeError, ValueError):
+        return None
+    if app_id <= 0 or group_id <= 0:
+        return None
+    return {
+        "action": {
+            "type": "open_app",
+            "app_id": app_id,
+            "owner_id": -abs(group_id),
+            "label": MINIAPP_BUTTON_TEXT,
+            "hash": str(hash_value or "bot")[:128],
+        }
+    }
 
 
 def validate_launch_params(raw, secret, app_id, group_id, *, now=None):
