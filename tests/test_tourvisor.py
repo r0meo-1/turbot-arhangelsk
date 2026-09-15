@@ -253,3 +253,18 @@ def test_client_message_humanises_meal_date_and_keeps_page_numbers():
     assert "15.09.2030" in text
     assert "без питания" in text
     assert tourvisor.is_all_inclusive("UAI") is True
+
+
+def test_explicit_unknown_destination_never_gets_unrelated_hot_tours():
+    offers = tourvisor.get_hot_tours(
+        "Архангельск", destination="Шри-Ланка", limit=15
+    )
+
+    assert offers == []
+
+
+def test_destination_free_hot_tours_still_return_curated_mix():
+    offers = tourvisor.get_hot_tours("Архангельск", destination=None, limit=3)
+
+    assert len(offers) == 3
+    assert all(offer.hotel for offer in offers)
