@@ -59,7 +59,7 @@ from shared.constants import (
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
 )
-from shared.vk_miniapp import create_blueprint
+from shared.vk_miniapp import build_open_app_button, create_blueprint
 from shared.telegram_webapp import MiniAppValidationError
 from shared import tutu as _tutu
 from shared import tourvisor as _tourvisor
@@ -1206,7 +1206,16 @@ def _consent_keyboard() -> str:
 
 
 def _soft_start_keyboard() -> str:
-    return _keyboard([[_btn(START_BUTTON_TEXT, "positive")]])
+    rows: List[List[Dict[str, Any]]] = []
+    miniapp_button = build_open_app_button(
+        os.getenv("VK_MINI_APP_ID", ""),
+        VK_GROUP_ID,
+        enabled=bool(os.getenv("VK_MINI_APP_SECRET", "").strip()),
+    )
+    if miniapp_button:
+        rows.append([miniapp_button])
+    rows.append([_btn(START_BUTTON_TEXT, "positive")])
+    return _keyboard(rows)
 
 
 def _hide_keyboard() -> str:
