@@ -1,0 +1,41 @@
+name: Fix MDT retry test
+
+on:
+  push:
+    branches: [fix/vk-mdt-durable-retry]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: fix/vk-mdt-durable-retry
+          fetch-depth: 0
+      - run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('tests/test_vk_bot.py')
+          t=p.read_text(encoding='utf-8')
+          old='_REAL_SEND_MESSAGE = bot.send_message\n'
+          new='_REAL_SEND_MESSAGE = bot.send_message\n_REAL_SEND_LEAD_TO_MDT = bot.send_lead_to_mdt\n'
+          if new not in t:
+              if old not in t: raise SystemExit('real wrapper anchor missing')
+              t=t.replace(old,new,1)
+          old2='    calls = []\n    monkeypatch.setattr(bot, "_mdt_request", lambda method, params: calls.append((method, params)) or {"id": 1})\n    assert bot.send_lead_to_mdt(42,'
+          new2='    calls = []\n    monkeypatch.setattr(bot, "send_lead_to_mdt", _REAL_SEND_LEAD_TO_MDT)\n    monkeypatch.setattr(bot, "_mdt_request", lambda method, params: calls.append((method, params)) or {"id": 1})\n    assert bot.send_lead_to_mdt(42,'
+          if new2 not in t:
+              if old2 not in t: raise SystemExit('payload test anchor missing')
+              t=t.replace(old2,new2,1)
+          p.write_text(t,encoding='utf-8')
+          PY
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_vk_bot.py
+          git commit -m "Fix MDT payload regression test"
+          git push origin HEAD:fix/vk-mdt-durable-retry
