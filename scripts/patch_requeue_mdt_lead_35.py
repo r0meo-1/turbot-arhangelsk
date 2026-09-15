@@ -66,6 +66,7 @@ index_replacement = '''        # One-time production repair for the single lead 
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
         cur.execute("PRAGMA journal_mode=WAL")
+        cur.fetchone()
 '''
 if "20260915_requeue_false_mdt_sync_lead_35" not in text:
     if index_anchor not in text:
