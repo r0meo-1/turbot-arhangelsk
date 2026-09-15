@@ -15,6 +15,7 @@ os.environ.setdefault("VK_DEMO_MODE", "false")
 os.environ.setdefault("ADMIN_ID", "999")
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
+os.environ.setdefault("VK_MDT_RETRY_ENABLED", "false")
 os.environ.setdefault("AI_MODE", "template")
 os.environ.setdefault("CONSENT_MODE", "strict")  # classic consent in unit tests
 # Присваивание, а не setdefault: test_bot.py импортируется раньше и уже задал
@@ -33,6 +34,7 @@ import pytest
 # настоящая: проверяется как раз то, что она подставляет клавиатуру по
 # состоянию. Ссылка берётся до подмены.
 _REAL_SEND_MESSAGE = bot.send_message
+_REAL_SEND_LEAD_TO_MDT = bot.send_lead_to_mdt
 
 
 @pytest.fixture(autouse=True)
@@ -1267,3 +1269,76 @@ def test_vk_hotel_info_button_shows_tophotels_details(client, monkeypatch):
     assert any("Рейтинг TopHotels" in text for text in captured)
     assert any("Пляж:" in text for text in captured)
 
+
+
+def test_mdt_durable_retry_survives_failure_and_restart_state(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_RETRY_BASE_SECONDS", 5)
+    monkeypatch.setattr(bot, "MDT_RETRY_MAX_SECONDS", 60)
+    monkeypatch.setattr(bot, "MDT_RETRY_BATCH_SIZE", 10)
+    info = {"destination": "Таиланд", "origin": "Архангельск", "dates": "2026-10-15",
+            "nights": "10", "people": "2", "budget": 270000, "budget_scope": "total",
+            "selected_tour": {"hotel": "Mandarava Resort & Spa Karon Beach",
+                              "date": "2026-10-15", "nights": 10, "meal": "BB",
+                              "price": 155000, "tour_id": "th-6"}}
+    lead_id = bot.save_lead(31771632, info, "vk:31771632", first_name="Роман Неклюдов")
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT mdt_status, mdt_attempts FROM leads WHERE id=?", (lead_id,)).fetchone()
+    assert tuple(row) == ("pending", 0)
+    calls = []
+    monkeypatch.setattr(bot, "send_lead_to_mdt",
+        lambda chat_id, payload, phone, name: calls.append((chat_id, payload, phone, name)) or False)
+    assert bot._deliver_mdt_lead(lead_id) is False
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT mdt_status, mdt_attempts, mdt_next_retry_at FROM leads WHERE id=?", (lead_id,)).fetchone()
+    assert row["mdt_status"] == "pending"
+    assert row["mdt_attempts"] == 1
+    assert row["mdt_next_retry_at"] > int(time.time())
+    assert calls[0][1]["_mdt_delivery_key"] == f"vk-lead-{lead_id}"
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("UPDATE leads SET mdt_next_retry_at=0 WHERE id=?", (lead_id,))
+    monkeypatch.setattr(bot, "send_lead_to_mdt", lambda *a, **k: True)
+    assert bot._retry_pending_mdt_leads() == 1
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at FROM leads WHERE id=?", (lead_id,)).fetchone()
+    assert row["mdt_status"] == "synced"
+    assert row["mdt_attempts"] == 1
+    assert row["mdt_next_retry_at"] is None
+    assert row["mdt_synced_at"] > 0
+
+
+def test_mdt_retry_does_not_repeat_client_or_manager_notifications(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    lead_id = bot.save_lead(777, {"destination": "Египет", "people": "2", "budget": 200000}, "vk:777", first_name="Test User")
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("UPDATE leads SET mdt_next_retry_at=0 WHERE id=?", (lead_id,))
+    monkeypatch.setattr(bot, "_confirm_to_user", lambda *a, **k: pytest.fail("retry must not contact client"))
+    monkeypatch.setattr(bot, "_notify_admin", lambda *a, **k: pytest.fail("retry must not notify manager"))
+    monkeypatch.setattr(bot, "send_lead_to_mdt", lambda *a, **k: True)
+    assert bot._retry_pending_mdt_leads() == 1
+
+
+def test_mdt_delivery_key_is_in_add_lead_fields(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_API_KEY", "test-key")
+    monkeypatch.setattr(bot, "MDT_BASE_URL", "https://example.invalid")
+    calls = []
+    monkeypatch.setattr(bot, "send_lead_to_mdt", _REAL_SEND_LEAD_TO_MDT)
+    monkeypatch.setattr(bot, "_mdt_request", lambda method, params: calls.append((method, params)) or {"id": 1})
+    assert bot.send_lead_to_mdt(42, {"destination": "Таиланд", "_mdt_delivery_key": "vk-lead-123"}, "vk:42", "Роман") is True
+    assert calls[0][0] == "add-lead"
+    assert {"name": "ID заявки бота", "values": ["vk-lead-123"]} in calls[0][1]["fields"]
+
+
+def test_mdt_retry_is_not_armed_for_multistep_modes(monkeypatch):
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "both")
+    lead_id = bot.save_lead(778, {"destination": "Турция"}, "vk:778", first_name="Test")
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT mdt_status, mdt_next_retry_at FROM leads WHERE id=?", (lead_id,)).fetchone()
+    assert tuple(row) == ("disabled", None)

@@ -164,6 +164,11 @@ try:
 except (ValueError, TypeError):
     MDT_REMINDER_DAYS = 1
 MDT_REMINDER_TEXT = os.getenv("MDT_REMINDER_TEXT", "Позвонить по заявке с VK-бота")
+MDT_RETRY_ENABLED = os.getenv("VK_MDT_RETRY_ENABLED", "true").lower().strip() in ("1", "true", "yes")
+MDT_RETRY_POLL_SECONDS = max(5, _env_int("VK_MDT_RETRY_POLL_SECONDS", 60))
+MDT_RETRY_BASE_SECONDS = max(5, _env_int("VK_MDT_RETRY_BASE_SECONDS", 60))
+MDT_RETRY_MAX_SECONDS = max(MDT_RETRY_BASE_SECONDS, _env_int("VK_MDT_RETRY_MAX_SECONDS", 3600))
+MDT_RETRY_BATCH_SIZE = max(1, _env_int("VK_MDT_RETRY_BATCH_SIZE", 10))
 
 if MDT_MODE not in ("lead", "preorder", "both"):
     logger.warning("MDT_MODE '%s' is unknown, defaulting to 'lead'", MDT_MODE)
@@ -477,6 +482,10 @@ def init_db() -> None:
                 phone TEXT NOT NULL,
                 needs_consultation INTEGER NOT NULL DEFAULT 0,
                 selected_tour TEXT,
+                mdt_status TEXT,
+                mdt_attempts INTEGER NOT NULL DEFAULT 0,
+                mdt_next_retry_at INTEGER,
+                mdt_synced_at INTEGER,
                 created_at INTEGER NOT NULL
             )
         """)
@@ -508,8 +517,18 @@ def init_db() -> None:
             for _c in ("source", "vk_ref", "vk_platform"):
                 if _c not in _cols:
                     cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} TEXT")
+            if _t == "leads":
+                if "mdt_status" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN mdt_status TEXT")
+                if "mdt_attempts" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN mdt_attempts INTEGER NOT NULL DEFAULT 0")
+                if "mdt_next_retry_at" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN mdt_next_retry_at INTEGER")
+                if "mdt_synced_at" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN mdt_synced_at INTEGER")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
         cur.execute("PRAGMA journal_mode=WAL")
 
 
@@ -625,11 +644,17 @@ def save_lead(
     phone: str,
     first_name: str = "",
     username: str = "",
-) -> None:
-    """Persist a completed tour request for retention-aware export/history."""
+) -> int:
+    """Persist a completed request and return its durable local lead id."""
     now = int(time.time())
     if DEMO_MODE:
         phone = _tutu_mask_phone(phone)
+    # Durable retry is intentionally scoped to add-lead mode. Retrying a
+    # multi-step preorder/both transaction without server-side idempotency can
+    # duplicate the part that already succeeded. Those modes keep the legacy
+    # one-shot path until MDT exposes an idempotency key or lookup API.
+    mdt_status = "pending" if MDT_ENABLED and MDT_MODE == "lead" and not DEMO_MODE else "disabled"
+    mdt_next_retry_at = now if mdt_status == "pending" else None
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
@@ -638,8 +663,9 @@ def save_lead(
                 dates_are_trip,
                 people, hotel_query, kids, kids_ages, infants, budget, budget_scope,
                 source, vk_ref, vk_platform, phone,
-                needs_consultation, selected_tour, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                needs_consultation, selected_tour,
+                mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -662,9 +688,21 @@ def save_lead(
                 phone,
                 int(bool(info.get("needs_consultation"))),
                 _tour_to_db(info.get("selected_tour")),
-                now,
+                mdt_status, 0, mdt_next_retry_at, None, now,
             ),
         )
+        return int(cur.lastrowid)
+
+
+def _lead_row_to_info(row: Dict[str, Any]) -> Dict[str, Any]:
+    info = dict(row)
+    info["kids_ages"] = _ages_from_db(info.get("kids_ages"))
+    info["needs_consultation"] = bool(info.get("needs_consultation"))
+    if info.get("dates_are_trip") is not None:
+        info["dates_are_trip"] = bool(info["dates_are_trip"])
+    info["selected_tour"] = _tour_from_db(info.get("selected_tour"))
+    info["_mdt_delivery_key"] = f"vk-lead-{info['id']}"
+    return info
 
 
 # --- user helpers ---
@@ -1341,8 +1379,8 @@ def send_preorder_to_mdt(chat_id, info, phone, client_name) -> Tuple[Optional[in
     )
 
 
-def send_lead_to_mdt(chat_id, info, phone, client_name) -> None:
-    mdt_shared.dispatch_lead(
+def send_lead_to_mdt(chat_id, info, phone, client_name) -> bool:
+    return mdt_shared.dispatch_lead(
         _mdt_settings(),
         chat_id,
         info,
@@ -1352,6 +1390,89 @@ def send_lead_to_mdt(chat_id, info, phone, client_name) -> None:
         _mdt_request,
         log=logger,
     )
+
+
+_mdt_delivery_lock = threading.Lock()
+
+
+def _mdt_retry_delay(attempts: int) -> int:
+    exponent = max(0, min(int(attempts) - 1, 16))
+    return min(MDT_RETRY_MAX_SECONDS, MDT_RETRY_BASE_SECONDS * (2 ** exponent))
+
+
+def _deliver_mdt_lead(lead_id: int) -> bool:
+    if not MDT_ENABLED or DEMO_MODE:
+        return True
+    with _mdt_delivery_lock:
+        with _db_cursor() as cur:
+            cur.execute("SELECT * FROM leads WHERE id = ?", (lead_id,))
+            row = cur.fetchone()
+        if row is None:
+            return True
+        record = dict(row)
+        if record.get("mdt_status") in ("synced", "disabled"):
+            return True
+        info = _lead_row_to_info(record)
+        try:
+            success = bool(send_lead_to_mdt(
+                int(record["chat_id"]), info, str(record.get("phone") or ""),
+                record.get("first_name") or f"VK {record['chat_id']}",
+            ))
+        except Exception as exc:
+            logger.error("MDT durable delivery crashed for lead %s: %s", lead_id, exc)
+            success = False
+        now = int(time.time())
+        if success:
+            with _db_cursor(commit=True) as cur:
+                cur.execute(
+                    "UPDATE leads SET mdt_status='synced', mdt_synced_at=?, "
+                    "mdt_next_retry_at=NULL WHERE id=?", (now, lead_id))
+            logger.info("MDT durable delivery synced local lead %s", lead_id)
+            return True
+        attempts = int(record.get("mdt_attempts") or 0) + 1
+        next_retry = now + _mdt_retry_delay(attempts)
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "UPDATE leads SET mdt_status='pending', mdt_attempts=?, "
+                "mdt_next_retry_at=? WHERE id=?", (attempts, next_retry, lead_id))
+        logger.warning(
+            "MDT delivery pending for local lead %s (attempt %s, retry in %ss)",
+            lead_id, attempts, max(0, next_retry - now))
+        return False
+
+
+def _retry_pending_mdt_leads() -> int:
+    if not MDT_ENABLED or not MDT_RETRY_ENABLED or DEMO_MODE:
+        return 0
+    now = int(time.time())
+    with _db_cursor() as cur:
+        cur.execute(
+            "SELECT id FROM leads WHERE mdt_status='pending' "
+            "AND COALESCE(mdt_next_retry_at, 0) <= ? ORDER BY id LIMIT ?",
+            (now, MDT_RETRY_BATCH_SIZE))
+        ids = [int(row[0]) for row in cur.fetchall()]
+    synced = 0
+    for lead_id in ids:
+        if _deliver_mdt_lead(lead_id):
+            synced += 1
+    return synced
+
+
+def _start_mdt_retry_worker() -> None:
+    if not MDT_ENABLED or not MDT_RETRY_ENABLED or DEMO_MODE:
+        return
+    def _worker() -> None:
+        # Give startup network/config work a chance to finish before replaying
+        # rows left pending by a previous process.
+        time.sleep(MDT_RETRY_POLL_SECONDS)
+        while True:
+            try:
+                _retry_pending_mdt_leads()
+            except Exception as exc:
+                logger.error("MDT retry worker failed: %s", exc)
+            time.sleep(MDT_RETRY_POLL_SECONDS)
+    threading.Thread(target=_worker, daemon=True, name="vk-mdt-retry").start()
+    logger.info("MDT retry worker started (%ss poll)", MDT_RETRY_POLL_SECONDS)
 
 
 def _consent_text() -> str:
@@ -2918,10 +3039,16 @@ def _post_completion_side_effects(
     info: Dict[str, Any],
     phone: str,
     client_name: Optional[str],
+    lead_id: Optional[int] = None,
 ) -> None:
     """MDT push + live offers + AI blurb — off the VK Callback hot path."""
     try:
-        send_lead_to_mdt(user_id, info, phone, client_name)
+        if lead_id is not None and MDT_MODE == "lead":
+            _deliver_mdt_lead(lead_id)
+        elif MDT_ENABLED and not DEMO_MODE:
+            # preorder/both remain one-shot because their multi-call transaction
+            # cannot be retried safely without server-side idempotency.
+            send_lead_to_mdt(user_id, info, phone, client_name)
 
         # The client already chose a complete package. Sending an unrelated
         # flight-only estimate or an AI placeholder after confirmation would
@@ -2968,8 +3095,9 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     info.pop("_completing", None)
     client_name = message.get("_user_name") or f"VK {user_id}"
 
+    lead_id: Optional[int] = None
     try:
-        save_lead(user_id, info, phone, first_name=client_name)
+        lead_id = save_lead(user_id, info, phone, first_name=client_name)
     except Exception as exc:
         logger.error("Failed to save VK lead for %s: %s", user_id, exc)
 
@@ -2980,11 +3108,11 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     delete_session(user_id)
 
     if SYNC_COMPLETION:
-        _post_completion_side_effects(user_id, info, phone, client_name)
+        _post_completion_side_effects(user_id, info, phone, client_name, lead_id)
     else:
         threading.Thread(
             target=_post_completion_side_effects,
-            args=(user_id, info, phone, client_name),
+            args=(user_id, info, phone, client_name, lead_id),
             daemon=True,
             name=f"vk-complete-{user_id}",
         ).start()
@@ -3396,6 +3524,7 @@ load_state()
 _start_timeout_worker()
 _start_followup_worker()
 _start_retention_worker()
+_start_mdt_retry_worker()
 
 def _deferred_network_startup() -> None:
     """Keep slow network calls off module import.

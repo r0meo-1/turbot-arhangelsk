@@ -276,6 +276,10 @@ def create_lead(
         fields.append({"name": "Количество человек", "values": [str(info["people"])]})
     if info.get("budget"):
         fields.append({"name": "Бюджет", "values": [_budget_field_value(info)]})
+    delivery_key = str(info.get("_mdt_delivery_key") or "").strip()
+    if delivery_key:
+        fields.append({"name": "ID заявки бота", "values": [delivery_key]})
+
     selected = info.get("selected_tour")
     if isinstance(selected, dict):
         selected_text = " · ".join(str(value) for value in (
@@ -437,10 +441,10 @@ def dispatch_lead(
     country_cache: Dict[str, int],
     request_fn: RequestFn,
     log: Optional[logging.Logger] = None,
-) -> None:
-    """Send completed bot request to MDT according to settings.mode."""
+) -> bool:
+    """Send a completed request to MDT and report whether a write succeeded."""
     if not settings.enabled:
-        return
+        return False
 
     success = False
     mode = settings.mode if settings.mode in ("lead", "preorder", "both") else "lead"
@@ -473,3 +477,4 @@ def dispatch_lead(
         notify_managers(
             settings, chat_id, info, phone, client_name, request_fn, log=log
         )
+    return success
