@@ -35,3 +35,25 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Verify published Telegram Mini App
+        shell: bash
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          base="${PAGE_URL%/}/miniapp"
+          for attempt in {1..12}; do
+            if html="$(curl -fsSL --max-time 15 "$base/")" && \
+               js="$(curl -fsSL --max-time 15 "$base/app.js")"; then
+              if grep -q 'trip-form' <<<"$html" && \
+                 grep -q "budgetScope: 'per_person'" <<<"$js" && \
+                 grep -q "source: 'telegram_mini_app'" <<<"$js"; then
+                echo "Telegram Mini App Pages smoke: ok"
+                exit 0
+              fi
+            fi
+            echo "Published Mini App not ready yet (attempt $attempt/12)"
+            sleep 5
+          done
+          echo "Telegram Mini App Pages smoke failed" >&2
+          exit 1
