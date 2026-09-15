@@ -91,7 +91,13 @@ def _bounded_int(payload: Dict[str, Any], key: str, minimum: int, maximum: int) 
 
 
 def validate_trip_request(payload: Any) -> Dict[str, Any]:
-    """Validate and normalise the Mini App trip-request payload."""
+    """Validate and normalise the shared Mini App trip-request payload.
+
+    ``budgetScope`` is explicit for new clients. Legacy Telegram payloads did
+    not include it, so the shared validator keeps their historical per-person
+    meaning. Platform adapters may supply a different legacy default before
+    calling this function (VK uses ``total``).
+    """
     if not isinstance(payload, dict):
         raise MiniAppValidationError("payload must be an object")
     if payload.get("type") != "trip_request" or payload.get("version") != 2:
@@ -113,6 +119,10 @@ def validate_trip_request(payload: Any) -> Dict[str, Any]:
     adults = _bounded_int(payload, "adults", 1, 8)
     children = _bounded_int(payload, "children", 0, 6)
     budget = _bounded_int(payload, "budgetMaxRub", 100_000, 600_000)
+
+    budget_scope = payload.get("budgetScope", "per_person")
+    if budget_scope not in {"per_person", "total"}:
+        raise MiniAppValidationError("budgetScope is invalid")
 
     raw_ages = payload.get("childrenAges", [])
     if not isinstance(raw_ages, list) or len(raw_ages) != children:
@@ -138,6 +148,7 @@ def validate_trip_request(payload: Any) -> Dict[str, Any]:
         "people": str(adults),
         "kids_ages": ages,
         "budget": budget,
+        "budget_scope": budget_scope,
         "budget_open_ended": False,
         "direct_only": payload.get("directOnly") is True,
         "source": "telegram_mini_app",
