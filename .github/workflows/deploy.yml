@@ -41,6 +41,20 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
       - name: Trigger restricted server deploy
-        run: >
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new
-          root@${{ secrets.DEPLOY_HOST }} true
+        env:
+          VK_MINI_APP_ID: ${{ secrets.VK_MINI_APP_ID }}
+          VK_MINI_APP_SECRET: ${{ secrets.VK_MINI_APP_SECRET }}
+        run: |
+          set -Eeuo pipefail
+
+          test -n "$VK_MINI_APP_ID"
+          test -n "$VK_MINI_APP_SECRET"
+
+          app_id_b64="$(printf '%s' "$VK_MINI_APP_ID" | base64 -w0)"
+          secret_b64="$(printf '%s' "$VK_MINI_APP_SECRET" | base64 -w0)"
+
+          printf 'TURBOT_DEPLOY_CONFIG_V1\n%s\n%s\n' \
+            "$app_id_b64" \
+            "$secret_b64" |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              root@${{ secrets.DEPLOY_HOST }} true
