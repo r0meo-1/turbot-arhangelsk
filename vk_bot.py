@@ -3359,7 +3359,39 @@ _COMMAND_ALIASES = {
     "экспорт": "export", "заявки": "export",
     "рассылка": "broadcast",
     "напоминания": "followup",
+    "crm статус": "crm_status", "mdt статус": "crm_status",
 }
+
+
+def _mdt_admin_status_text() -> str:
+    """Return a PII-free summary of the latest local MDT delivery state."""
+    with _db_cursor() as cur:
+        row = cur.execute(
+            """
+            SELECT id, mdt_status, mdt_attempts, mdt_preorder_id,
+                   mdt_tourist_id, mdt_synced_at, created_at
+            FROM leads ORDER BY id DESC LIMIT 1
+            """
+        ).fetchone()
+    if row is None:
+        return "🔧 CRM статус\nЗаявок пока нет."
+
+    now = int(time.time())
+    age_seconds = max(0, now - int(row["created_at"] or now))
+    age_minutes = age_seconds // 60
+    preorder_id = row["mdt_preorder_id"]
+    tourist_id = row["mdt_tourist_id"]
+    synced_at = row["mdt_synced_at"]
+    return (
+        "🔧 CRM статус\n"
+        f"Локальная заявка: #{int(row['id'])}\n"
+        f"MDT: {row['mdt_status'] or 'unset'}\n"
+        f"Попытки: {int(row['mdt_attempts'] or 0)}\n"
+        f"Preorder ID: {int(preorder_id) if preorder_id is not None else '—'}\n"
+        f"Tourist ID: {int(tourist_id) if tourist_id is not None else '—'}\n"
+        f"Синхронизация: {'есть' if synced_at else 'нет'}\n"
+        f"Возраст записи: {age_minutes} мин."
+    )
 
 
 def _remember_client_capabilities(user_id: int, event: Dict[str, Any]) -> None:
@@ -3430,6 +3462,9 @@ def _process_message(message: Dict[str, Any]) -> None:
     if user_id == ADMIN_ID:
         if command == "help":
             send_message(user_id, USER_HELP)
+            return
+        if command == "crm_status":
+            send_message(user_id, _mdt_admin_status_text())
             return
         if command == "analytics":
             with _db_cursor() as cur:
