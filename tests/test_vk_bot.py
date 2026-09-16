@@ -400,13 +400,14 @@ def test_vk_searches_both_departure_cities(monkeypatch):
 
     def fake_search(settings, session, info, **kwargs):
         calls.append(info["origin"])
-        return bot._tourvisor.SearchResult(offers=[bot._tourvisor.TourOffer(
+        result = bot._tourvisor.SearchResult(offers=[bot._tourvisor.TourOffer(
             hotel=f"Hotel {info['origin']}", category=4, region="Анталья",
             date="2030-09-12", nights=11, meal="AI", room="Family",
             operator="Operator", price=200000, departure=info["origin"],
         )])
+        return result, "travelata"
 
-    monkeypatch.setattr(bot._tourvisor, "search_tours", fake_search)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", fake_search)
     monkeypatch.setattr(bot, "_send_tour_results_page", lambda *args: None)
 
     bot._tour_search_worker(user_id, marker, {"origin": "Челябинск / Екатеринбург"})

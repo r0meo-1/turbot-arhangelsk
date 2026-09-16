@@ -64,6 +64,8 @@ from shared.vk_miniapp import build_open_app_button, create_blueprint
 from shared.telegram_webapp import MiniAppValidationError
 from shared import tutu as _tutu
 from shared import tourvisor as _tourvisor
+from shared import travelata as _travelata
+from shared import tour_providers as _tour_providers
 from shared import version as _version
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
@@ -280,6 +282,52 @@ def _tourvisor_settings() -> "_tourvisor.TourvisorSettings":
         max_wait=TOURVISOR_MAX_WAIT,
         max_offers=TOURVISOR_MAX_OFFERS,
     )
+
+
+# --- Alternative package-tour providers ------------------------------------
+# Travelata partner API (June 2026+). Access is granted individually through
+# Travelpayouts; keep credentials only in the server environment.
+TRAVELATA_USERNAME = os.getenv("TRAVELATA_USERNAME", "").strip()
+TRAVELATA_PASSWORD = os.getenv("TRAVELATA_PASSWORD", "").strip()
+TRAVELATA_ENABLED = os.getenv(
+    "VK_TRAVELATA_ENABLED",
+    "true" if TRAVELATA_USERNAME and TRAVELATA_PASSWORD else "false",
+).lower().strip() in ("1", "true", "yes")
+TRAVELATA_BASE_URL = os.getenv(
+    "TRAVELATA_BASE_URL", "https://api-gateway.travelata.ru"
+).strip()
+TRAVELATA_TIMEOUT = _env_int("TRAVELATA_TIMEOUT", 15)
+TRAVELATA_MAX_OFFERS = _env_int("TRAVELATA_MAX_OFFERS", 15)
+
+
+def _travelata_settings() -> "_travelata.TravelataSettings":
+    return _travelata.TravelataSettings(
+        enabled=TRAVELATA_ENABLED,
+        username=TRAVELATA_USERNAME,
+        password=TRAVELATA_PASSWORD,
+        base_url=TRAVELATA_BASE_URL,
+        timeout=TRAVELATA_TIMEOUT,
+        max_offers=TRAVELATA_MAX_OFFERS,
+    )
+
+
+TOUR_PROVIDER_ORDER = tuple(
+    name.strip().lower()
+    for name in os.getenv("TOUR_PROVIDER_ORDER", "travelata,tourvisor").split(",")
+    if name.strip()
+)
+TOUR_SEARCH_MAX_OFFERS = max(1, _env_int("TOUR_SEARCH_MAX_OFFERS", 15))
+
+
+def _tour_provider_settings() -> "_tour_providers.ProviderSettings":
+    return _tour_providers.ProviderSettings(
+        order=TOUR_PROVIDER_ORDER,
+        travelata=_travelata_settings(),
+        tourvisor=_tourvisor_settings(),
+    )
+
+
+TOUR_SEARCH_ENABLED = _tour_provider_settings().enabled
 
 
 def _tutu_settings() -> "_tutu.TutuSettings":
@@ -1481,7 +1529,7 @@ def _budget_keyboard() -> str:
 
 def _review_keyboard() -> str:
     rows: List[List[Dict[str, Any]]] = []
-    if TOURVISOR_ENABLED:
+    if TOUR_SEARCH_ENABLED:
         rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "positive")])
         rows.append([_btn(TOUR_SEND_MANAGER_TEXT, "secondary")])
     else:
@@ -2349,6 +2397,11 @@ def _ask_review(user_id: int) -> None:
         if info.get("nights") else ""
     )
     hotel_line = f"\n🏨 Отель: {info['hotel_query']}" if info.get("hotel_query") else ""
+    action_hint = (
+        "✨ Нажмите кнопку «🔎 Показать отели и цены», чтобы увидеть актуальные варианты 👇"
+        if TOUR_SEARCH_ENABLED else
+        "✨ Автопоиск цен сейчас недоступен. Проверьте параметры и отправьте заявку менеджеру 👇"
+    )
     summary = (
         "Проверьте заявку:\n\n"
         f"📍 Направление: {info.get('destination', '—')}\n"
@@ -2358,7 +2411,7 @@ def _ask_review(user_id: int) -> None:
         f"👥 Состав: {_party_text(info)}\n"
         f"{budget_line}"
         f"{consultation}\n\n"
-        "✨ Нажмите кнопку «🔎 Показать отели и цены», чтобы мгновенно увидеть доступные варианты со скидками и рейтингом 👇"
+        f"{action_hint}"
     )
     response = send_message(
         user_id,
@@ -2420,12 +2473,16 @@ def _tour_search_worker(
     origins = [part.strip() for part in str(snapshot.get("origin") or "").split("/") if part.strip()]
     origins = origins or [str(snapshot.get("origin") or "")]
     results = []
+    provider_names: List[str] = []
     for origin in origins[:2]:
         origin_snapshot = dict(snapshot)
         origin_snapshot["origin"] = origin
-        results.append(_tourvisor.search_tours(
-            _tourvisor_settings(), http_session, origin_snapshot, log=logger,
-        ))
+        provider_result, provider_name = _tour_providers.search_tours(
+            _tour_provider_settings(), http_session, origin_snapshot, log=logger,
+        )
+        results.append(provider_result)
+        if provider_name:
+            provider_names.append(provider_name)
     combined = [offer for result in results for offer in result.offers]
     # Curated offers are demo fixtures, never a substitute for an empty or
     # failed upstream search in the live agency funnel.
@@ -2434,11 +2491,11 @@ def _tour_search_worker(
         combined = _tourvisor.get_hot_tours(
             snapshot.get("origin") or "Архангельск",
             destination=dest_val,
-            limit=TOURVISOR_MAX_OFFERS,
+            limit=TOUR_SEARCH_MAX_OFFERS,
         )
     combined.sort(key=lambda offer: offer.price + offer.fuel_charge)
     result = _tourvisor.SearchResult(
-        offers=combined[:TOURVISOR_MAX_OFFERS],
+        offers=combined[:TOUR_SEARCH_MAX_OFFERS],
         error="; ".join(result.error for result in results if result.error),
         search_id=next((result.search_id for result in results if result.search_id), None),
     )
@@ -2471,6 +2528,7 @@ def _tour_search_worker(
             offers = [offer.__dict__.copy() for offer in result.offers]
             live["_tour_offers_base"] = offers
             live["_tour_offers"] = list(offers)
+            live["_tour_provider"] = ",".join(dict.fromkeys(provider_names))
             live["_tour_page"] = 0
             live.pop("selected_tour", None)
         if snapshot.get("_show_over_budget"):
@@ -2482,7 +2540,7 @@ def _tour_search_worker(
         _send_tour_results_page(user_id, 0)
         return
 
-    logger.info("VK Tourvisor search returned no offers for %s: %s", user_id, result.error)
+    logger.info("VK package tour search returned no offers for %s: %s", user_id, result.error)
     edit_message(
         user_id,
         wait_message_id,
