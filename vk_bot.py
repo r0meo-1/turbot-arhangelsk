@@ -3516,6 +3516,70 @@ def _remember_client_capabilities(user_id: int, event: Dict[str, Any]) -> None:
         _NO_INLINE.add(user_id)
 
 
+def _process_app_payload(event: Dict[str, Any]) -> None:
+    """Restore a saved Mini App draft after VKWebAppSendPayload.
+
+    Callback secret validation happens in ``vk_webhook`` before this helper is
+    scheduled. The event is still bound to the configured community and Mini
+    App so a payload from another installed app cannot open somebody else's
+    draft. No lead is created here; the user still confirms the review in chat.
+    """
+    obj = event.get("object")
+    if not isinstance(obj, dict):
+        logger.warning("VK app_payload ignored: invalid object")
+        return
+
+    try:
+        user_id = int(obj.get("user_id") or 0)
+        app_id = int(obj.get("app_id") or 0)
+        event_group_id = int(event.get("group_id") or 0)
+        configured_app_id = int(str(os.getenv("VK_MINI_APP_ID", "")).strip() or "0")
+    except (TypeError, ValueError):
+        logger.warning("VK app_payload ignored: invalid identity")
+        return
+
+    if (
+        user_id <= 0
+        or configured_app_id <= 0
+        or app_id != configured_app_id
+        or (VK_GROUP_ID > 0 and event_group_id != VK_GROUP_ID)
+    ):
+        logger.warning("VK app_payload ignored: wrong app/community")
+        return
+
+    raw_payload = obj.get("payload")
+    if isinstance(raw_payload, str):
+        try:
+            payload = json.loads(raw_payload)
+        except (TypeError, ValueError):
+            logger.warning("VK app_payload ignored: malformed payload")
+            return
+    elif isinstance(raw_payload, dict):
+        payload = raw_payload
+    else:
+        logger.warning("VK app_payload ignored: missing payload")
+        return
+
+    if (
+        not isinstance(payload, dict)
+        or payload.get("command") != "miniapp_review"
+        or payload.get("version") != 1
+    ):
+        logger.info("VK app_payload ignored: unsupported command")
+        return
+
+    snapshot = _load_miniapp_snapshot(user_id)
+    if snapshot is None:
+        logger.info("VK app_payload review ignored: snapshot_missing")
+        return
+
+    with _lock:
+        user_data[user_id] = snapshot
+    set_session(user_id, snapshot)
+    _ask_review(user_id)
+    logger.info("VK app_payload review restored")
+
+
 def _process_message(message: Dict[str, Any]) -> None:
     """Process one VK message_new event."""
     msg = message.get("object", {}).get("message", message.get("message", {}))
@@ -3868,6 +3932,18 @@ def vk_webhook() -> Any:
     if not hmac.compare_digest(received_secret, VK_SECRET_KEY):
         logger.warning("VK webhook: invalid secret key")
         return "Forbidden", 403
+
+    if event_type == "app_payload":
+        # ACK the Callback API immediately. The user-facing VK API call runs
+        # off the request thread, so a slow messages.send cannot make VK retry
+        # the same callback and duplicate the review message.
+        threading.Thread(
+            target=_process_app_payload,
+            args=(data,),
+            daemon=True,
+            name="vk-miniapp-payload",
+        ).start()
+        return "ok", 200
 
     # New message from user
     if event_type == "message_new":
