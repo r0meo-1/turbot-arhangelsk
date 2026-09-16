@@ -26,7 +26,7 @@ jobs:
           set -Eeuo pipefail
           test -n "${DEPLOY_HOST:-}"
           printf 'TURBOT_VK_CALLBACK_APP_PAYLOAD_V1\n' |
-            ssh -o BatchMode=yes -o IdentitiesOnly=yes \
+            ssh -o BatchMode=yes \
               -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 \
               root@"$DEPLOY_HOST" true
         env:
