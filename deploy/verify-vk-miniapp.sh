@@ -115,7 +115,10 @@ PY
 
 inspect_tourvisor() {
   PYTHONPATH="$repo" "$venv/python" - "$env_file" <<'PY'
+import base64
+import json
 import sys
+import time
 from urllib.parse import urlparse
 
 import requests
@@ -132,10 +135,28 @@ base_url = str(
 ).strip().rstrip('/')
 host = urlparse(base_url).hostname or 'unknown'
 
+jwt_exp_status = 'absent'
+if token:
+    try:
+        parts = token.split('.')
+        if len(parts) == 3:
+            payload_raw = parts[1] + '=' * (-len(parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode('utf-8'))
+            exp = payload.get('exp')
+            if isinstance(exp, (int, float)):
+                jwt_exp_status = 'expired' if float(exp) <= time.time() else 'valid'
+            else:
+                jwt_exp_status = 'not_set'
+        else:
+            jwt_exp_status = 'not_jwt'
+    except Exception:
+        jwt_exp_status = 'unreadable'
+
 print(
     'Tourvisor config: '
     f'enabled={"yes" if enabled else "no"} '
     f'token={"set" if token else "unset"} '
+    f'jwt_exp={jwt_exp_status} '
     f'endpoint_host={host}'
 )
 if not token:
