@@ -76,10 +76,16 @@ jobs:
 
       - name: Verify public Mini App production routes
         shell: bash
+        env:
+          VK_MINI_APP_ID: ${{ secrets.VK_MINI_APP_ID }}
+          VK_MINI_APP_SECRET: ${{ secrets.VK_MINI_APP_SECRET }}
         run: |
           set -euo pipefail
           vk_base="https://bot.r0meo1.ru/vk"
           tg_submit="https://bot.r0meo1.ru/miniapp/submit"
+
+          test -n "$VK_MINI_APP_ID"
+          test -n "$VK_MINI_APP_SECRET"
 
           for attempt in {1..12}; do
             if curl -fsSL --max-time 15 "$vk_base/health" >/dev/null && \
@@ -108,6 +114,46 @@ jobs:
             exit 1
           fi
 
+          # Prove that the production app ID/secret pair can authenticate a
+          # current VK launch. The payload is deliberately invalid, so the
+          # request must stop at validation with HTTP 400 before save_draft().
+          vk_signed_request="$(python - <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import json
+          import os
+          import time
+          from urllib.parse import urlencode
+
+          params = {
+              "vk_app_id": os.environ["VK_MINI_APP_ID"],
+              "vk_group_id": "240310110",
+              "vk_ts": str(int(time.time())),
+              "vk_user_id": "2147483000",
+          }
+          signed = urlencode(sorted(params.items()))
+          signature = base64.urlsafe_b64encode(
+              hmac.new(
+                  os.environ["VK_MINI_APP_SECRET"].encode(),
+                  signed.encode(),
+                  hashlib.sha256,
+              ).digest()
+          ).decode().rstrip("=")
+          launch_params = urlencode([*sorted(params.items()), ("sign", signature)])
+          print(json.dumps({"launchParams": launch_params, "payload": {}}, separators=(",", ":")))
+          PY
+          )"
+
+          vk_signed_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -X POST "$vk_base/miniapp/draft" \
+            -H 'Content-Type: application/json' \
+            --data "$vk_signed_request")"
+          if [[ "$vk_signed_status" != "400" ]]; then
+            echo "VK signed-auth probe returned HTTP $vk_signed_status, expected 400" >&2
+            exit 1
+          fi
+
           tg_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$tg_submit" \
             -H 'Origin: https://r0meo-1.github.io' \
@@ -118,4 +164,4 @@ jobs:
             exit 1
           fi
 
-          echo "Public Mini App routes and auth rejection smoke: ok"
+          echo "Public Mini App routes, auth rejection, and signed VK auth smoke: ok"
