@@ -35,6 +35,76 @@ print(host)
 PY
 }
 
+inspect_callback_settings() {
+  "$venv/python" - "$env_file" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+import requests
+from dotenv import dotenv_values
+
+values = dotenv_values(sys.argv[1])
+token = str(values.get('VK_ACCESS_TOKEN') or '').strip()
+group_raw = str(values.get('VK_GROUP_ID') or '').strip()
+public_url = str(values.get('PUBLIC_BASE_URL') or '').strip()
+api_version = str(values.get('VK_API_VERSION') or '5.199').strip() or '5.199'
+
+if not token or not group_raw.isdigit() or int(group_raw) <= 0:
+    print('VK Callback API: readiness check skipped (token/group not configured)')
+    raise SystemExit(0)
+
+group_id = int(group_raw)
+expected_host = urlparse(public_url if '://' in public_url else 'https://' + public_url).hostname or ''
+
+
+def call(method, **params):
+    params.update(access_token=token, v=api_version)
+    response = requests.post(
+        f'https://api.vk.ru/method/{method}',
+        data=params,
+        timeout=10,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if 'error' in body:
+        err = body.get('error') or {}
+        raise RuntimeError(f"VK API {method} error_code={err.get('error_code', 'unknown')}")
+    return body.get('response') or {}
+
+
+try:
+    servers = call('groups.getCallbackServers', group_id=group_id)
+    items = list(servers.get('items') or [])
+    target = None
+    for item in items:
+        url = str(item.get('url') or '')
+        parsed = urlparse(url)
+        if parsed.path.rstrip('/').endswith('/vk/webhook') and (not expected_host or parsed.hostname == expected_host):
+            target = item
+            break
+    if target is None and len(items) == 1:
+        target = items[0]
+    if target is None:
+        print(f'VK Callback API: server_found=no count={len(items)} app_payload=unknown')
+        raise SystemExit(0)
+
+    server_id = int(target.get('id') or 0)
+    settings = call('groups.getCallbackSettings', group_id=group_id, server_id=server_id)
+    events = settings.get('events') if isinstance(settings.get('events'), dict) else settings
+    enabled = bool((events or {}).get('app_payload'))
+    status = str(target.get('status') or 'unknown').replace(' ', '_')[:32]
+    print(
+        'VK Callback API: '
+        f'server_found=yes server_id={server_id} status={status} '
+        f'app_payload={"enabled" if enabled else "disabled"}'
+    )
+except Exception as exc:
+    # This probe is read-only and advisory while app_payload is not yet part of
+    # the production handoff. Never expose the access token or response body.
+    print(f'VK Callback API: readiness check unavailable ({exc})')
+PY
+}
+
 mapfile -t config < <(read_config)
 miniapp_enabled=${config[0]:-0}
 host=${config[1]:-}
@@ -78,3 +148,4 @@ curl --fail --silent --show-error --max-time 8 \
   "https://$host/vk/miniapp/" >/dev/null
 
 echo "VK public health and Mini App routes healthy"
+inspect_callback_settings
