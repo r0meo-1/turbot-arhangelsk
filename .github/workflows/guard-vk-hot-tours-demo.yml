@@ -32,11 +32,19 @@ jobs:
               raise SystemExit('expected exactly one hot-tours demo anchor')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
 
-          test_path = Path('tests/test_vk_live_tour_safety.py')
-          tests = test_path.read_text(encoding='utf-8')
+          safety_path = Path('tests/test_vk_live_tour_safety.py')
+          tests = safety_path.read_text(encoding='utf-8')
           addition = '''\n\ndef test_live_hot_tours_entry_point_cannot_show_curated_demo_catalogue():\n    source = Path("vk_bot.py").read_text(encoding="utf-8")\n    anchor = 'origin = info.get("origin") or "Архангельск"\\n        if not DEMO_MODE:'\n    assert anchor in source\n    assert '"🔥 Горящие туры показываем только по актуальным данным.' in source\n'''
           if 'test_live_hot_tours_entry_point_cannot_show_curated_demo_catalogue' not in tests:
-              test_path.write_text(tests.rstrip() + addition + '\n', encoding='utf-8')
+              safety_path.write_text(tests.rstrip() + addition + '\n', encoding='utf-8')
+
+          bot_tests = Path('tests/test_vk_bot.py')
+          bot_text = bot_tests.read_text(encoding='utf-8')
+          old_test = '''def test_vk_hot_tours_button_shows_hot_deals(client):\n    """Кнопка «Горящие туры» сразу выдает варианты горящих туров."""\n    _vk_consent(client, 973)\n'''
+          new_test = '''def test_vk_hot_tours_button_shows_hot_deals(client, monkeypatch):\n    """Демо-каталог доступен только при явном DEMO_MODE."""\n    monkeypatch.setattr(bot, "DEMO_MODE", True)\n    _vk_consent(client, 973)\n'''
+          if bot_text.count(old_test) != 1:
+              raise SystemExit('expected exactly one legacy hot-tours test anchor')
+          bot_tests.write_text(bot_text.replace(old_test, new_test, 1), encoding='utf-8')
           PY
 
       - name: Run regression suite
@@ -51,6 +59,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git rm .github/workflows/guard-vk-hot-tours-demo.yml
-          git add vk_bot.py tests/test_vk_live_tour_safety.py
+          git add vk_bot.py tests/test_vk_bot.py tests/test_vk_live_tour_safety.py
           git commit -m 'Keep demo hot tours out of live VK funnel'
           git push origin HEAD:main
