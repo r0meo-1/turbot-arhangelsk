@@ -95,12 +95,53 @@
     });
     form.hidden = true;
     $('review').hidden = false;
-    $('status').textContent = inVK ? '' : 'Предпросмотр. Для сохранения откройте приложение из VK.';
+    $('status').textContent = inVK ? '' : 'Предпросмотр. Для сохранения и партнёрского поиска откройте приложение из VK.';
     $('save').disabled = !inVK;
+    $('booking').disabled = !inVK;
     $('review-title').focus();
   });
   $('edit').addEventListener('click', () => {
     $('review').hidden = true; form.hidden = false; $('destination').focus();
+  });
+  $('booking').addEventListener('click', async () => {
+    if (!inVK || !payload || $('booking').disabled) return;
+    $('booking').disabled = true;
+    $('booking-status').textContent = 'Готовим поиск Booking.com…';
+
+    // Open a user-initiated blank window before the async request. Browsers
+    // otherwise tend to block the final affiliate URL as a popup.
+    let popup = null;
+    try { popup = window.open('', '_blank'); } catch (_) { popup = null; }
+
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+      let response;
+      try {
+        response = await fetch('./booking-link', {
+          method: 'POST', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ launchParams: effectiveLaunchParams, payload })
+        });
+      } finally { clearTimeout(timer); }
+      const result = await response.json();
+      if (!response.ok || result.ok !== true || !result.url) {
+        throw new Error(result.error || 'Не удалось открыть поиск Booking.com.');
+      }
+      $('booking-status').textContent = 'Открываем отели Booking.com по вашим датам.';
+      if (popup) {
+        try { popup.opener = null; } catch (_) {}
+        popup.location.replace(result.url);
+      } else {
+        window.location.assign(result.url);
+      }
+    } catch (error) {
+      if (popup) { try { popup.close(); } catch (_) {} }
+      $('booking-status').textContent = error.name === 'AbortError'
+        ? 'Booking.com отвечает слишком долго. Повторите попытку.'
+        : (error.message || 'Не удалось открыть поиск Booking.com.');
+      $('booking').disabled = false;
+    }
   });
   $('save').addEventListener('click', async () => {
     if (!inVK || !payload || $('save').disabled) return;
