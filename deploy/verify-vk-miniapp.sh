@@ -113,6 +113,60 @@ except Exception as exc:
 PY
 }
 
+inspect_travelata() {
+  "$venv/python" - "$env_file" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+import requests
+from dotenv import dotenv_values
+
+values = dotenv_values(sys.argv[1])
+username = str(values.get('TRAVELATA_USERNAME') or '').strip()
+password = str(values.get('TRAVELATA_PASSWORD') or '').strip()
+flag = str(values.get('VK_TRAVELATA_ENABLED') or '').strip().lower()
+credentials_set = bool(username and password)
+enabled = flag in {'1', 'true', 'yes'} if flag else credentials_set
+base_url = str(
+    values.get('TRAVELATA_BASE_URL')
+    or 'https://api-gateway.travelata.ru'
+).strip().rstrip('/')
+host = urlparse(base_url).hostname or 'unknown'
+
+print(
+    'Travelata config: '
+    f'enabled={"yes" if enabled else "no"} '
+    f'credentials={"set" if credentials_set else "unset"} '
+    f'endpoint_host={host}'
+)
+if not enabled or not credentials_set:
+    raise SystemExit(0)
+
+try:
+    response = requests.get(
+        base_url + '/partners/directory/departureCities',
+        params={'disabled': 0},
+        auth=(username, password),
+        headers={'Accept': 'application/json'},
+        timeout=10,
+    )
+    status = response.status_code
+    response.raise_for_status()
+    body = response.json()
+    success = isinstance(body, dict) and body.get('success') is True
+    print(
+        'Travelata API: '
+        f'http={status} success={"yes" if success else "no"}'
+    )
+except requests.HTTPError as exc:
+    status = exc.response.status_code if exc.response is not None else 'unknown'
+    print(f'Travelata API: http_error={status}')
+except Exception as exc:
+    # Read-only probe. Never print credentials, auth headers, URL query, or body.
+    print(f'Travelata API: probe_error={type(exc).__name__}')
+PY
+}
+
 inspect_tourvisor() {
   PYTHONPATH="$repo" "$venv/python" - "$env_file" <<'PY'
 import base64
@@ -263,4 +317,5 @@ curl --fail --silent --show-error --max-time 8 \
 
 echo "VK public health and Mini App routes healthy"
 inspect_callback_settings
+inspect_travelata
 inspect_tourvisor
