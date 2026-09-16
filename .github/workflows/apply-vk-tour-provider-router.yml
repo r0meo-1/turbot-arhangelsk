@@ -1,0 +1,39 @@
+name: Apply VK tour provider router
+
+on:
+  push:
+    paths:
+      - '.github/workflows/apply-vk-tour-provider-router.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Apply guarded provider patch
+        run: python scripts/patch_vk_tour_provider_router.py
+
+      - name: Run regression suite
+        run: |
+          python -m pip install -r requirements.txt pytest
+          pytest -q
+
+      - name: Commit provider router and cleanup patch helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/apply-vk-tour-provider-router.yml scripts/patch_vk_tour_provider_router.py
+          git add vk_bot.py .env.example tests/test_vk_provider_router_wiring.py
+          git commit -m 'Route VK tour search across live providers'
+          git push origin HEAD:main
+
+# Triggered after registration on the default branch.
