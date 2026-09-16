@@ -54,6 +54,10 @@ jobs:
           test -n "$VK_MINI_APP_ID"
           test -n "$VK_MINI_APP_SECRET"
           test -n "$MDT_API_KEY"
+          if [[ -z "$TRAVELPAYOUTS_API_TOKEN" ]]; then
+            echo "TRAVELPAYOUTS_API_TOKEN GitHub secret is required for Booking.com search" >&2
+            exit 1
+          fi
 
           # Travelata access is optional until the partner API is approved,
           # but partial credentials are never accepted.
@@ -81,9 +85,8 @@ jobs:
               root@${{ secrets.DEPLOY_HOST }} true
 
           # Second connection runs the freshly installed entrypoint. V4 keeps
-          # protected MDT/Travelata configuration and optionally installs the
-          # Travelpayouts API token without ever printing it. Empty optional
-          # values mean "preserve existing server values", not "erase them".
+          # protected MDT/Travelata configuration and installs the required
+          # Travelpayouts API token without ever printing it.
           printf 'TURBOT_DEPLOY_CONFIG_V4\n%s\n%s\n%s\n%s\n%s\n%s\n' \
             "$app_id_b64" \
             "$secret_b64" \
