@@ -45,6 +45,8 @@ jobs:
           VK_MINI_APP_ID: ${{ secrets.VK_MINI_APP_ID }}
           VK_MINI_APP_SECRET: ${{ secrets.VK_MINI_APP_SECRET }}
           MDT_API_KEY: ${{ secrets.MDT_API_KEY }}
+          TRAVELATA_USERNAME: ${{ secrets.TRAVELATA_USERNAME }}
+          TRAVELATA_PASSWORD: ${{ secrets.TRAVELATA_PASSWORD }}
         run: |
           set -Eeuo pipefail
 
@@ -52,25 +54,40 @@ jobs:
           test -n "$VK_MINI_APP_SECRET"
           test -n "$MDT_API_KEY"
 
+          # Travelata access is optional until the partner API is approved,
+          # but partial credentials are never accepted.
+          if [[ -n "$TRAVELATA_USERNAME" || -n "$TRAVELATA_PASSWORD" ]]; then
+            if [[ -z "$TRAVELATA_USERNAME" || -z "$TRAVELATA_PASSWORD" ]]; then
+              echo "Travelata GitHub secrets must be configured as a complete pair" >&2
+              exit 1
+            fi
+          fi
+
           app_id_b64="$(printf '%s' "$VK_MINI_APP_ID" | base64 -w0)"
           secret_b64="$(printf '%s' "$VK_MINI_APP_SECRET" | base64 -w0)"
           mdt_key_b64="$(printf '%s' "$MDT_API_KEY" | base64 -w0)"
+          travelata_user_b64="$(printf '%s' "$TRAVELATA_USERNAME" | base64 -w0)"
+          travelata_password_b64="$(printf '%s' "$TRAVELATA_PASSWORD" | base64 -w0)"
 
           # First connection uses the legacy payload understood by older
           # root-owned deploy entrypoints. It updates the server checkout and
-          # installs the current deploy script before we require payload V2.
+          # installs the current deploy script before we require payload V3.
           printf 'TURBOT_DEPLOY_CONFIG_V1\n%s\n%s\n' \
             "$app_id_b64" \
             "$secret_b64" |
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
 
-          # Second connection runs the freshly installed entrypoint and
-          # enables MDT with the protected API key.
-          printf 'TURBOT_DEPLOY_CONFIG_V2\n%s\n%s\n%s\n' \
+          # Second connection runs the freshly installed entrypoint. V3 keeps
+          # MDT protected configuration and optionally installs Travelata API
+          # credentials without ever printing them. Empty Travelata values mean
+          # "preserve existing server values", not "erase them".
+          printf 'TURBOT_DEPLOY_CONFIG_V3\n%s\n%s\n%s\n%s\n%s\n' \
             "$app_id_b64" \
             "$secret_b64" \
-            "$mdt_key_b64" |
+            "$mdt_key_b64" \
+            "$travelata_user_b64" \
+            "$travelata_password_b64" |
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
 
