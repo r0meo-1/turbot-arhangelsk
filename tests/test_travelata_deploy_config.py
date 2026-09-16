@@ -53,11 +53,13 @@ def test_v4_can_install_optional_travelpayouts_token_without_erasing_existing_va
     assert "Travelpayouts deploy token not supplied; existing server value preserved" in source
 
 
-def test_deploy_workflow_still_uses_compatible_v3_payload():
+def test_deploy_workflow_uses_v4_with_travelpayouts_secret():
     source = WORKFLOW.read_text(encoding="utf-8")
     assert "TRAVELATA_USERNAME: ${{ secrets.TRAVELATA_USERNAME }}" in source
     assert "TRAVELATA_PASSWORD: ${{ secrets.TRAVELATA_PASSWORD }}" in source
-    assert "TURBOT_DEPLOY_CONFIG_V3" in source
+    assert "TRAVELPAYOUTS_API_TOKEN: ${{ secrets.TRAVELPAYOUTS_API_TOKEN }}" in source
+    assert "TURBOT_DEPLOY_CONFIG_V4" in source
     assert "Travelata GitHub secrets must be configured as a complete pair" in source
     assert "travelata_user_b64" in source
     assert "travelata_password_b64" in source
+    assert "travelpayouts_token_b64" in source
