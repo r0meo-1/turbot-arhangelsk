@@ -93,7 +93,9 @@ jobs:
                js="$(curl -fsSL --max-time 15 "$vk_base/miniapp/app.js")"; then
               if grep -q 'trip-form' <<<"$html" && \
                  grep -q "budgetScope: 'total'" <<<"$js" && \
-                 grep -q "source: 'vk_mini_app'" <<<"$js"; then
+                 grep -q "source: 'vk_mini_app'" <<<"$js" && \
+                 grep -q "VKWebAppSendPayload" <<<"$js" && \
+                 grep -q "miniapp_review" <<<"$js"; then
                 break
               fi
             fi
@@ -164,4 +166,4 @@ jobs:
             exit 1
           fi
 
-          echo "Public Mini App routes, auth rejection, and signed VK auth smoke: ok"
+          echo "Public Mini App routes, VK app_payload assets, auth rejection, and signed VK auth smoke: ok"
