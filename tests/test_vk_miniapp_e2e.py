@@ -19,6 +19,7 @@ SECRET = "vk-miniapp-e2e-secret"
 APP_ID = "54475121"
 GROUP_ID = 240310110
 USER_ID = 424242
+REVIEW_COMMAND = "Проверить заявку"
 
 
 def _signed_launch_params():
@@ -36,7 +37,17 @@ def _signed_launch_params():
     return urlencode(params)
 
 
-def test_vk_miniapp_browser_roundtrip_to_signed_draft():
+def _fill_review_and_save(page):
+    page.locator("#destination").fill("Таиланд")
+    page.locator("#departure").fill("Архангельск")
+    page.locator("#consent").check()
+    page.locator("#submit").click()
+    page.locator("#review").wait_for(state="visible")
+    page.locator("#save").click()
+    page.locator("#chat").wait_for(state="visible")
+
+
+def test_vk_miniapp_browser_roundtrip_to_signed_draft_and_copies_review_command():
     saved = []
 
     def save_draft(uid, info):
@@ -57,22 +68,56 @@ def test_vk_miniapp_browser_roundtrip_to_signed_draft():
             browser = pw.chromium.launch(channel="msedge", headless=True)
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded")
-            page.locator("#destination").fill("Таиланд")
-            page.locator("#departure").fill("Архангельск")
-            page.locator("#consent").check()
-            page.locator("#submit").click()
-            page.locator("#review").wait_for(state="visible")
-            page.locator("#save").click()
-            page.locator("#chat").wait_for(state="visible")
+            page.evaluate(
+                """
+                () => {
+                  window.__vkBridgeCalls = [];
+                  window.vkBridge.send = (method, params) => {
+                    window.__vkBridgeCalls.push({ method, params });
+                    return Promise.resolve({ result: true });
+                  };
+                }
+                """
+            )
+
+            _fill_review_and_save(page)
+            page.wait_for_function(
+                "() => document.querySelector('#status').textContent.includes('скопирована')"
+            )
 
             assert page.locator("#status").inner_text().startswith("Параметры сохранены.")
             assert page.locator("#chat").get_attribute("href") == f"https://vk.ru/im?sel=-{GROUP_ID}"
+            copy_calls = page.evaluate(
+                "() => window.__vkBridgeCalls.filter((call) => call.method === 'VKWebAppCopyText')"
+            )
+            assert copy_calls == [{"method": "VKWebAppCopyText", "params": {"text": REVIEW_COMMAND}}]
+
+            # Clipboard support is convenience only. A rejected Bridge command
+            # must leave the already-saved draft and chat handoff usable.
+            fallback_page = browser.new_page()
+            fallback_page.goto(url, wait_until="domcontentloaded")
+            fallback_page.evaluate(
+                """
+                () => {
+                  window.vkBridge.send = (method) => method === 'VKWebAppCopyText'
+                    ? Promise.reject(new Error('clipboard unavailable'))
+                    : Promise.resolve({ result: true });
+                }
+                """
+            )
+            _fill_review_and_save(fallback_page)
+            fallback_page.wait_for_timeout(50)
+
+            fallback_status = fallback_page.locator("#status").inner_text()
+            assert REVIEW_COMMAND in fallback_status
+            assert "скопирована" not in fallback_status
+            assert fallback_page.locator("#chat").get_attribute("href") == f"https://vk.ru/im?sel=-{GROUP_ID}"
             browser.close()
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
-    assert len(saved) == 1
+    assert len(saved) == 2
     uid, info = saved[0]
     assert uid == USER_ID
     assert info["destination"] == "Таиланд"
