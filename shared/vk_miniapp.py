@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 
-from flask import Blueprint, jsonify, request, send_from_directory
+from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from shared.telegram_webapp import MiniAppValidationError, validate_trip_request
 
 
@@ -130,14 +130,18 @@ def create_blueprint(save_draft, settings):
     def draft():
         secret, app_id, group_id = settings()
         if not secret or not app_id:
+            current_app.logger.error("vk_miniapp_draft status=unconfigured")
             return jsonify(ok=False, error="Приложение ещё не подключено. Попробуйте позже."), 503
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
+            current_app.logger.warning("vk_miniapp_draft status=invalid_body")
             return jsonify(ok=False, error="Некорректные данные формы."), 400
         raw_launch = body.get("launchParams")
         try:
             uid = validate_launch_params(raw_launch, secret, app_id, group_id)
         except MiniAppValidationError as exc:
+            # Never log the raw launch query, signature, secret, or VK user id.
+            current_app.logger.warning("vk_miniapp_draft status=auth_rejected reason=%s", str(exc))
             return jsonify(
                 ok=False,
                 error="Откройте приложение заново из VK.",
@@ -146,14 +150,23 @@ def create_blueprint(save_draft, settings):
         try:
             info = validate_vk_trip(body.get("payload"))
         except MiniAppValidationError:
+            current_app.logger.warning("vk_miniapp_draft status=payload_rejected")
             return jsonify(ok=False, error="Проверьте поля, дату и согласие на обработку данных."), 400
-        info.update(_signed_launch_metadata(raw_launch))
+        metadata = _signed_launch_metadata(raw_launch)
+        info.update(metadata)
         try:
             save_draft(uid, info)
         except MiniAppValidationError:
+            current_app.logger.warning("vk_miniapp_draft status=save_conflict")
             return jsonify(ok=False, error="Заявка уже отправляется. Подождите несколько секунд и повторите."), 409
         except Exception:
+            current_app.logger.exception("vk_miniapp_draft status=save_failed")
             return jsonify(ok=False, error="Не удалось сохранить параметры. Повторите попытку."), 500
+        current_app.logger.info(
+            "vk_miniapp_draft status=saved ref=%s platform=%s",
+            metadata.get("vk_ref", "-"),
+            metadata.get("vk_platform", "-"),
+        )
         return jsonify(ok=True, state="review", groupId=group_id)
 
     return bp
