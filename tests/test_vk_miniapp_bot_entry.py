@@ -87,3 +87,72 @@ def test_soft_start_handler_delivers_native_open_app_button(monkeypatch):
     assert keyboard["buttons"][1][0]["action"]["label"] == bot.START_BUTTON_TEXT
 
     bot.user_data.pop(user_id, None)
+
+
+def test_review_command_restores_miniapp_after_process_cache_loss(monkeypatch):
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    user_id = 424244
+    raw = {
+        "type": "trip_request",
+        "version": 2,
+        "destination": "Таиланд",
+        "departure": "Москва",
+        "date": (date.today() + timedelta(days=30)).isoformat(),
+        "nights": 10,
+        "adults": 2,
+        "children": 0,
+        "childrenAges": [],
+        "budgetMaxRub": 270000,
+        "consent": True,
+    }
+
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (user_id,))
+        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (user_id,))
+        cur.execute("DELETE FROM users WHERE chat_id = ?", (user_id,))
+    bot.user_data.pop(user_id, None)
+    bot.all_users.pop(user_id, None)
+
+    bot._save_miniapp_draft(user_id, validate_vk_trip(raw))
+    assert bot._load_miniapp_snapshot(user_id)["destination"] == "Таиланд"
+
+    # Simulate a process restart: durable SQLite rows survive, in-memory state does not.
+    bot.user_data.pop(user_id, None)
+    bot.all_users.pop(user_id, None)
+
+    reviewed = []
+    monkeypatch.setattr(bot, "get_user_name", lambda uid: "Restarted User")
+    monkeypatch.setattr(bot, "_mark_dirty", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        bot,
+        "_ask_review",
+        lambda uid: reviewed.append(dict(bot.user_data[uid])),
+    )
+
+    bot._process_message({
+        "object": {
+            "message": {
+                "from_id": user_id,
+                "peer_id": user_id,
+                "text": "Проверить заявку",
+            }
+        }
+    })
+
+    assert len(reviewed) == 1
+    assert reviewed[0]["state"] == bot.STATE_REVIEW
+    assert reviewed[0]["destination"] == "Таиланд"
+    assert reviewed[0]["origin"] == "Москва"
+    assert reviewed[0]["source"] == "vk_mini_app"
+    restored = bot.get_session(user_id)
+    assert restored["state"] == bot.STATE_REVIEW
+    assert restored["budget"] == 270000
+
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (user_id,))
+        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (user_id,))
+        cur.execute("DELETE FROM users WHERE chat_id = ?", (user_id,))
+    bot.user_data.pop(user_id, None)
+    bot.all_users.pop(user_id, None)
