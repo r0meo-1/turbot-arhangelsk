@@ -138,3 +138,37 @@ def test_vk_booking_link_requires_signed_vk_context(monkeypatch):
     )
     assert response.status_code == 401
     assert response.json["ok"] is False
+
+
+def test_vk_booking_link_reports_program_not_enabled_without_secret_details(monkeypatch):
+    def fail(_info):
+        raise booking.BookingLinkNotConfigured("Booking.com program is not enabled for this project")
+
+    monkeypatch.setattr(booking, "create_booking_partner_link", fail)
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *_: None, lambda: (SECRET, "123", 999)))
+    response = app.test_client().post(
+        "/vk/miniapp/booking-link",
+        json={"launchParams": signed(), "payload": vk_payload()},
+    )
+    assert response.status_code == 503
+    assert response.json == {
+        "ok": False,
+        "error": "Поиск Booking.com ещё не подключён к проекту.",
+        "errorCode": "booking_program_not_enabled",
+    }
+
+
+def test_vk_booking_link_reports_invalid_token_as_safe_code(monkeypatch):
+    def fail(_info):
+        raise booking.BookingLinkNotConfigured("Travelpayouts API token is invalid")
+
+    monkeypatch.setattr(booking, "create_booking_partner_link", fail)
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *_: None, lambda: (SECRET, "123", 999)))
+    response = app.test_client().post(
+        "/vk/miniapp/booking-link",
+        json={"launchParams": signed(), "payload": vk_payload()},
+    )
+    assert response.status_code == 503
+    assert response.json["errorCode"] == "travelpayouts_token_invalid"
