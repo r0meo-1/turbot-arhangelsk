@@ -1,0 +1,199 @@
+name: Apply VK app payload patch
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-vk-app-payload-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Apply guarded app_payload patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('vk_bot.py')
+          text = path.read_text(encoding='utf-8')
+
+          helper_anchor = 'def _process_message(message: Dict[str, Any]) -> None:\n'
+          if helper_anchor not in text:
+              raise SystemExit('vk_bot.py helper anchor not found')
+          if 'def _process_app_payload(' in text:
+              raise SystemExit('app_payload helper already exists')
+
+          helper = '''def _process_app_payload(event: Dict[str, Any]) -> None:\n    \"\"\"Restore a saved Mini App draft after VKWebAppSendPayload.\n\n    Callback secret validation happens in ``vk_webhook`` before this helper is\n    scheduled. The event is still bound to the configured community and Mini\n    App so a payload from another installed app cannot open somebody else's\n    draft. No lead is created here; the user still confirms the review in chat.\n    \"\"\"\n    obj = event.get(\"object\")\n    if not isinstance(obj, dict):\n        logger.warning(\"VK app_payload ignored: invalid object\")\n        return\n\n    try:\n        user_id = int(obj.get(\"user_id\") or 0)\n        app_id = int(obj.get(\"app_id\") or 0)\n        event_group_id = int(event.get(\"group_id\") or 0)\n        configured_app_id = int(str(os.getenv(\"VK_MINI_APP_ID\", \"\")).strip() or \"0\")\n    except (TypeError, ValueError):\n        logger.warning(\"VK app_payload ignored: invalid identity\")\n        return\n\n    if (\n        user_id <= 0\n        or configured_app_id <= 0\n        or app_id != configured_app_id\n        or (VK_GROUP_ID > 0 and event_group_id != VK_GROUP_ID)\n    ):\n        logger.warning(\"VK app_payload ignored: wrong app/community\")\n        return\n\n    raw_payload = obj.get(\"payload\")\n    if isinstance(raw_payload, str):\n        try:\n            payload = json.loads(raw_payload)\n        except (TypeError, ValueError):\n            logger.warning(\"VK app_payload ignored: malformed payload\")\n            return\n    elif isinstance(raw_payload, dict):\n        payload = raw_payload\n    else:\n        logger.warning(\"VK app_payload ignored: missing payload\")\n        return\n\n    if (\n        not isinstance(payload, dict)\n        or payload.get(\"command\") != \"miniapp_review\"\n        or payload.get(\"version\") != 1\n    ):\n        logger.info(\"VK app_payload ignored: unsupported command\")\n        return\n\n    snapshot = _load_miniapp_snapshot(user_id)\n    if snapshot is None:\n        logger.info(\"VK app_payload review ignored: snapshot_missing\")\n        return\n\n    with _lock:\n        user_data[user_id] = snapshot\n    set_session(user_id, snapshot)\n    _ask_review(user_id)\n    logger.info(\"VK app_payload review restored\")\n\n\n'''
+          text = text.replace(helper_anchor, helper + helper_anchor, 1)
+
+          webhook_anchor = '    # New message from user\n    if event_type == "message_new":\n'
+          if webhook_anchor not in text:
+              raise SystemExit('vk_bot.py webhook anchor not found')
+          webhook = '''    if event_type == \"app_payload\":\n        # ACK the Callback API immediately. The user-facing VK API call runs\n        # off the request thread, so a slow messages.send cannot make VK retry\n        # the same callback and duplicate the review message.\n        threading.Thread(\n            target=_process_app_payload,\n            args=(data,),\n            daemon=True,\n            name=\"vk-miniapp-payload\",\n        ).start()\n        return \"ok\", 200\n\n    # New message from user\n    if event_type == \"message_new\":\n'''
+          text = text.replace(webhook_anchor, webhook, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+
+          cat > tests/test_zz_vk_app_payload.py <<'PY'
+          import json
+          import os
+          import sys
+          import tempfile
+
+          if 'vk_bot' not in sys.modules:
+              os.environ['VK_ACCESS_TOKEN'] = 'dummy-token'
+              os.environ['VK_GROUP_ID'] = '999'
+              os.environ['VK_CONFIRMATION'] = 'confirm123'
+              os.environ['VK_SECRET_KEY'] = 'vk-test-secret'
+              os.environ['DATABASE_PATH'] = os.path.join(
+                  tempfile.gettempdir(), f'vk_app_payload_{os.getpid()}.sqlite'
+              )
+              os.environ['DIALOG_TIMEOUT_HOURS'] = '0'
+              os.environ['FOLLOWUP_DELAY_HOURS'] = '0'
+              os.environ['DATA_RETENTION_DAYS'] = '0'
+              os.environ['VK_MDT_RETRY_ENABLED'] = 'false'
+              os.environ['MDT_ENABLED'] = 'false'
+
+          import vk_bot as bot
+
+
+          def _clear(user_id):
+              bot.user_data.pop(user_id, None)
+              bot.all_users.pop(user_id, None)
+              with bot._db_cursor(commit=True) as cur:
+                  cur.execute('DELETE FROM sessions WHERE chat_id = ?', (user_id,))
+                  cur.execute('DELETE FROM miniapp_drafts WHERE chat_id = ?', (user_id,))
+                  cur.execute('DELETE FROM users WHERE chat_id = ?', (user_id,))
+                  cur.execute('DELETE FROM leads WHERE chat_id = ?', (user_id,))
+
+
+          def _event(user_id, payload, *, app_id=54475121, group_id=999):
+              return {
+                  'type': 'app_payload',
+                  'group_id': group_id,
+                  'secret': 'vk-test-secret',
+                  'object': {
+                      'user_id': user_id,
+                      'app_id': app_id,
+                      'payload': json.dumps(payload, ensure_ascii=False),
+                  },
+              }
+
+
+          def test_app_payload_restores_saved_review_without_creating_lead(monkeypatch):
+              user_id = 919001
+              _clear(user_id)
+              monkeypatch.setenv('VK_MINI_APP_ID', '54475121')
+              monkeypatch.setattr(bot, 'VK_GROUP_ID', 999)
+              review_calls = []
+              monkeypatch.setattr(bot, '_ask_review', lambda uid: review_calls.append(uid))
+
+              draft = {
+                  'destination': 'Таиланд',
+                  'origin': 'Москва',
+                  'dates': 'январь',
+                  'nights': '10',
+                  'people': '2',
+                  'kids': 0,
+                  'kids_ages': [],
+                  'infants': 0,
+                  'budget': 250000,
+                  'budget_scope': 'total',
+                  'source': 'vk_mini_app',
+              }
+              bot._save_miniapp_snapshot(user_id, draft)
+              bot._process_app_payload(_event(
+                  user_id, {'command': 'miniapp_review', 'version': 1}
+              ))
+
+              assert review_calls == [user_id]
+              assert bot.user_data[user_id]['state'] == bot.STATE_REVIEW
+              assert bot.user_data[user_id]['destination'] == 'Таиланд'
+              assert bot.get_session(user_id)['source'] == 'vk_mini_app'
+              with bot._db_cursor() as cur:
+                  assert cur.execute(
+                      'SELECT COUNT(*) FROM leads WHERE chat_id = ?', (user_id,)
+                  ).fetchone()[0] == 0
+              _clear(user_id)
+
+
+          def test_app_payload_rejects_wrong_app_community_and_command(monkeypatch):
+              user_id = 919002
+              _clear(user_id)
+              monkeypatch.setenv('VK_MINI_APP_ID', '54475121')
+              monkeypatch.setattr(bot, 'VK_GROUP_ID', 999)
+              calls = []
+              monkeypatch.setattr(bot, '_ask_review', lambda uid: calls.append(uid))
+              bot._save_miniapp_snapshot(user_id, {'destination': 'Египет'})
+
+              bot._process_app_payload(_event(
+                  user_id, {'command': 'miniapp_review', 'version': 1}, app_id=1
+              ))
+              bot._process_app_payload(_event(
+                  user_id, {'command': 'miniapp_review', 'version': 1}, group_id=1000
+              ))
+              bot._process_app_payload(_event(
+                  user_id, {'command': 'something_else', 'version': 1}
+              ))
+              assert calls == []
+              _clear(user_id)
+
+
+          def test_app_payload_webhook_ack_uses_existing_secret_guard(monkeypatch):
+              monkeypatch.setenv('VK_MINI_APP_ID', '54475121')
+              monkeypatch.setattr(bot, 'VK_GROUP_ID', 999)
+              monkeypatch.setattr(bot, 'VK_SECRET_KEY', 'vk-test-secret')
+              dispatched = []
+
+              class ImmediateThread:
+                  def __init__(self, target, args=(), **kwargs):
+                      self.target = target
+                      self.args = args
+
+                  def start(self):
+                      dispatched.append(self.args[0])
+
+              monkeypatch.setattr(bot.threading, 'Thread', ImmediateThread)
+              event = _event(919003, {'command': 'miniapp_review', 'version': 1})
+              response = bot.app.test_client().post('/vk/webhook', json=event)
+              assert response.status_code == 200
+              assert response.get_data(as_text=True) == 'ok'
+              assert dispatched == [event]
+
+              event['secret'] = 'wrong-secret'
+              response = bot.app.test_client().post('/vk/webhook', json=event)
+              assert response.status_code == 403
+              assert dispatched == [event]
+          PY
+
+      - name: Run regression tests
+        run: pytest -q
+
+      - name: Commit guarded patch and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-vk-app-payload-patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add vk_bot.py tests/test_zz_vk_app_payload.py .github/workflows/apply-vk-app-payload-patch.yml
+          git diff --cached --check
+          git commit -m 'Handle VK Mini App app_payload review handoff'
+          git push origin HEAD:main
