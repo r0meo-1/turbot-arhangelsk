@@ -113,6 +113,84 @@ except Exception as exc:
 PY
 }
 
+inspect_tourvisor() {
+  PYTHONPATH="$repo" "$venv/python" - "$env_file" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+import requests
+from dotenv import dotenv_values
+from shared.tourvisor import _find_named_id
+
+values = dotenv_values(sys.argv[1])
+token = str(values.get('TOURVISOR_TOKEN') or '').strip()
+flag = str(values.get('VK_TOURVISOR_ENABLED') or '').strip().lower()
+enabled = flag in {'1', 'true', 'yes'} if flag else bool(token)
+base_url = str(
+    values.get('TOURVISOR_BASE_URL')
+    or 'https://api.tourvisor.ru/search/api/v1'
+).strip().rstrip('/')
+host = urlparse(base_url).hostname or 'unknown'
+
+print(
+    'Tourvisor config: '
+    f'enabled={"yes" if enabled else "no"} '
+    f'token={"set" if token else "unset"} '
+    f'endpoint_host={host}'
+)
+if not token:
+    raise SystemExit(0)
+
+headers = {
+    'Authorization': f'Bearer {token}',
+    'Accept': 'application/json',
+}
+
+
+def get(path, params):
+    response = requests.get(
+        base_url + '/' + path.lstrip('/'),
+        params=params,
+        headers=headers,
+        timeout=10,
+    )
+    status = response.status_code
+    response.raise_for_status()
+    return status, response.json()
+
+
+try:
+    departures_status, departures = get(
+        'departures', {'departureCountryId': 1}
+    )
+    departure_id = _find_named_id(departures, 'Архангельск')
+    if departure_id is None:
+        print(
+            'Tourvisor API: '
+            f'departures_http={departures_status} origin=unresolved '
+            'countries=skipped destination=skipped'
+        )
+        raise SystemExit(0)
+
+    countries_status, countries = get(
+        'countries', {'departureId': departure_id}
+    )
+    country_id = _find_named_id(countries, 'Таиланд')
+    print(
+        'Tourvisor API: '
+        f'departures_http={departures_status} origin=resolved '
+        f'countries_http={countries_status} '
+        f'destination={"resolved" if country_id is not None else "unresolved"}'
+    )
+except requests.HTTPError as exc:
+    status = exc.response.status_code if exc.response is not None else 'unknown'
+    print(f'Tourvisor API: http_error={status}')
+except Exception as exc:
+    # Read-only probe. Never print the token, headers, URL query, or response body.
+    print(f'Tourvisor API: probe_error={type(exc).__name__}')
+PY
+}
+
 mapfile -t config < <(read_config)
 miniapp_enabled=${config[0]:-0}
 host=${config[1]:-}
@@ -164,3 +242,4 @@ curl --fail --silent --show-error --max-time 8 \
 
 echo "VK public health and Mini App routes healthy"
 inspect_callback_settings
+inspect_tourvisor
