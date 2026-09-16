@@ -35,3 +35,5 @@ jobs:
           git add vk_bot.py .env.example tests/test_vk_provider_router_wiring.py
           git commit -m 'Route VK tour search across live providers'
           git push origin HEAD:main
+
+# Trigger after workflow registration on the default branch.
