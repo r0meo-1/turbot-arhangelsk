@@ -65,3 +65,13 @@ def test_deploy_workflow_uses_v4_with_required_travelpayouts_secret():
     assert "travelata_user_b64" in source
     assert "travelata_password_b64" in source
     assert "travelpayouts_token_b64" in source
+
+
+def test_deploy_workflow_smokes_live_booking_partner_link():
+    source = WORKFLOW.read_text(encoding="utf-8")
+    assert 'POST "$vk_base/miniapp/booking-link"' in source
+    assert '"destination": "Phuket"' in source
+    assert 'booking_status="$(curl' in source
+    assert 'VK Booking.com partner-link smoke returned HTTP' in source
+    assert 'VK Booking.com partner-link smoke: ok host=' in source
+    assert 'parsed.scheme != "https"' in source
