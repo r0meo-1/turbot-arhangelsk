@@ -86,6 +86,18 @@ def _signed_launch_metadata(raw):
     return metadata
 
 
+def _booking_configuration_code(exc):
+    """Map internal Travelpayouts configuration failures to safe public codes."""
+    reason = str(exc).lower()
+    if "token is invalid" in reason:
+        return "travelpayouts_token_invalid"
+    if "token is missing" in reason:
+        return "travelpayouts_token_missing"
+    if "program is not enabled" in reason:
+        return "booking_program_not_enabled"
+    return "booking_not_configured"
+
+
 def validate_vk_trip(payload):
     # JSON numbers must really be integers; do not silently truncate fractions.
     if isinstance(payload, dict):
@@ -146,8 +158,17 @@ def create_blueprint(save_draft, settings):
         try:
             url = _travelpayouts_booking.create_booking_partner_link(info)
         except _travelpayouts_booking.BookingLinkNotConfigured as exc:
-            current_app.logger.warning("vk_booking_link status=not_configured reason=%s", str(exc))
-            return jsonify(ok=False, error="Поиск Booking.com ещё не подключён к проекту."), 503
+            error_code = _booking_configuration_code(exc)
+            current_app.logger.warning(
+                "vk_booking_link status=not_configured code=%s reason=%s",
+                error_code,
+                str(exc),
+            )
+            return jsonify(
+                ok=False,
+                error="Поиск Booking.com ещё не подключён к проекту.",
+                errorCode=error_code,
+            ), 503
         except _travelpayouts_booking.BookingLinkError as exc:
             current_app.logger.warning("vk_booking_link status=provider_error reason=%s", str(exc))
             return jsonify(ok=False, error="Booking.com временно недоступен. Попробуйте позже."), 502
