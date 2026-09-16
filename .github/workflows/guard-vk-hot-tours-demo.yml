@@ -1,0 +1,56 @@
+name: Guard VK hot tours demo catalogue
+
+on:
+  push:
+    paths:
+      - '.github/workflows/guard-vk-hot-tours-demo.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Guard hot tours entry point
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('vk_bot.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        origin = info.get("origin") or "Архангельск"\n        hot_offers = _tourvisor.get_hot_tours(origin)\n'''
+          new = '''        origin = info.get("origin") or "Архангельск"\n        if not DEMO_MODE:\n            send_message(\n                user_id,\n                "🔥 Горящие туры показываем только по актуальным данным. "\n                "Выберите конкретное направление, и я проверю реальные варианты.",\n                keyboard=_dest_keyboard(),\n            )\n            return\n        hot_offers = _tourvisor.get_hot_tours(origin)\n'''
+          if text.count(old) != 1:
+              raise SystemExit('expected exactly one hot-tours demo anchor')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          test_path = Path('tests/test_vk_live_tour_safety.py')
+          tests = test_path.read_text(encoding='utf-8')
+          addition = '''\n\ndef test_live_hot_tours_entry_point_cannot_show_curated_demo_catalogue():\n    source = Path("vk_bot.py").read_text(encoding="utf-8")\n    anchor = 'origin = info.get("origin") or "Архангельск"\\n        if not DEMO_MODE:'\n    assert anchor in source\n    assert '"🔥 Горящие туры показываем только по актуальным данным.' in source\n'''
+          if 'test_live_hot_tours_entry_point_cannot_show_curated_demo_catalogue' not in tests:
+              test_path.write_text(tests.rstrip() + addition + '\n', encoding='utf-8')
+          PY
+
+      - name: Run regression suite
+        run: |
+          python -m pip install -r requirements.txt pytest
+          pytest -q
+
+      - name: Commit patch and remove one-off workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/guard-vk-hot-tours-demo.yml
+          git add vk_bot.py tests/test_vk_live_tour_safety.py
+          git commit -m 'Keep demo hot tours out of live VK funnel'
+          git push origin HEAD:main
