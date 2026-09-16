@@ -1,0 +1,64 @@
+name: Disable expired Tourvisor UI
+
+on:
+  push:
+    paths:
+      - '.github/workflows/disable-expired-tourvisor-ui.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Disable live search when JWT is expired
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('vk_bot.py')
+          text = path.read_text(encoding='utf-8')
+
+          import_anchor = 'import os\nimport re\nimport json\n'
+          if text.count(import_anchor) != 1:
+              raise SystemExit('expected import anchor once')
+          text = text.replace(import_anchor, 'import os\nimport re\nimport json\nimport base64\n', 1)
+
+          config_anchor = '''if TOURVISOR_ENABLED and not TOURVISOR_TOKEN:\n    logger.warning("VK Tourvisor requested but TOURVISOR_TOKEN is empty; disabling live search")\n    TOURVISOR_ENABLED = False\n'''
+          config_replacement = config_anchor + '''\ndef _tourvisor_jwt_expired(token: str) -> bool:\n    try:\n        parts = token.split(".")\n        if len(parts) != 3:\n            return False\n        payload_raw = parts[1] + "=" * (-len(parts[1]) % 4)\n        payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode("utf-8"))\n        exp = payload.get("exp")\n        return isinstance(exp, (int, float)) and float(exp) <= time.time()\n    except Exception:\n        return False\n\n\nif TOURVISOR_ENABLED and _tourvisor_jwt_expired(TOURVISOR_TOKEN):\n    logger.warning("VK Tourvisor JWT is expired; disabling live search UI")\n    TOURVISOR_ENABLED = False\n'''
+          if text.count(config_anchor) != 1:
+              raise SystemExit('expected Tourvisor config anchor once')
+          text = text.replace(config_anchor, config_replacement, 1)
+          path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/test_vk_live_tour_safety.py')
+          tests = test_path.read_text(encoding='utf-8')
+          addition = '''\n\ndef test_expired_tourvisor_jwt_disables_live_search_ui(monkeypatch):\n    import base64\n    import json\n    import time\n\n    source = Path("vk_bot.py").read_text(encoding="utf-8")\n    assert "if TOURVISOR_ENABLED and _tourvisor_jwt_expired(TOURVISOR_TOKEN):" in source\n    assert 'logger.warning("VK Tourvisor JWT is expired; disabling live search UI")' in source\n\n    payload = base64.urlsafe_b64encode(\n        json.dumps({"exp": int(time.time()) - 60}).encode()\n    ).decode().rstrip("=")\n    token = f"header.{payload}.signature"\n    namespace = {}\n    helper_source = source[source.index("def _tourvisor_jwt_expired"):source.index("if TOURVISOR_ENABLED and _tourvisor_jwt_expired")]
+    exec(helper_source, {"json": json, "base64": base64, "time": time}, namespace)\n    assert namespace["_tourvisor_jwt_expired"](token) is True\n'''
+          if 'test_expired_tourvisor_jwt_disables_live_search_ui' not in tests:
+              test_path.write_text(tests.rstrip() + addition + '\n', encoding='utf-8')
+          PY
+
+      - name: Run regression suite
+        run: |
+          python -m pip install -r requirements.txt pytest
+          pytest -q
+
+      - name: Commit patch and remove one-off workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm .github/workflows/disable-expired-tourvisor-ui.yml
+          git add vk_bot.py tests/test_vk_live_tour_safety.py
+          git commit -m 'Hide live tour search when Tourvisor JWT expires'
+          git push origin HEAD:main
