@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import json
+import base64
 import hmac
 import time
 import random
@@ -238,6 +239,24 @@ TOURVISOR_ENABLED = os.getenv(
 ).lower().strip() in ("1", "true", "yes")
 if TOURVISOR_ENABLED and not TOURVISOR_TOKEN:
     logger.warning("VK Tourvisor requested but TOURVISOR_TOKEN is empty; disabling live search")
+    TOURVISOR_ENABLED = False
+
+
+def _tourvisor_jwt_expired(token: str) -> bool:
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return False
+        payload_raw = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode("utf-8"))
+        exp = payload.get("exp")
+        return isinstance(exp, (int, float)) and float(exp) <= time.time()
+    except Exception:
+        return False
+
+
+if TOURVISOR_ENABLED and _tourvisor_jwt_expired(TOURVISOR_TOKEN):
+    logger.warning("VK Tourvisor JWT is expired; disabling live search UI")
     TOURVISOR_ENABLED = False
 TOURVISOR_BASE_URL = os.getenv(
     "TOURVISOR_BASE_URL", "https://api.tourvisor.ru/search/api/v1"
