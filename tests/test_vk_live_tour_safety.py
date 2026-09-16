@@ -1,6 +1,8 @@
 from pathlib import Path
 
 
+# Regression guard for the production VK funnel: a failed/empty Tourvisor
+# response must never be replaced with the curated demo hotel catalogue.
 def test_live_tour_search_cannot_fall_back_to_curated_demo_offers():
     source = Path("vk_bot.py").read_text(encoding="utf-8")
     assert "if not combined and DEMO_MODE:" in source
