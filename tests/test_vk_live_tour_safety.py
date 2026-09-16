@@ -1,8 +1,8 @@
 from pathlib import Path
 
 
-# Regression guard for the production VK funnel: a failed/empty Tourvisor
-# response must never be replaced with the curated demo hotel catalogue.
+# Regression guards for the production VK funnel: demo inventory must never
+# leak into live search, and expired Tourvisor credentials must hide live UI.
 def test_live_tour_search_cannot_fall_back_to_curated_demo_offers():
     source = Path("vk_bot.py").read_text(encoding="utf-8")
     assert "if not combined and DEMO_MODE:" in source
@@ -14,11 +14,13 @@ def test_vk_tourvisor_requires_a_real_token_when_enabled():
     assert "if TOURVISOR_ENABLED and not TOURVISOR_TOKEN:" in source
     assert "TOURVISOR_ENABLED = False" in source
 
+
 def test_live_hot_tours_entry_point_cannot_show_curated_demo_catalogue():
     source = Path("vk_bot.py").read_text(encoding="utf-8")
     anchor = 'origin = info.get("origin") or "Архангельск"\n        if not DEMO_MODE:'
     assert anchor in source
     assert '"🔥 Горящие туры показываем только по актуальным данным.' in source
+
 
 def test_expired_tourvisor_jwt_disables_live_search_ui():
     import base64
@@ -40,4 +42,3 @@ def test_expired_tourvisor_jwt_disables_live_search_ui():
     ]
     exec(helper_source, {"json": json, "base64": base64, "time": time}, namespace)
     assert namespace["_tourvisor_jwt_expired"](token) is True
-
