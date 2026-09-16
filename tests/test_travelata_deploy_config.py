@@ -19,7 +19,7 @@ def test_deploy_shell_syntax_is_valid():
 def test_deploy_v3_accepts_exactly_six_payload_lines():
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert '"TURBOT_DEPLOY_CONFIG_V3": 6' in source
-    assert 'marker != "TURBOT_DEPLOY_CONFIG_V3"' in source
+    assert '"$marker" != "TURBOT_DEPLOY_CONFIG_V3"' in source
 
 
 def test_deploy_v3_rejects_partial_travelata_credentials():
