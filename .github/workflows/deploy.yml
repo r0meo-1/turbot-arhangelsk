@@ -179,6 +179,90 @@ jobs:
             exit 1
           fi
 
+          # End-to-end Booking.com smoke: authenticate exactly like the VK Mini
+          # App, send a valid trip, and require a real HTTPS partner link from
+          # the production Travelpayouts-backed endpoint.
+          vk_booking_request="$(python - <<'PY'
+          import base64
+          import hashlib
+          import hmac
+          import json
+          import os
+          import time
+          from datetime import date, timedelta
+          from urllib.parse import urlencode
+
+          params = {
+              "vk_app_id": os.environ["VK_MINI_APP_ID"],
+              "vk_group_id": "240310110",
+              "vk_ts": str(int(time.time())),
+              "vk_user_id": "2147483000",
+          }
+          signed = urlencode(sorted(params.items()))
+          signature = base64.urlsafe_b64encode(
+              hmac.new(
+                  os.environ["VK_MINI_APP_SECRET"].encode(),
+                  signed.encode(),
+                  hashlib.sha256,
+              ).digest()
+          ).decode().rstrip("=")
+          launch_params = urlencode([*sorted(params.items()), ("sign", signature)])
+          payload = {
+              "type": "trip_request",
+              "version": 2,
+              "destination": "Phuket",
+              "departure": "Moscow",
+              "date": (date.today() + timedelta(days=30)).isoformat(),
+              "nights": 7,
+              "adults": 2,
+              "children": 0,
+              "childrenAges": [],
+              "budgetMaxRub": 250000,
+              "budgetScope": "total",
+              "consent": True,
+              "directOnly": False,
+          }
+          print(json.dumps({"launchParams": launch_params, "payload": payload}, separators=(",", ":")))
+          PY
+          )"
+
+          booking_response="$(mktemp)"
+          booking_status="$(curl -sS -o "$booking_response" -w '%{http_code}' --max-time 25 \
+            -X POST "$vk_base/miniapp/booking-link" \
+            -H 'Content-Type: application/json' \
+            --data "$vk_booking_request")"
+          if [[ "$booking_status" != "200" ]]; then
+            echo "VK Booking.com partner-link smoke returned HTTP $booking_status" >&2
+            python - "$booking_response" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as fh:
+                  data = json.load(fh)
+              print("Provider error:", data.get("error", "unknown"), file=sys.stderr)
+          except Exception:
+              print("Provider returned a non-JSON error", file=sys.stderr)
+          PY
+            rm -f "$booking_response"
+            exit 1
+          fi
+
+          python - "$booking_response" <<'PY'
+          import json
+          import sys
+          from urllib.parse import urlparse
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              data = json.load(fh)
+          url = str(data.get("url", "")).strip()
+          parsed = urlparse(url)
+          if data.get("ok") is not True or parsed.scheme != "https" or not parsed.netloc:
+              raise SystemExit("VK Booking.com partner-link smoke returned an invalid URL")
+          print(f"VK Booking.com partner-link smoke: ok host={parsed.netloc}")
+          PY
+          rm -f "$booking_response"
+
           tg_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$tg_submit" \
             -H 'Origin: https://r0meo-1.github.io' \
@@ -189,4 +273,4 @@ jobs:
             exit 1
           fi
 
-          echo "Public Mini App routes, VK app_payload assets, auth rejection, and signed VK auth smoke: ok"
+          echo "Public Mini App routes, VK auth, Booking.com partner link, and Telegram auth smoke: ok"
