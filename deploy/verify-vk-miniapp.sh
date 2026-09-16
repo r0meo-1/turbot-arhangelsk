@@ -108,8 +108,7 @@ try:
         (','.join(enabled_events) if enabled_events else 'none')
     )
 except Exception as exc:
-    # This probe is read-only and advisory while app_payload is not yet part of
-    # the production handoff. Never expose the access token or response body.
+    # Read-only probe. Never expose the access token or response body.
     print(f'VK Callback API: readiness check unavailable ({exc})')
 PY
 }
@@ -122,6 +121,13 @@ if [[ "$miniapp_enabled" != "1" ]]; then
   echo "VK Mini App smoke check skipped: VK_MINI_APP_ID is not configured"
   exit 0
 fi
+
+if [[ ! -f "$repo/vk_bot.py" ]] || ! grep -q '^def _process_app_payload' "$repo/vk_bot.py"; then
+  echo "VK Mini App app_payload handler is missing from deployed vk_bot.py" >&2
+  exit 1
+fi
+
+echo "VK Mini App app_payload handler present"
 
 if [[ -z "$host" ]]; then
   echo "VK Mini App configured but PUBLIC_BASE_URL has no hostname" >&2
