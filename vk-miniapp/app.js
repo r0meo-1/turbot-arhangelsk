@@ -2,6 +2,7 @@
   const $ = (id) => document.getElementById(id);
   const form = $('trip-form');
   const REVIEW_COMMAND = 'Проверить заявку';
+  const REVIEW_PAYLOAD = { command: 'miniapp_review', version: 1 };
   const launchParams = location.search.slice(1);
   const params = new URLSearchParams(launchParams);
   let inVK = params.has('sign') && params.has('vk_app_id');
@@ -118,14 +119,16 @@
       const groupId = Number(result.groupId);
       if (!Number.isSafeInteger(groupId) || groupId <= 0) throw new Error('Не удалось открыть сообщество.');
 
-      // The draft is already durable at this point. Never let clipboard/Bridge
-      // trouble turn a successful save into an apparent failure for the user.
+      // The draft is already durable at this point. Bridge handoff is a
+      // convenience layer only and must never turn a successful save into an
+      // apparent failure for the user.
       $('status').textContent = `Параметры сохранены. Откройте чат и напишите «${REVIEW_COMMAND}»: бот покажет ваш подбор. Заявка менеджеру ещё не отправлена.`;
       $('chat').href = `https://vk.ru/im?sel=-${groupId}`;
       $('chat').hidden = false;
       $('save').hidden = true; $('edit').hidden = true;
 
-      if (bridge) {
+      const copyReviewCommand = () => {
+        if (!bridge) return;
         try {
           Promise.resolve(bridge.send('VKWebAppCopyText', { text: REVIEW_COMMAND }))
             .then(() => {
@@ -135,6 +138,25 @@
             })
             .catch(() => {});
         } catch (_) {}
+      };
+
+      if (bridge) {
+        try {
+          Promise.resolve(bridge.send('VKWebAppSendPayload', {
+            group_id: groupId,
+            payload: REVIEW_PAYLOAD
+          }))
+            .then(() => {
+              if (!$('chat').hidden) {
+                $('status').textContent = 'Параметры сохранены. Бот уже подготовил проверку. Откройте чат: вводить команду не нужно. Заявка менеджеру ещё не отправлена.';
+              }
+            })
+            .catch(copyReviewCommand);
+        } catch (_) {
+          copyReviewCommand();
+        }
+      } else {
+        copyReviewCommand();
       }
     } catch (error) {
       $('status').textContent = error.name === 'AbortError' ? 'Ответ задержался. Повторите попытку — одинаковые параметры не создадут дубль.' : (error.message || 'Ошибка соединения. Повторите попытку.');
