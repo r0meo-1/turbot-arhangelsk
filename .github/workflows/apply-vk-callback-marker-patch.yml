@@ -1,0 +1,73 @@
+name: Apply VK callback marker patch
+
+on:
+  push:
+    paths:
+      - .github/workflows/apply-vk-callback-marker-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Apply guarded restricted-command marker patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('deploy/turbot-deploy.sh')
+          text = path.read_text(encoding='utf-8')
+          old = '''  if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" && "$marker" != "TURBOT_DEPLOY_CONFIG_V2" ]]; then
+    echo "Unsupported deploy payload" >&2
+    return 1
+  fi
+'''
+          new = '''  if [[ "$marker" == "TURBOT_VK_CALLBACK_APP_PAYLOAD_V1" ]]; then
+    # This marker performs one narrowly scoped VK API mutation. It accepts no
+    # payload data and uses only the protected production .env on the server.
+    if IFS= read -r _unexpected; then
+      echo "Unexpected VK callback marker payload" >&2
+      return 1
+    fi
+    if ! grep -q 'def _process_app_payload' "$repo/vk_bot.py"; then
+      echo "VK app_payload handler is not deployed" >&2
+      return 1
+    fi
+    "$venv/python" "$repo/deploy/vk-enable-app-payload.py"
+    return $?
+  fi
+
+  if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" && "$marker" != "TURBOT_DEPLOY_CONFIG_V2" ]]; then
+    echo "Unsupported deploy payload" >&2
+    return 1
+  fi
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one deploy marker anchor, found {text.count(old)}')
+          if 'TURBOT_VK_CALLBACK_APP_PAYLOAD_V1' in text:
+              raise SystemExit('VK callback marker already exists')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Validate scripts
+        run: |
+          bash -n deploy/turbot-deploy.sh
+          python -m py_compile deploy/vk-enable-app-payload.py
+
+      - name: Commit patch and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-vk-callback-marker-patch.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add deploy/turbot-deploy.sh deploy/vk-enable-app-payload.py .github/workflows/apply-vk-callback-marker-patch.yml
+          git diff --cached --check
+          git commit -m 'Add guarded VK app_payload callback deploy marker'
+          git push origin HEAD:main
