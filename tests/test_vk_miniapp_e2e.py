@@ -20,6 +20,7 @@ APP_ID = "54475121"
 GROUP_ID = 240310110
 USER_ID = 424242
 REVIEW_COMMAND = "Проверить заявку"
+REVIEW_PAYLOAD = {"command": "miniapp_review", "version": 1}
 
 
 def _signed_launch_params():
@@ -47,7 +48,7 @@ def _fill_review_and_save(page):
     page.locator("#chat").wait_for(state="visible")
 
 
-def test_vk_miniapp_browser_roundtrip_to_signed_draft_and_copies_review_command():
+def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallback():
     saved = []
 
     def save_draft(uid, info):
@@ -82,36 +83,61 @@ def test_vk_miniapp_browser_roundtrip_to_signed_draft_and_copies_review_command(
 
             _fill_review_and_save(page)
             page.wait_for_function(
-                "() => document.querySelector('#status').textContent.includes('скопирована')"
+                "() => document.querySelector('#status').textContent.includes('вводить команду не нужно')"
             )
 
             assert page.locator("#status").inner_text().startswith("Параметры сохранены.")
             assert page.locator("#chat").get_attribute("href") == f"https://vk.ru/im?sel=-{GROUP_ID}"
+            send_payload_calls = page.evaluate(
+                "() => window.__vkBridgeCalls.filter((call) => call.method === 'VKWebAppSendPayload')"
+            )
+            assert send_payload_calls == [{
+                "method": "VKWebAppSendPayload",
+                "params": {"group_id": GROUP_ID, "payload": REVIEW_PAYLOAD},
+            }]
             copy_calls = page.evaluate(
                 "() => window.__vkBridgeCalls.filter((call) => call.method === 'VKWebAppCopyText')"
             )
-            assert copy_calls == [{"method": "VKWebAppCopyText", "params": {"text": REVIEW_COMMAND}}]
+            assert copy_calls == []
 
-            # Clipboard support is convenience only. A rejected Bridge command
-            # must leave the already-saved draft and chat handoff usable.
+            # app_payload is the preferred automatic handoff. If that Bridge
+            # command is unavailable on a client, the already-saved draft must
+            # stay successful and fall back to copying the review command.
             fallback_page = browser.new_page()
             fallback_page.goto(url, wait_until="domcontentloaded")
             fallback_page.evaluate(
                 """
                 () => {
-                  window.vkBridge.send = (method) => method === 'VKWebAppCopyText'
-                    ? Promise.reject(new Error('clipboard unavailable'))
-                    : Promise.resolve({ result: true });
+                  window.__vkBridgeCalls = [];
+                  window.vkBridge.send = (method, params) => {
+                    window.__vkBridgeCalls.push({ method, params });
+                    if (method === 'VKWebAppSendPayload') {
+                      return Promise.reject(new Error('payload unavailable'));
+                    }
+                    return Promise.resolve({ result: true });
+                  };
                 }
                 """
             )
             _fill_review_and_save(fallback_page)
-            fallback_page.wait_for_timeout(50)
+            fallback_page.wait_for_function(
+                "() => document.querySelector('#status').textContent.includes('скопирована')"
+            )
 
             fallback_status = fallback_page.locator("#status").inner_text()
             assert REVIEW_COMMAND in fallback_status
-            assert "скопирована" not in fallback_status
+            assert "скопирована" in fallback_status
             assert fallback_page.locator("#chat").get_attribute("href") == f"https://vk.ru/im?sel=-{GROUP_ID}"
+            fallback_calls = fallback_page.evaluate("() => window.__vkBridgeCalls")
+            assert [call["method"] for call in fallback_calls] == [
+                "VKWebAppSendPayload",
+                "VKWebAppCopyText",
+            ]
+            assert fallback_calls[0]["params"] == {
+                "group_id": GROUP_ID,
+                "payload": REVIEW_PAYLOAD,
+            }
+            assert fallback_calls[1]["params"] == {"text": REVIEW_COMMAND}
             browser.close()
     finally:
         server.shutdown()
