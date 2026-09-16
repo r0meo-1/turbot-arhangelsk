@@ -236,6 +236,9 @@ TOURVISOR_TOKEN = os.getenv("TOURVISOR_TOKEN", "").strip()
 TOURVISOR_ENABLED = os.getenv(
     "VK_TOURVISOR_ENABLED", "true" if TOURVISOR_TOKEN else "false"
 ).lower().strip() in ("1", "true", "yes")
+if TOURVISOR_ENABLED and not TOURVISOR_TOKEN:
+    logger.warning("VK Tourvisor requested but TOURVISOR_TOKEN is empty; disabling live search")
+    TOURVISOR_ENABLED = False
 TOURVISOR_BASE_URL = os.getenv(
     "TOURVISOR_BASE_URL", "https://api.tourvisor.ru/search/api/v1"
 ).strip()
@@ -2397,7 +2400,9 @@ def _tour_search_worker(
             _tourvisor_settings(), http_session, origin_snapshot, log=logger,
         ))
     combined = [offer for result in results for offer in result.offers]
-    if not combined:
+    # Curated offers are demo fixtures, never a substitute for an empty or
+    # failed upstream search in the live agency funnel.
+    if not combined and DEMO_MODE:
         dest_val = snapshot.get("destination") or ""
         combined = _tourvisor.get_hot_tours(
             snapshot.get("origin") or "Архангельск",
