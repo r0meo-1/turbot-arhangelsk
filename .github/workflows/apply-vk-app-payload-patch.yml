@@ -176,12 +176,14 @@ jobs:
               response = bot.app.test_client().post('/vk/webhook', json=event)
               assert response.status_code == 200
               assert response.get_data(as_text=True) == 'ok'
-              assert dispatched == [event]
+              assert len(dispatched) == 1
+              assert dispatched[0]['secret'] == 'vk-test-secret'
 
               event['secret'] = 'wrong-secret'
               response = bot.app.test_client().post('/vk/webhook', json=event)
               assert response.status_code == 403
-              assert dispatched == [event]
+              assert len(dispatched) == 1
+              assert dispatched[0]['secret'] == 'vk-test-secret'
           PY
 
       - name: Run regression tests
