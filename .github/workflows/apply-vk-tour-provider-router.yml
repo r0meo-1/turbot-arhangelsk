@@ -38,4 +38,4 @@ jobs:
           git commit -m 'Route VK tour search across live providers'
           git push origin HEAD:main
 
-# Trigger after fixing provider-router regression contracts.
+# Retry after using a supported departure-window fixture.
