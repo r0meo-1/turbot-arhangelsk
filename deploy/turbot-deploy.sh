@@ -31,7 +31,9 @@ apply_stdin_config() {
     return $?
   fi
 
-  if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" && "$marker" != "TURBOT_DEPLOY_CONFIG_V2" ]]; then
+  if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" \
+        && "$marker" != "TURBOT_DEPLOY_CONFIG_V2" \
+        && "$marker" != "TURBOT_DEPLOY_CONFIG_V3" ]]; then
     echo "Unsupported deploy payload" >&2
     return 1
   fi
@@ -53,46 +55,63 @@ from pathlib import Path
 payload_path = Path(sys.argv[1])
 lines = payload_path.read_text(encoding="utf-8").splitlines()
 
-if not lines or lines[0] not in {"TURBOT_DEPLOY_CONFIG_V1", "TURBOT_DEPLOY_CONFIG_V2"}:
+markers = {
+    "TURBOT_DEPLOY_CONFIG_V1": 3,
+    "TURBOT_DEPLOY_CONFIG_V2": 4,
+    "TURBOT_DEPLOY_CONFIG_V3": 6,
+}
+if not lines or lines[0] not in markers:
     raise SystemExit("Invalid deploy payload")
 
 marker = lines[0]
-expected_lines = 3 if marker == "TURBOT_DEPLOY_CONFIG_V1" else 4
-if len(lines) != expected_lines:
+if len(lines) != markers[marker]:
     raise SystemExit("Invalid deploy payload")
 
-try:
-    app_id = base64.b64decode(lines[1], validate=True).decode("utf-8")
-    secret = base64.b64decode(lines[2], validate=True).decode("utf-8")
-    mdt_api_key = (
-        base64.b64decode(lines[3], validate=True).decode("utf-8")
-        if marker == "TURBOT_DEPLOY_CONFIG_V2"
-        else ""
-    )
-except Exception:
-    raise SystemExit("Invalid encoded deploy payload")
+
+def decode(index: int) -> str:
+    try:
+        return base64.b64decode(lines[index], validate=True).decode("utf-8")
+    except Exception:
+        raise SystemExit("Invalid encoded deploy payload")
+
+
+app_id = decode(1)
+secret = decode(2)
+mdt_api_key = decode(3) if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3"} else ""
+travelata_username = decode(4) if marker == "TURBOT_DEPLOY_CONFIG_V3" else ""
+travelata_password = decode(5) if marker == "TURBOT_DEPLOY_CONFIG_V3" else ""
 
 if not app_id.isdigit():
     raise SystemExit("Invalid VK Mini App ID")
 if not secret or "\n" in secret or "\r" in secret:
     raise SystemExit("Invalid VK Mini App secret")
-if marker == "TURBOT_DEPLOY_CONFIG_V2" and (
+if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3"} and (
     not mdt_api_key or "\n" in mdt_api_key or "\r" in mdt_api_key
 ):
     raise SystemExit("Invalid MDT API key")
+
+if marker == "TURBOT_DEPLOY_CONFIG_V3":
+    has_user = bool(travelata_username)
+    has_password = bool(travelata_password)
+    if has_user != has_password:
+        raise SystemExit("Travelata credentials must be supplied as a complete pair")
+    if any("\n" in value or "\r" in value for value in (travelata_username, travelata_password)):
+        raise SystemExit("Invalid Travelata credentials")
 
 env_path = Path("/opt/turbot/.env")
 if not env_path.exists():
     raise SystemExit("Server .env not found")
 
+
 def quote_env(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
 
 values = {
     "VK_MINI_APP_ID": app_id,
     "VK_MINI_APP_SECRET": quote_env(secret),
 }
-if marker == "TURBOT_DEPLOY_CONFIG_V2":
+if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3"}:
     values.update(
         {
             "MDT_API_KEY": quote_env(mdt_api_key),
@@ -101,6 +120,20 @@ if marker == "TURBOT_DEPLOY_CONFIG_V2":
             "VK_MDT_MODE": "preorder",
             "MDT_ACCOUNT": quote_env("apreltour"),
             "MDT_BASE_URL": quote_env("https://apreltour.moidokumenti.ru"),
+        }
+    )
+
+# V3 treats an empty Travelata pair as "not supplied", never as "erase the
+# production credentials". This lets normal deploys run before API approval
+# and protects manually installed credentials if GitHub secrets are absent.
+travelata_supplied = bool(travelata_username and travelata_password)
+if marker == "TURBOT_DEPLOY_CONFIG_V3" and travelata_supplied:
+    values.update(
+        {
+            "TRAVELATA_USERNAME": quote_env(travelata_username),
+            "TRAVELATA_PASSWORD": quote_env(travelata_password),
+            "VK_TRAVELATA_ENABLED": "true",
+            "TOUR_PROVIDER_ORDER": quote_env("travelata,tourvisor"),
         }
     )
 
@@ -130,8 +163,13 @@ os.chmod(tmp, 0o600)
 os.replace(tmp, env_path)
 
 print("VK Mini App configuration installed")
-if marker == "TURBOT_DEPLOY_CONFIG_V2":
+if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3"}:
     print("MDT production configuration installed")
+if marker == "TURBOT_DEPLOY_CONFIG_V3":
+    if travelata_supplied:
+        print("Travelata production configuration installed")
+    else:
+        print("Travelata deploy credentials not supplied; existing server values preserved")
 PY
   then
     rm -f "$payload"
