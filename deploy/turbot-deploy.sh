@@ -16,6 +16,21 @@ apply_stdin_config() {
     return 0
   fi
 
+  if [[ "$marker" == "TURBOT_VK_CALLBACK_APP_PAYLOAD_V1" ]]; then
+    # This marker performs one narrowly scoped VK API mutation. It accepts no
+    # payload data and uses only the protected production .env on the server.
+    if IFS= read -r _unexpected; then
+      echo "Unexpected VK callback marker payload" >&2
+      return 1
+    fi
+    if ! grep -q 'def _process_app_payload' "$repo/vk_bot.py"; then
+      echo "VK app_payload handler is not deployed" >&2
+      return 1
+    fi
+    "$venv/python" "$repo/deploy/vk-enable-app-payload.py"
+    return $?
+  fi
+
   if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" && "$marker" != "TURBOT_DEPLOY_CONFIG_V2" ]]; then
     echo "Unsupported deploy payload" >&2
     return 1
