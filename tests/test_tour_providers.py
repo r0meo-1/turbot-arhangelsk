@@ -76,7 +76,7 @@ def _info():
     return {
         "destination": "Таиланд",
         "origin": "Архангельск",
-        "dates": "16.10.2026",
+        "dates": "16 октября 2026",
         "nights": 10,
         "dates_are_trip": False,
         "people": "2",
