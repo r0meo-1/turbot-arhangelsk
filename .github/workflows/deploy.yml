@@ -241,6 +241,7 @@ jobs:
               with open(sys.argv[1], encoding="utf-8") as fh:
                   data = json.load(fh)
               print("Provider error:", data.get("error", "unknown"), file=sys.stderr)
+              print("Provider code:", data.get("errorCode", "unknown"), file=sys.stderr)
           except Exception:
               print("Provider returned a non-JSON error", file=sys.stderr)
           PY
