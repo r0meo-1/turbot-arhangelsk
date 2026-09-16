@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import logging
 import time
 from datetime import date, timedelta
 from urllib.parse import urlencode
@@ -68,6 +69,33 @@ def test_draft_api_and_static():
     for path in ('', 'app.js', 'styles.css', 'vk-bridge.js'):
         assert client.get('/vk/miniapp/' + path).status_code == 200
     assert client.get('/vk/miniapp/README.md').status_code == 404
+
+
+def test_draft_diagnostics_never_log_launch_query_secret_or_user_id(caplog):
+    saved = []
+    app = Flask(__name__)
+    app.logger.setLevel(logging.INFO)
+    app.register_blueprint(create_blueprint(lambda uid, info: saved.append((uid, info)), lambda: (SECRET, '123', 999)))
+    client = app.test_client()
+    launch = signed(vk_ref='community_messages', vk_platform='desktop_web')
+
+    with caplog.at_level(logging.INFO):
+        response = client.post('/vk/miniapp/draft', json={'launchParams': launch, 'payload': payload()})
+
+    assert response.status_code == 200
+    assert 'vk_miniapp_draft status=saved ref=community_messages platform=desktop_web' in caplog.text
+    for forbidden in (launch, 'vk_user_id=42', 'sign=', SECRET):
+        assert forbidden not in caplog.text
+
+    caplog.clear()
+    tampered = launch.replace('vk_user_id=42', 'vk_user_id=43')
+    with caplog.at_level(logging.INFO):
+        response = client.post('/vk/miniapp/draft', json={'launchParams': tampered, 'payload': payload()})
+
+    assert response.status_code == 401
+    assert 'vk_miniapp_draft status=auth_rejected reason=Invalid signature' in caplog.text
+    for forbidden in (tampered, 'vk_user_id=43', 'sign=', SECRET):
+        assert forbidden not in caplog.text
 
 
 def test_unconfigured_is_closed():
