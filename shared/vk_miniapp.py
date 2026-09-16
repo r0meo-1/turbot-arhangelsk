@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from shared.telegram_webapp import MiniAppValidationError, validate_trip_request
+from shared import travelpayouts_booking as _travelpayouts_booking
 
 
 MINIAPP_BUTTON_TEXT = "🧳 Подобрать тур в приложении"
@@ -125,6 +126,33 @@ def create_blueprint(save_draft, settings):
         if name not in ("app.js", "styles.css", "vk-bridge.js"):
             return jsonify(ok=False), 404
         return send_from_directory(static, name)
+
+    @bp.post("/vk/miniapp/booking-link")
+    def booking_link():
+        secret, app_id, group_id = settings()
+        if not secret or not app_id:
+            current_app.logger.error("vk_booking_link status=unconfigured_app")
+            return jsonify(ok=False, error="Приложение ещё не подключено. Попробуйте позже."), 503
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(ok=False, error="Некорректные данные поиска."), 400
+        raw_launch = body.get("launchParams")
+        try:
+            validate_launch_params(raw_launch, secret, app_id, group_id)
+            info = validate_vk_trip(body.get("payload"))
+        except MiniAppValidationError as exc:
+            current_app.logger.warning("vk_booking_link status=rejected reason=%s", str(exc))
+            return jsonify(ok=False, error="Откройте приложение заново из VK и проверьте параметры."), 401
+        try:
+            url = _travelpayouts_booking.create_booking_partner_link(info)
+        except _travelpayouts_booking.BookingLinkNotConfigured as exc:
+            current_app.logger.warning("vk_booking_link status=not_configured reason=%s", str(exc))
+            return jsonify(ok=False, error="Поиск Booking.com ещё не подключён к проекту."), 503
+        except _travelpayouts_booking.BookingLinkError as exc:
+            current_app.logger.warning("vk_booking_link status=provider_error reason=%s", str(exc))
+            return jsonify(ok=False, error="Booking.com временно недоступен. Попробуйте позже."), 502
+        current_app.logger.info("vk_booking_link status=created")
+        return jsonify(ok=True, url=url)
 
     @bp.post("/vk/miniapp/draft")
     def draft():
