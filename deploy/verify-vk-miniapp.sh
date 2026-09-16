@@ -91,12 +91,21 @@ try:
     server_id = int(target.get('id') or 0)
     settings = call('groups.getCallbackSettings', group_id=group_id, server_id=server_id)
     events = settings.get('events') if isinstance(settings.get('events'), dict) else settings
-    enabled = bool((events or {}).get('app_payload'))
+    events = events or {}
+    enabled = bool(events.get('app_payload'))
+    enabled_events = sorted(
+        str(key) for key, value in events.items()
+        if key != 'app_payload' and value in (1, True, '1')
+    )
     status = str(target.get('status') or 'unknown').replace(' ', '_')[:32]
     print(
         'VK Callback API: '
         f'server_found=yes server_id={server_id} status={status} '
         f'app_payload={"enabled" if enabled else "disabled"}'
+    )
+    print(
+        'VK Callback API: enabled_events=' +
+        (','.join(enabled_events) if enabled_events else 'none')
     )
 except Exception as exc:
     # This probe is read-only and advisory while app_payload is not yet part of
