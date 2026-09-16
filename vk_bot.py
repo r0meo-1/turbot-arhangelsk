@@ -1971,6 +1971,14 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
 
     if dest == DEST_HOT_TOURS_LABEL or dest_lower in ("горящие туры", "горящие", "горящий тур", "горящие туры из архангельска", "🔥 горящие туры", "🔥 горящие"):
         origin = info.get("origin") or "Архангельск"
+        if not DEMO_MODE:
+            send_message(
+                user_id,
+                "🔥 Горящие туры показываем только по актуальным данным. "
+                "Выберите конкретное направление, и я проверю реальные варианты.",
+                keyboard=_dest_keyboard(),
+            )
+            return
         hot_offers = _tourvisor.get_hot_tours(origin)
         info["_tour_offers"] = [offer.__dict__ if hasattr(offer, "__dict__") else offer for offer in hot_offers]
         info["_tour_offers_base"] = list(info["_tour_offers"])

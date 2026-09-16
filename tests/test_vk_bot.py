@@ -1274,8 +1274,9 @@ def test_vk_party_preset_family_with_kids_asks_age(client):
     assert bot.user_data[972]["kids_ages"] == [6]
 
 
-def test_vk_hot_tours_button_shows_hot_deals(client):
-    """Кнопка «Горящие туры» сразу выдает варианты горящих туров."""
+def test_vk_hot_tours_button_shows_hot_deals(client, monkeypatch):
+    """Демо-каталог доступен только при явном DEMO_MODE."""
+    monkeypatch.setattr(bot, "DEMO_MODE", True)
     _vk_consent(client, 973)
     _post(client, 973, bot.DEST_HOT_TOURS_LABEL)
     assert bot.user_data[973]["state"] == bot.STATE_REVIEW
