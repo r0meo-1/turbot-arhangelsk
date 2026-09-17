@@ -10,7 +10,9 @@ WorkingDirectory=/opt/turbot
 # See turbot.service: ProtectHome hides /home, gunicorn wants a HOME.
 Environment=HOME=/opt/turbot
 EnvironmentFile=/opt/turbot/.env
-ExecStart=/opt/turbot/venv/bin/gunicorn vk_bot:app \
+# shared.vk_runtime installs the restart-safe follow-up guard before the
+# background follow-up worker reaches its first scheduled pass.
+ExecStart=/opt/turbot/venv/bin/gunicorn shared.vk_runtime:app \
     --bind 127.0.0.1:5100 \
     --workers 1 \
     --threads 4 \
