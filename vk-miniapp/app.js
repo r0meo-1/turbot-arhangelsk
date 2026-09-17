@@ -7,42 +7,42 @@
   const params = new URLSearchParams(launchParams);
   let inVK = params.has('sign') && params.has('vk_app_id');
   const bridge = window.vkBridge;
-
   let effectiveLaunchParams = launchParams;
+  let payload;
 
   if (!inVK && bridge) {
     try {
       const bridgeParams = await bridge.send('VKWebAppGetLaunchParams');
       const qp = new URLSearchParams();
-
       Object.entries(bridgeParams || {}).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          qp.set(key, String(value));
-        }
+        if (value !== undefined && value !== null) qp.set(key, String(value));
       });
-
       effectiveLaunchParams = qp.toString();
-
       const effectiveParams = new URLSearchParams(effectiveLaunchParams);
       inVK = effectiveParams.has('sign') && effectiveParams.has('vk_app_id');
     } catch (_) {
       effectiveLaunchParams = launchParams;
     }
   }
-  let payload;
+
   const money = (n) => `${Number(n).toLocaleString('ru-RU')} ₽`;
   const localDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   const today = new Date();
   $('date').min = localDate(today);
   today.setDate(today.getDate() + 30);
   $('date').value = localDate(today);
-  $('budget').addEventListener('input', () => { $('budget-output').textContent = money($('budget').value); });
+
+  $('budget').addEventListener('input', () => {
+    $('budget-output').textContent = money($('budget').value);
+  });
+
   document.querySelectorAll('.chip').forEach((chip) => {
     chip.addEventListener('click', () => {
       $('destination').value = chip.dataset.destination;
       $('destination').dispatchEvent(new Event('input'));
     });
   });
+
   $('destination').addEventListener('input', () => {
     document.querySelectorAll('.chip').forEach((chip) => {
       const active = chip.dataset.destination === $('destination').value.trim();
@@ -50,123 +50,120 @@
       chip.setAttribute('aria-pressed', String(active));
     });
   });
+
   $('children').addEventListener('input', () => {
     const old = Array.from($('children-ages').querySelectorAll('input'), (i) => i.value);
     const count = Math.min(6, Math.max(0, Math.trunc(Number($('children').value)) || 0));
     $('children-ages').replaceChildren();
     $('children-ages-card').hidden = count === 0;
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < count; i += 1) {
       const label = document.createElement('label');
       label.className = 'age-field';
       label.textContent = `Ребёнок ${i + 1}, лет`;
       const input = document.createElement('input');
-      Object.assign(input, { type: 'number', min: '0', max: '17', step: '1', required: true, value: old[i] || '' });
+      Object.assign(input, {
+        type: 'number', min: '0', max: '17', step: '1', required: true, value: old[i] || ''
+      });
       label.append(input);
       $('children-ages').append(label);
     }
   });
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!form.reportValidity()) return;
+
     payload = {
-      type: 'trip_request', version: 2,
-      destination: $('destination').value.trim(), departure: $('departure').value.trim(),
-      date: $('date').value, nights: Number($('nights').value), adults: Number($('adults').value),
+      type: 'trip_request',
+      version: 2,
+      destination: $('destination').value.trim(),
+      departure: $('departure').value.trim(),
+      date: $('date').value,
+      nights: Number($('nights').value),
+      adults: Number($('adults').value),
       children: Number($('children').value),
       childrenAges: Array.from($('children-ages').querySelectorAll('input'), (i) => Number(i.value)),
-      budgetMaxRub: Number($('budget').value), budgetScope: 'total', consent: $('consent').checked,
-      directOnly: $('direct').checked, source: 'vk_mini_app'
+      budgetMaxRub: Number($('budget').value),
+      budgetScope: 'total',
+      consent: $('consent').checked,
+      directOnly: $('direct').checked,
+      source: 'vk_mini_app'
     };
-    if (!payload.destination || !payload.departure) { $('error').textContent = 'Укажите направление и город вылета.'; return; }
+
+    if (!payload.destination || !payload.departure) {
+      $('error').textContent = 'Укажите направление и город вылета.';
+      return;
+    }
+
     $('error').textContent = '';
     const entries = [
-      ['Направление', payload.destination], ['Вылет', payload.departure],
+      ['Направление', payload.destination],
+      ['Вылет', payload.departure],
       ['Дата', new Date(`${payload.date}T12:00:00`).toLocaleDateString('ru-RU')],
-      ['Ночей', payload.nights], ['Взрослых', payload.adults],
+      ['Ночей', payload.nights],
+      ['Взрослых', payload.adults],
       ['Дети', payload.children ? payload.childrenAges.map((age) => `${age} лет`).join(', ') : 'Без детей'],
       ['Бюджет на всех', `до ${money(payload.budgetMaxRub)}`],
       ['Перелёт', payload.directOnly ? 'только прямой' : 'любой подходящий']
     ];
+
     $('summary').replaceChildren();
     entries.forEach(([label, value]) => {
-      const dt = document.createElement('dt'); dt.textContent = label;
-      const dd = document.createElement('dd'); dd.textContent = value;
+      const dt = document.createElement('dt');
+      const dd = document.createElement('dd');
+      dt.textContent = label;
+      dd.textContent = value;
       $('summary').append(dt, dd);
     });
+
     form.hidden = true;
     $('review').hidden = false;
-    $('status').textContent = inVK ? '' : 'Предпросмотр. Для сохранения и партнёрского поиска откройте приложение из VK.';
+    $('status').textContent = inVK ? '' : 'Предпросмотр. Для сохранения откройте приложение из ВКонтакте.';
     $('save').disabled = !inVK;
-    $('booking').disabled = !inVK;
     $('review-title').focus();
   });
-  $('edit').addEventListener('click', () => {
-    $('review').hidden = true; form.hidden = false; $('destination').focus();
-  });
-  $('booking').addEventListener('click', async () => {
-    if (!inVK || !payload || $('booking').disabled) return;
-    $('booking').disabled = true;
-    $('booking-status').textContent = 'Готовим поиск Booking.com…';
 
-    // Open a user-initiated blank window before the async request. Browsers
-    // otherwise tend to block the final affiliate URL as a popup.
-    let popup = null;
-    try { popup = window.open('', '_blank'); } catch (_) { popup = null; }
+  $('edit').addEventListener('click', () => {
+    $('review').hidden = true;
+    form.hidden = false;
+    $('destination').focus();
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  $('save').addEventListener('click', async () => {
+    if (!inVK || !payload || $('save').disabled) return;
+    $('save').disabled = true;
+    $('edit').disabled = true;
+    $('status').textContent = 'Сохраняем параметры…';
 
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 15000);
       let response;
       try {
-        response = await fetch('./booking-link', {
-          method: 'POST', signal: controller.signal,
+        response = await fetch('./draft', {
+          method: 'POST',
+          signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ launchParams: effectiveLaunchParams, payload })
         });
-      } finally { clearTimeout(timer); }
-      const result = await response.json();
-      if (!response.ok || result.ok !== true || !result.url) {
-        throw new Error(result.error || 'Не удалось открыть поиск Booking.com.');
+      } finally {
+        clearTimeout(timer);
       }
-      $('booking-status').textContent = 'Открываем отели Booking.com по вашим датам.';
-      if (popup) {
-        try { popup.opener = null; } catch (_) {}
-        popup.location.replace(result.url);
-      } else {
-        window.location.assign(result.url);
-      }
-    } catch (error) {
-      if (popup) { try { popup.close(); } catch (_) {} }
-      $('booking-status').textContent = error.name === 'AbortError'
-        ? 'Booking.com отвечает слишком долго. Повторите попытку.'
-        : (error.message || 'Не удалось открыть поиск Booking.com.');
-      $('booking').disabled = false;
-    }
-  });
-  $('save').addEventListener('click', async () => {
-    if (!inVK || !payload || $('save').disabled) return;
-    $('save').disabled = true; $('edit').disabled = true;
-    $('status').textContent = 'Сохраняем параметры…';
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
-      let response;
-      try {
-        response = await fetch('./draft', { method: 'POST', signal: controller.signal,
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ launchParams: effectiveLaunchParams, payload }) });
-      } finally { clearTimeout(timer); }
+
       const result = await response.json();
-      if (!response.ok || result.ok !== true) throw new Error(result.authReason ? (result.error + ' [' + result.authReason + ']') : (result.error || 'Не удалось сохранить параметры.'));
+      if (!response.ok || result.ok !== true) {
+        throw new Error(result.authReason ? `${result.error} [${result.authReason}]` : (result.error || 'Не удалось сохранить параметры.'));
+      }
+
       const groupId = Number(result.groupId);
       if (!Number.isSafeInteger(groupId) || groupId <= 0) throw new Error('Не удалось открыть сообщество.');
 
-      // The draft is already durable at this point. Bridge handoff is a
-      // convenience layer only and must never turn a successful save into an
-      // apparent failure for the user.
       $('status').textContent = `Параметры сохранены. Откройте чат и напишите «${REVIEW_COMMAND}»: бот покажет ваш подбор. Заявка менеджеру ещё не отправлена.`;
       $('chat').href = `https://vk.ru/im?sel=-${groupId}`;
       $('chat').hidden = false;
-      $('save').hidden = true; $('edit').hidden = true;
+      $('save').hidden = true;
+      $('edit').hidden = true;
 
       const copyReviewCommand = () => {
         if (!bridge) return;
@@ -200,11 +197,17 @@
         copyReviewCommand();
       }
     } catch (error) {
-      $('status').textContent = error.name === 'AbortError' ? 'Ответ задержался. Повторите попытку — одинаковые параметры не создадут дубль.' : (error.message || 'Ошибка соединения. Повторите попытку.');
-      $('save').disabled = false; $('edit').disabled = false;
+      $('status').textContent = error.name === 'AbortError'
+        ? 'Ответ задержался. Повторите попытку: одинаковые параметры не создадут дубль.'
+        : (error.message || 'Ошибка соединения. Повторите попытку.');
+      $('save').disabled = false;
+      $('edit').disabled = false;
     }
   });
-  if (inVK && bridge) bridge.send('VKWebAppInit').catch(() => {
-    $('welcome').textContent = 'Соберём параметры поездки. Если приложение работает некорректно, откройте его заново.';
-  });
+
+  if (inVK && bridge) {
+    bridge.send('VKWebAppInit').catch(() => {
+      $('welcome').textContent = 'Соберём параметры поездки. Если приложение работает некорректно, откройте его заново.';
+    });
+  }
 })();

@@ -135,7 +135,7 @@ def create_blueprint(save_draft, settings):
 
     @bp.get("/vk/miniapp/<name>")
     def asset(name):
-        if name not in ("app.js", "styles.css", "vk-bridge.js"):
+        if name not in ("app.js", "styles.css", "vk-bridge.js", "privacy.html"):
             return jsonify(ok=False), 404
         return send_from_directory(static, name)
 

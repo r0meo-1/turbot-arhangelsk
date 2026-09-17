@@ -66,8 +66,12 @@ def test_draft_api_and_static():
     assert saved[0][1]['budget_scope'] == 'total'
     assert saved[0][1]['source'] == 'vk_mini_app'
     assert response.headers['Cache-Control'] == 'no-store'
-    for path in ('', 'app.js', 'styles.css', 'vk-bridge.js'):
+    for path in ('', 'app.js', 'styles.css', 'vk-bridge.js', 'privacy.html'):
         assert client.get('/vk/miniapp/' + path).status_code == 200
+    privacy = client.get('/vk/miniapp/privacy.html').get_data(as_text=True)
+    assert 'ЧЕРНОВИК' not in privacy
+    assert 'Telegram' not in privacy
+    assert 'Политика обработки персональных данных' in privacy
     assert client.get('/vk/miniapp/README.md').status_code == 404
 
 
