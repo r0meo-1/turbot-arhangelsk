@@ -14,3 +14,14 @@ from shared.vk_followup import install as _install_followup_guard
 _install_followup_guard(_bot)
 
 app = _bot.app
+
+
+@app.get("/vk/runtime")
+def runtime_status():
+    """Small, PII-free production probe for the guarded VK runtime."""
+    return {
+        "ok": True,
+        "runtime": "vk",
+        "followup": "durable-v1",
+        "guardInstalled": bool(getattr(_bot, "_durable_followup_installed", False)),
+    }
