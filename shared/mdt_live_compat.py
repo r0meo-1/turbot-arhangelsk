@@ -3,8 +3,10 @@
 The production ``add-lead`` endpoint can create a lead successfully while
 returning only a top-level ``result`` value and no numeric ``id``/``lead_id``.
 Older code interpreted that as failure and retried, which duplicated leads.
-This module patches only Website-origin lead creation so Telegram/VK behaviour
-stays untouched while we handle the live response conservatively.
+Website and Telegram use the same live endpoint and have both exhibited this
+response shape, so accept only the conservative success variants for those
+sources. VK behaviour stays untouched because its delivery modes have separate
+recovery/one-shot semantics.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ logger = logging.getLogger("turbot.shared.mdt_live_compat")
 
 _ORIGINAL_CREATE_LEAD = mdt_shared.create_lead
 _INSTALLED = False
+_RESULT_ONLY_SOURCES = {"website", "telegram"}
 
 
 def _live_result_is_success(response: Any) -> bool:
@@ -52,8 +55,13 @@ def _live_result_is_success(response: Any) -> bool:
     return False
 
 
+def _source_accepts_result_only(settings: mdt_shared.MDTSettings) -> bool:
+    """Limit ambiguous live-response compatibility to observed lead sources."""
+    return settings.name_prefix.strip().casefold() in _RESULT_ONLY_SOURCES
+
+
 def install() -> None:
-    """Patch create_lead once, accepting live result-only success for Website."""
+    """Patch create_lead once for observed live result-only success responses."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -87,12 +95,14 @@ def install() -> None:
         if ok:
             return True
 
-        if settings.name_prefix.strip().casefold() != "website":
+        if not _source_accepts_result_only(settings):
             return False
 
         if _live_result_is_success(captured.get("response")):
+            source = settings.name_prefix.strip() or "Bot"
             (log or logger).info(
-                "MDT add-lead accepted Website lead %s via result-only response",
+                "MDT add-lead accepted %s lead %s via result-only response",
+                source,
                 chat_id,
             )
             return True
