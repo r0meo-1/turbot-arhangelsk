@@ -46,7 +46,7 @@ jobs:
             if html="$(curl -fsSL --max-time 15 "$base/")" && \
                js="$(curl -fsSL --max-time 15 "$base/app.js")"; then
               if grep -q 'trip-form' <<<"$html" && \
-                 grep -q "budgetScope: 'per_person'" <<<"$js" && \
+                 grep -q "budgetScope: 'total'" <<<"$js" && \
                  grep -q "source: 'telegram_mini_app'" <<<"$js"; then
                 echo "Telegram Mini App Pages smoke: ok"
                 exit 0
