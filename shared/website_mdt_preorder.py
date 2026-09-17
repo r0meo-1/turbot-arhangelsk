@@ -211,9 +211,25 @@ def _ensure_tourist(
         params["manager_id"] = int(manager_id)
     result = website_app._bot._mdt_request("add-tourist-temp", params)
     tourist_id = _nested_id(result, "id", "tourist_id")
+    if tourist_id is None and _live_result_is_success(result):
+        # Live MDT may acknowledge add-tourist-temp with only {"result": ...}.
+        # Recover the row immediately by our unique delivery tag so the same
+        # delivery can continue to create-preorder without waiting for retry.
+        tourist_id = _recover_tourist(
+            website_app,
+            name=name,
+            phone=phone,
+            delivery_key=delivery_key,
+        )
+        if tourist_id is not None:
+            logger.info(
+                "Recovered result-only MDT tourist for Website lead %s in same attempt",
+                lead_id,
+            )
     if tourist_id is None:
-        # Do not assume a result-only response is safe here. We need the ID for
-        # create-preorder; a later retry can recover it via the unique tag.
+        # If MDT accepted the write but its list endpoint is not consistent yet,
+        # leave the lead pending. The next retry recovers the tagged tourist
+        # instead of creating another one.
         return None
 
     _checkpoint(website_app, lead_id, mdt_tourist_id=int(tourist_id))
@@ -415,10 +431,12 @@ def _deliver_structured_preorder(website_app: Any, lead_id: int) -> bool:
         _mark_synced(website_app, lead_id, attempts)
         return True
     except Exception as exc:
+        detail = str(exc).strip()
         logger.warning(
-            "Website structured MDT delivery failed for lead %s: %s",
+            "Website structured MDT delivery failed for lead %s: %s%s",
             lead_id,
             type(exc).__name__,
+            f" ({detail[:200]})" if detail else "",
         )
         _mark_pending(website_app, lead_id, attempts)
         return False
