@@ -181,3 +181,55 @@ def test_result_only_preorder_success_does_not_retry(monkeypatch):
         )
         row = cur.fetchone()
     assert tuple(row) == ("synced", 1, None)
+
+
+def test_result_only_tourist_success_recovers_in_same_attempt(monkeypatch):
+    lead_id = _store("website-structured-0004")
+    calls = []
+    tourist_checks = 0
+
+    def request(method, params):
+        nonlocal tourist_checks
+        calls.append((method, dict(params)))
+        if method == "get-manager-list":
+            return []
+        if method == "get-tourist-temp-list":
+            tourist_checks += 1
+            if tourist_checks == 1:
+                return []
+            return [
+                {
+                    "id": 504,
+                    "name": "TEST Structured",
+                    "tel": "+79990000004",
+                    "tags": f"Website web-lead-{lead_id}",
+                }
+            ]
+        if method == "add-tourist-temp":
+            return {"result": "ok"}
+        if method == "get-preorder-list":
+            return []
+        if method == "create-preorder":
+            return {"id": 604}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(bot, "_mdt_request", request)
+
+    assert structured._deliver_structured_preorder(website_app, lead_id) is True
+
+    methods = [method for method, _ in calls]
+    assert methods.count("add-tourist-temp") == 1
+    assert methods.count("get-tourist-temp-list") == 2
+    assert methods.count("create-preorder") == 1
+
+    with bot._db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT mdt_status, mdt_attempts, mdt_tourist_id,
+                   mdt_preorder_id, mdt_next_retry_at
+            FROM website_leads WHERE id=?
+            """,
+            (lead_id,),
+        )
+        row = cur.fetchone()
+    assert tuple(row) == ("synced", 1, 504, 604, None)
