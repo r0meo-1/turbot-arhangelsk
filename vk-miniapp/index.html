@@ -104,8 +104,19 @@
 
       <p id="error" class="error" role="alert" aria-live="polite"></p>
       <button id="submit" class="primary" type="submit">Проверить параметры</button>
-      <p class="privacy-note">Сначала проверим параметры. Можно отдельно открыть поиск отелей Booking.com или продолжить подбор пакетного тура в боте.</p>
+      <p class="privacy-note">Сначала проверим параметры. Можно отдельно открыть Яндекс Путешествия или Booking.com, либо продолжить подбор пакетного тура в боте.</p>
     </form>
+
+    <section class="card" aria-labelledby="yandex-travel-title" style="margin-top:12px">
+      <div class="section-row">
+        <div>
+          <strong id="yandex-travel-title">Яндекс Путешествия</strong>
+          <div class="hint">Отели по вашему направлению через Travelpayouts</div>
+        </div>
+        <span aria-hidden="true" style="font-size:24px">🏨</span>
+      </div>
+      <button id="yandex-travel" class="secondary" type="button">Найти отель</button>
+    </section>
 
     <section class="card" aria-labelledby="transfer-title" style="margin-top:12px">
       <div class="section-row">
@@ -134,13 +145,57 @@
   <script src="./app.js"></script>
   <script>
     (() => {
-      const button = document.getElementById('transfer');
-      const url = 'https://r0meo1.ru/apreltour/transfer/?utm_source=vk&utm_medium=miniapp&utm_campaign=turbot_transfer';
-      if (!button) return;
-      button.addEventListener('click', () => {
+      const openExternal = (url) => {
         const popup = window.open(url, '_blank', 'noopener,noreferrer');
         if (!popup) window.location.assign(url);
-      });
+      };
+
+      const transferButton = document.getElementById('transfer');
+      const transferUrl = 'https://r0meo1.ru/apreltour/transfer/?utm_source=vk&utm_medium=miniapp&utm_campaign=turbot_transfer';
+      transferButton?.addEventListener('click', () => openExternal(transferUrl));
+
+      const yandexButton = document.getElementById('yandex-travel');
+      const yandexAffiliateUrl = () => {
+        const rawDestination = document.getElementById('destination')?.value || '';
+        const destinationKey = rawDestination.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+        const slugs = {
+          'таиланд': 'thailand',
+          'thailand': 'thailand',
+          'вьетнам': 'vietnam',
+          'vietnam': 'vietnam',
+          'шри-ланка': 'sri-lanka',
+          'шри ланка': 'sri-lanka',
+          'sri-lanka': 'sri-lanka',
+          'sri lanka': 'sri-lanka'
+        };
+        const slug = slugs[destinationKey];
+        const target = new URL(slug
+          ? `https://travel.yandex.ru/hotels/${slug}/`
+          : 'https://travel.yandex.ru/hotels/');
+
+        const checkin = document.getElementById('date')?.value || '';
+        const nights = Math.trunc(Number(document.getElementById('nights')?.value || 0));
+        const adults = Math.trunc(Number(document.getElementById('adults')?.value || 2));
+        if (/^\d{4}-\d{2}-\d{2}$/.test(checkin) && nights > 0) {
+          const checkout = new Date(`${checkin}T00:00:00Z`);
+          checkout.setUTCDate(checkout.getUTCDate() + nights);
+          target.searchParams.set('checkinDate', checkin);
+          target.searchParams.set('checkoutDate', checkout.toISOString().slice(0, 10));
+        }
+        target.searchParams.set('adults', String(Math.max(1, Math.min(8, adults || 2))));
+        target.searchParams.set('utm_source', 'turbot');
+        target.searchParams.set('utm_medium', 'miniapp');
+        target.searchParams.set('utm_campaign', 'yandex_travel');
+        target.searchParams.set('utm_content', 'vk');
+
+        const affiliate = new URL('https://tp.media/r');
+        affiliate.searchParams.set('marker', '778488');
+        affiliate.searchParams.set('trs', '574782');
+        affiliate.searchParams.set('p', '5916');
+        affiliate.searchParams.set('u', target.toString());
+        return affiliate.toString();
+      };
+      yandexButton?.addEventListener('click', () => openExternal(yandexAffiliateUrl()));
     })();
   </script>
 </body>
