@@ -14,7 +14,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, List, Optional
 
 from shared import mdt as mdt_shared
 from shared.dates import parse_russian_dates
@@ -29,7 +29,12 @@ def _rows(result: Any) -> List[Dict[str, Any]]:
     """Normalize common MDT list response shapes to dictionaries."""
     if result is None:
         return []
-    data = result.get("data", result) if isinstance(result, dict) else result
+    data = result
+    if isinstance(data, dict):
+        if "data" in data:
+            data = data.get("data")
+        elif "result" in data and isinstance(data.get("result"), (dict, list)):
+            data = data.get("result")
     if isinstance(data, list):
         return [dict(row) for row in data if isinstance(row, dict)]
     if isinstance(data, dict):
@@ -42,6 +47,19 @@ def _rows(result: Any) -> List[Dict[str, Any]]:
             rows.append(row)
         return rows
     return []
+
+
+def _nested_id(result: Any, *keys: str) -> Optional[int]:
+    """Extract an MDT ID without mistaking boolean ``result: true`` for ID 1."""
+    direct = mdt_shared.extract_id(result, *keys)
+    if direct is not None:
+        return direct
+    if not isinstance(result, dict) or "result" not in result:
+        return None
+    nested = result.get("result")
+    if isinstance(nested, bool):
+        return None
+    return mdt_shared.extract_id(nested, *keys)
 
 
 def _migrate_schema(website_app: Any) -> None:
@@ -83,12 +101,7 @@ def _country_cache(website_app: Any) -> Dict[str, int]:
 
 
 def _extract_preorder_id(result: Any) -> Optional[int]:
-    preorder_id = mdt_shared.extract_id(result, "id", "preorder_id")
-    if preorder_id is not None:
-        return preorder_id
-    if isinstance(result, dict) and "result" in result:
-        return mdt_shared.extract_id(result.get("result"), "id", "preorder_id")
-    return None
+    return _nested_id(result, "id", "preorder_id")
 
 
 def _checkpoint(website_app: Any, lead_id: int, **values: Any) -> None:
@@ -197,9 +210,7 @@ def _ensure_tourist(
     if manager_id is not None:
         params["manager_id"] = int(manager_id)
     result = website_app._bot._mdt_request("add-tourist-temp", params)
-    tourist_id = mdt_shared.extract_id(result, "id", "tourist_id")
-    if tourist_id is None and isinstance(result, dict) and "result" in result:
-        tourist_id = mdt_shared.extract_id(result.get("result"), "id", "tourist_id")
+    tourist_id = _nested_id(result, "id", "tourist_id")
     if tourist_id is None:
         # Do not assume a result-only response is safe here. We need the ID for
         # create-preorder; a later retry can recover it via the unique tag.
