@@ -12,7 +12,12 @@ Environment=HOME=/opt/turbot
 EnvironmentFile=/opt/turbot/.env
 # shared.vk_runtime installs the restart-safe follow-up guard before the
 # background follow-up worker reaches its first scheduled pass.
+# Explicitly disable Gunicorn's implicit ./gunicorn.conf.py loading here.
+# That config belongs to the Telegram/Website service and its post_worker_init
+# imports website_app -> bot, which would start a second Telegram getUpdates
+# poller inside the VK worker and cause permanent Telegram 409 conflicts.
 ExecStart=/opt/turbot/venv/bin/gunicorn shared.vk_runtime:app \
+    --config /dev/null \
     --bind 127.0.0.1:5100 \
     --workers 1 \
     --threads 4 \
