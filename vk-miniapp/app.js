@@ -1,6 +1,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id);
   const form = $('trip-form');
+  const destination = $('destination');
   const departure = $('departure');
   const REVIEW_COMMAND = 'Проверить заявку';
   const REVIEW_PAYLOAD = { command: 'miniapp_review', version: 1 };
@@ -10,6 +11,26 @@
   const bridge = window.vkBridge;
   let effectiveLaunchParams = launchParams;
   let payload;
+
+  const DESTINATIONS = Object.freeze([
+    'Таиланд', 'Вьетнам', 'Шри-Ланка', 'Египет', 'ОАЭ', 'Турция',
+    'Мальдивы', 'Индонезия', 'Китай', 'Куба', 'Танзания', 'Индия',
+    'Греция', 'Кипр', 'Тунис', 'Доминикана'
+  ]);
+
+  const installDestinationAutocomplete = () => {
+    if (!destination || document.getElementById('destination-options')) return;
+    const suggestions = document.createElement('datalist');
+    suggestions.id = 'destination-options';
+    DESTINATIONS.forEach((place) => {
+      const option = document.createElement('option');
+      option.value = place;
+      suggestions.append(option);
+    });
+    destination.setAttribute('list', suggestions.id);
+    destination.setAttribute('autocomplete', 'off');
+    destination.insertAdjacentElement('afterend', suggestions);
+  };
 
   const DEPARTURE_CITIES = Object.freeze([
     'Архангельск', 'Москва', 'Санкт-Петербург', 'Мурманск', 'Казань',
@@ -61,14 +82,14 @@
 
   document.querySelectorAll('.chip').forEach((chip) => {
     chip.addEventListener('click', () => {
-      $('destination').value = chip.dataset.destination;
-      $('destination').dispatchEvent(new Event('input'));
+      destination.value = chip.dataset.destination;
+      destination.dispatchEvent(new Event('input'));
     });
   });
 
-  $('destination').addEventListener('input', () => {
+  destination.addEventListener('input', () => {
     document.querySelectorAll('.chip').forEach((chip) => {
-      const active = chip.dataset.destination === $('destination').value.trim();
+      const active = chip.dataset.destination === destination.value.trim();
       chip.classList.toggle('active', active);
       chip.setAttribute('aria-pressed', String(active));
     });
@@ -99,8 +120,8 @@
     payload = {
       type: 'trip_request',
       version: 2,
-      destination: $('destination').value.trim(),
-      departure: $('departure').value.trim(),
+      destination: destination.value.trim(),
+      departure: departure.value.trim(),
       date: $('date').value,
       nights: Number($('nights').value),
       adults: Number($('adults').value),
@@ -149,7 +170,7 @@
   $('edit').addEventListener('click', () => {
     $('review').hidden = true;
     form.hidden = false;
-    $('destination').focus();
+    destination.focus();
     form.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
@@ -228,6 +249,7 @@
     }
   });
 
+  installDestinationAutocomplete();
   installDepartureAutocomplete();
 
   if (inVK && bridge) {

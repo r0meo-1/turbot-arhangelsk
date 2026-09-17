@@ -20,6 +20,26 @@
   const status = document.getElementById('status');
   let pendingPayload = null;
 
+  const DESTINATIONS = Object.freeze([
+    'Таиланд', 'Вьетнам', 'Шри-Ланка', 'Египет', 'ОАЭ', 'Турция',
+    'Мальдивы', 'Индонезия', 'Китай', 'Куба', 'Танзания', 'Индия',
+    'Греция', 'Кипр', 'Тунис', 'Доминикана'
+  ]);
+
+  const installDestinationAutocomplete = () => {
+    if (!destination || document.getElementById('destination-options')) return;
+    const suggestions = document.createElement('datalist');
+    suggestions.id = 'destination-options';
+    DESTINATIONS.forEach((place) => {
+      const option = document.createElement('option');
+      option.value = place;
+      suggestions.append(option);
+    });
+    destination.setAttribute('list', suggestions.id);
+    destination.setAttribute('autocomplete', 'off');
+    destination.insertAdjacentElement('afterend', suggestions);
+  };
+
   const DEPARTURE_CITIES = Object.freeze([
     'Архангельск', 'Москва', 'Санкт-Петербург', 'Мурманск', 'Казань',
     'Екатеринбург', 'Новосибирск', 'Самара', 'Уфа', 'Челябинск',
@@ -282,6 +302,7 @@
     }
   });
 
+  installDestinationAutocomplete();
   installDepartureAutocomplete();
   setBudget();
   setMinDate();
