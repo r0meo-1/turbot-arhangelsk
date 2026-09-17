@@ -38,7 +38,7 @@ services:
     volumes:
       - bot-data:/app/data
     command: >
-      gunicorn vk_bot:app
+      gunicorn shared.vk_runtime:app
       --bind 0.0.0.0:5100
       --workers 1 --threads 4 --timeout 60
 
