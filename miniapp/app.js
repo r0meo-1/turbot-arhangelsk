@@ -121,7 +121,7 @@
       children: childCount,
       childrenAges: childAgeValues,
       budgetMaxRub: Number(data.get('budget')),
-      budgetScope: 'per_person',
+      budgetScope: 'total',
       directOnly: data.get('direct') === 'on',
       consent: data.get('consent') === 'on',
       source: 'telegram_mini_app'
@@ -150,7 +150,7 @@
       summaryRow('Ночей', String(payload.nights)),
       summaryRow('Взрослых', String(payload.adults)),
       summaryRow('Детей', childrenText),
-      summaryRow('Бюджет', `${formatRub(payload.budgetMaxRub)} на человека`),
+      summaryRow('Бюджет на всех', formatRub(payload.budgetMaxRub)),
       summaryRow('Перелёт', payload.directOnly ? 'только прямой' : 'любой подходящий')
     );
   };
