@@ -103,7 +103,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
             assert page.evaluate("window.__tgBackVisible") is True
             review_text = page.locator("#summary").inner_text().replace("\u00a0", " ")
             for expected in (
-                "Таиланд", "Архангельск", "10", "2", "5", "270 000", "только прямой"
+                "Таиланд", "Архангельск", "10", "2", "5", "270 000", "Бюджет на всех", "только прямой"
             ):
                 assert expected in review_text
 
@@ -139,7 +139,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
         "children": 1,
         "childrenAges": [5],
         "budgetMaxRub": 270000,
-        "budgetScope": "per_person",
+        "budgetScope": "total",
         "directOnly": True,
         "consent": True,
         "source": "telegram_mini_app",
