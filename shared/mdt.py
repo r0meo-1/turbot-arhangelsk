@@ -76,7 +76,11 @@ def http_request(
 
 
 def parse_country_list(result: Any) -> Dict[str, int]:
-    """Parse get-country-list response into lowercase name → id."""
+    """Parse get-country-list response into lowercase name → id.
+
+    MDT has returned both ``name`` and ``title`` in different response shapes.
+    The live API currently uses ``title`` for list items, so support both.
+    """
     cache: Dict[str, int] = {}
     if result is None:
         return cache
@@ -90,17 +94,24 @@ def parse_country_list(result: Any) -> Dict[str, int]:
             name = (
                 value
                 if isinstance(value, str)
-                else (value.get("name", "") if isinstance(value, dict) else "")
+                else (
+                    (value.get("name") or value.get("title") or "")
+                    if isinstance(value, dict)
+                    else ""
+                )
             )
             if name:
-                cache[name.strip().lower()] = cid
+                cache[str(name).strip().lower()] = cid
     elif isinstance(data, list):
         for item in data:
             if isinstance(item, dict):
                 cid = item.get("id")
-                name = item.get("name", "")
+                name = item.get("name") or item.get("title") or ""
                 if cid is not None and name:
-                    cache[name.strip().lower()] = int(cid)
+                    try:
+                        cache[str(name).strip().lower()] = int(cid)
+                    except (ValueError, TypeError):
+                        continue
     return cache
 
 
