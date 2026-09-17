@@ -179,9 +179,9 @@ jobs:
             exit 1
           fi
 
-          # End-to-end Booking.com smoke: authenticate exactly like the VK Mini
-          # App, send a valid trip, and require a real HTTPS partner link from
-          # the production Travelpayouts-backed endpoint.
+          # End-to-end Booking.com smoke. The partner program is optional while
+          # Travelpayouts approval is pending; that one explicit provider state
+          # is a skip. Any other non-200 response remains a deployment failure.
           vk_booking_request="$(python - <<'PY'
           import base64
           import hashlib
@@ -231,9 +231,26 @@ jobs:
             -X POST "$vk_base/miniapp/booking-link" \
             -H 'Content-Type: application/json' \
             --data "$vk_booking_request")"
+          booking_optional_skip=false
           if [[ "$booking_status" != "200" ]]; then
-            echo "VK Booking.com partner-link smoke returned HTTP $booking_status" >&2
-            python - "$booking_response" <<'PY'
+            booking_error_code="$(python - "$booking_response" <<'PY'
+          import json
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as fh:
+                  data = json.load(fh)
+              print(str(data.get("errorCode") or ""))
+          except Exception:
+              print("")
+          PY
+            )"
+            if [[ "$booking_error_code" == "booking_program_not_enabled" ]]; then
+              echo "VK Booking.com partner-link smoke: skipped (partner program not enabled yet)"
+              booking_optional_skip=true
+            else
+              echo "VK Booking.com partner-link smoke returned HTTP $booking_status" >&2
+              python - "$booking_response" <<'PY'
           import json
           import sys
 
@@ -245,11 +262,13 @@ jobs:
           except Exception:
               print("Provider returned a non-JSON error", file=sys.stderr)
           PY
-            rm -f "$booking_response"
-            exit 1
+              rm -f "$booking_response"
+              exit 1
+            fi
           fi
 
-          python - "$booking_response" <<'PY'
+          if [[ "$booking_optional_skip" != "true" ]]; then
+            python - "$booking_response" <<'PY'
           import json
           import sys
           from urllib.parse import urlparse
@@ -262,6 +281,7 @@ jobs:
               raise SystemExit("VK Booking.com partner-link smoke returned an invalid URL")
           print(f"VK Booking.com partner-link smoke: ok host={parsed.netloc}")
           PY
+          fi
           rm -f "$booking_response"
 
           tg_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
@@ -274,4 +294,4 @@ jobs:
             exit 1
           fi
 
-          echo "Public Mini App routes, VK auth, Booking.com partner link, and Telegram auth smoke: ok"
+          echo "Public Mini App routes, VK auth, Booking.com probe, and Telegram auth smoke: ok"
