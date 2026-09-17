@@ -9,6 +9,12 @@ VK_INDEX = (ROOT / "vk-miniapp" / "index.html").read_text(encoding="utf-8")
 TRANSFER_PATH = "https://r0meo1.ru/apreltour/transfer/"
 YANDEX_TRAVEL_PATH = "https://travel.yandex.ru/hotels/"
 YANDEX_AFFILIATE_REDIRECT = "https://tp.media/r"
+AVIASALES_PATH = "https://www.aviasales.ru/"
+AIRALO_PATHS = (
+    "https://www.airalo.com/thailand-esim",
+    "https://www.airalo.com/vietnam-esim",
+    "https://www.airalo.com/sri-lanka-esim",
+)
 
 
 def test_telegram_miniapp_has_transfer_shortcut():
@@ -31,7 +37,22 @@ def test_telegram_miniapp_has_yandex_travel_affiliate_shortcut():
     assert "target.searchParams.set('utm_content', 'telegram')" in TG_INDEX
 
 
-def test_published_telegram_copy_matches_transfer_and_yandex_shortcuts():
+def test_telegram_miniapp_has_aviasales_affiliate_shortcut():
+    assert 'id="flights"' in TG_INDEX
+    assert AVIASALES_PATH in TG_INDEX
+    assert "778488.turbot_flights_tg" in TG_INDEX
+    assert "affiliate.searchParams.set('p', '4114')" in TG_INDEX
+
+
+def test_telegram_miniapp_has_airalo_affiliate_shortcut():
+    assert 'id="esim"' in TG_INDEX
+    assert all(path in TG_INDEX for path in AIRALO_PATHS)
+    assert "778488.turbot_esim_tg" in TG_INDEX
+    assert "affiliate.searchParams.set('p', '8310')" in TG_INDEX
+    assert "affiliate.searchParams.set('campaign_id', '541')" in TG_INDEX
+
+
+def test_published_telegram_copy_matches_service_shortcuts():
     assert TG_PUBLISHED_INDEX == TG_INDEX
 
 
@@ -53,3 +74,18 @@ def test_vk_miniapp_has_yandex_travel_affiliate_shortcut():
     assert "target.searchParams.set('checkinDate', checkin)" in VK_INDEX
     assert "target.searchParams.set('checkoutDate'" in VK_INDEX
     assert "target.searchParams.set('utm_content', 'vk')" in VK_INDEX
+
+
+def test_vk_miniapp_has_aviasales_affiliate_shortcut():
+    assert 'id="flights"' in VK_INDEX
+    assert AVIASALES_PATH in VK_INDEX
+    assert "778488.turbot_flights_vk" in VK_INDEX
+    assert "affiliate.searchParams.set('p', '4114')" in VK_INDEX
+
+
+def test_vk_miniapp_has_airalo_affiliate_shortcut():
+    assert 'id="esim"' in VK_INDEX
+    assert all(path in VK_INDEX for path in AIRALO_PATHS)
+    assert "778488.turbot_esim_vk" in VK_INDEX
+    assert "affiliate.searchParams.set('p', '8310')" in VK_INDEX
+    assert "affiliate.searchParams.set('campaign_id', '541')" in VK_INDEX
