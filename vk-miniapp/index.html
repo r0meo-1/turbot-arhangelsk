@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#0b1220">
-  <title>АПРЕЛЬ тур — подбор тура в VK</title>
+  <title>АПРЕЛЬ тур — подбор тура</title>
   <link rel="stylesheet" href="./styles.css">
   <script src="./vk-bridge.js"></script>
 </head>
@@ -17,7 +17,7 @@
         <p class="eyebrow">АПРЕЛЬ тур</p>
         <h1>Подбор тура</h1>
       </div>
-      <span class="ai-badge">VK</span>
+      <span class="ai-badge">ТУР</span>
     </header>
 
     <section class="intro">
@@ -99,174 +99,25 @@
 
       <label class="consent-card card">
         <input id="consent" name="consent" type="checkbox" required>
-        <span>Согласен на обработку данных заявки по <a href="https://bot.r0meo1.ru/privacy" target="_blank" rel="noopener noreferrer">политике «АПРЕЛЬ тур»</a>.</span>
+        <span>Согласен на обработку данных заявки по <a href="./privacy.html" target="_blank" rel="noopener noreferrer">политике «АПРЕЛЬ тур»</a>.</span>
       </label>
 
       <p id="error" class="error" role="alert" aria-live="polite"></p>
       <button id="submit" class="primary" type="submit">Проверить параметры</button>
-      <p class="privacy-note">Сначала проверим параметры. Дополнительно можно открыть сайт АПРЕЛЬ тур, авиабилеты, отели, трансфер или eSIM, либо продолжить подбор пакетного тура в боте.</p>
+      <p class="privacy-note">Сначала проверим параметры. После сохранения продолжим подбор в чате сообщества.</p>
     </form>
-
-    <section class="card" aria-labelledby="apreltour-site-title" style="margin-top:12px">
-      <div class="section-row">
-        <div>
-          <strong id="apreltour-site-title">АПРЕЛЬ тур</strong>
-          <div class="hint">Основной сайт и подбор путешествий</div>
-        </div>
-        <span aria-hidden="true" style="font-size:24px">🌐</span>
-      </div>
-      <button id="apreltour-site" class="secondary" type="button">Открыть сайт</button>
-    </section>
-
-    <section class="card" aria-labelledby="flights-title" style="margin-top:12px">
-      <div class="section-row">
-        <div>
-          <strong id="flights-title">Авиабилеты</strong>
-          <div class="hint">Фирменный поиск TurBot на travel.r0meo1.ru</div>
-        </div>
-        <span aria-hidden="true" style="font-size:24px">✈️</span>
-      </div>
-      <button id="flights" class="secondary" type="button">Найти авиабилеты</button>
-    </section>
-
-    <section class="card" aria-labelledby="yandex-travel-title" style="margin-top:12px">
-      <div class="section-row">
-        <div>
-          <strong id="yandex-travel-title">Яндекс Путешествия</strong>
-          <div class="hint">Отели по вашему направлению через Travelpayouts</div>
-        </div>
-        <span aria-hidden="true" style="font-size:24px">🏨</span>
-      </div>
-      <button id="yandex-travel" class="secondary" type="button">Найти отель</button>
-    </section>
-
-    <section class="card" aria-labelledby="transfer-title" style="margin-top:12px">
-      <div class="section-row">
-        <div>
-          <strong id="transfer-title">Трансфер из аэропорта</strong>
-          <div class="hint">Такси и трансферы Kiwitaxi по вашему направлению</div>
-        </div>
-        <span aria-hidden="true" style="font-size:24px">🚕</span>
-      </div>
-      <button id="transfer" class="secondary" type="button">Найти трансфер</button>
-    </section>
-
-    <section class="card" aria-labelledby="esim-title" style="margin-top:12px">
-      <div class="section-row">
-        <div>
-          <strong id="esim-title">eSIM для поездки</strong>
-          <div class="hint">Мобильный интернет Airalo в стране назначения</div>
-        </div>
-        <span aria-hidden="true" style="font-size:24px">📶</span>
-      </div>
-      <button id="esim" class="secondary" type="button">Подобрать eSIM</button>
-    </section>
 
     <section id="review" class="card" hidden aria-labelledby="review-title">
       <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
-      <p>Заявка ещё не отправлена.</p>
+      <p>Заявка ещё не отправлена менеджеру.</p>
       <dl id="summary"></dl>
       <button id="edit" class="secondary" type="button">Изменить</button>
-      <button id="booking" class="secondary" type="button">🏨 Найти отели на Booking.com</button>
       <button id="save" class="primary" type="button">Сохранить и продолжить в боте</button>
-      <p id="booking-status" role="status" aria-live="polite"></p>
       <p id="status" role="status" aria-live="polite"></p>
       <a id="chat" class="primary" hidden target="_blank" rel="noopener noreferrer">Открыть чат с ботом</a>
     </section>
   </main>
 
-  <script src="./app.js"></script>
-  <script>
-    (() => {
-      const openExternal = (url) => {
-        const popup = window.open(url, '_blank', 'noopener,noreferrer');
-        if (!popup) window.location.assign(url);
-      };
-
-      const siteButton = document.getElementById('apreltour-site');
-      const siteUrl = 'https://r0meo1.ru/apreltour/?utm_source=vk&utm_medium=miniapp&utm_campaign=turbot_site';
-      siteButton?.addEventListener('click', () => openExternal(siteUrl));
-
-      const transferButton = document.getElementById('transfer');
-      const transferUrl = 'https://r0meo1.ru/apreltour/transfer/?utm_source=vk&utm_medium=miniapp&utm_campaign=turbot_transfer';
-      transferButton?.addEventListener('click', () => openExternal(transferUrl));
-
-      const flightsButton = document.getElementById('flights');
-      const flightsUrl = 'https://travel.r0meo1.ru/?utm_source=vk&utm_medium=miniapp&utm_campaign=turbot_flights';
-      flightsButton?.addEventListener('click', () => openExternal(flightsUrl));
-
-      const yandexButton = document.getElementById('yandex-travel');
-      const yandexAffiliateUrl = () => {
-        const rawDestination = document.getElementById('destination')?.value || '';
-        const destinationKey = rawDestination.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
-        const slugs = {
-          'таиланд': 'thailand',
-          'thailand': 'thailand',
-          'вьетнам': 'vietnam',
-          'vietnam': 'vietnam',
-          'шри-ланка': 'sri-lanka',
-          'шри ланка': 'sri-lanka',
-          'sri-lanka': 'sri-lanka',
-          'sri lanka': 'sri-lanka'
-        };
-        const slug = slugs[destinationKey];
-        const target = new URL(slug
-          ? `https://travel.yandex.ru/hotels/${slug}/`
-          : 'https://travel.yandex.ru/hotels/');
-
-        const checkin = document.getElementById('date')?.value || '';
-        const nights = Math.trunc(Number(document.getElementById('nights')?.value || 0));
-        const adults = Math.trunc(Number(document.getElementById('adults')?.value || 2));
-        if (/^\d{4}-\d{2}-\d{2}$/.test(checkin) && nights > 0) {
-          const checkout = new Date(`${checkin}T00:00:00Z`);
-          checkout.setUTCDate(checkout.getUTCDate() + nights);
-          target.searchParams.set('checkinDate', checkin);
-          target.searchParams.set('checkoutDate', checkout.toISOString().slice(0, 10));
-        }
-        target.searchParams.set('adults', String(Math.max(1, Math.min(8, adults || 2))));
-        target.searchParams.set('utm_source', 'turbot');
-        target.searchParams.set('utm_medium', 'miniapp');
-        target.searchParams.set('utm_campaign', 'yandex_travel');
-        target.searchParams.set('utm_content', 'vk');
-
-        const affiliate = new URL('https://tp.media/r');
-        affiliate.searchParams.set('marker', '778488');
-        affiliate.searchParams.set('trs', '574782');
-        affiliate.searchParams.set('p', '5916');
-        affiliate.searchParams.set('u', target.toString());
-        return affiliate.toString();
-      };
-      yandexButton?.addEventListener('click', () => openExternal(yandexAffiliateUrl()));
-
-      const esimButton = document.getElementById('esim');
-      const airaloAffiliateUrl = () => {
-        const rawDestination = document.getElementById('destination')?.value || '';
-        const destinationKey = rawDestination.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
-        const destinations = {
-          'таиланд': 'https://www.airalo.com/thailand-esim',
-          'thailand': 'https://www.airalo.com/thailand-esim',
-          'вьетнам': 'https://www.airalo.com/vietnam-esim',
-          'vietnam': 'https://www.airalo.com/vietnam-esim',
-          'шри-ланка': 'https://www.airalo.com/sri-lanka-esim',
-          'шри ланка': 'https://www.airalo.com/sri-lanka-esim',
-          'sri-lanka': 'https://www.airalo.com/sri-lanka-esim',
-          'sri lanka': 'https://www.airalo.com/sri-lanka-esim'
-        };
-        const target = new URL(destinations[destinationKey] || 'https://www.airalo.com/');
-        target.searchParams.set('utm_source', 'turbot');
-        target.searchParams.set('utm_medium', 'miniapp');
-        target.searchParams.set('utm_campaign', 'esim');
-        target.searchParams.set('utm_content', 'vk');
-        const affiliate = new URL('https://tp.media/r');
-        affiliate.searchParams.set('marker', '778488.turbot_esim_vk');
-        affiliate.searchParams.set('trs', '574782');
-        affiliate.searchParams.set('p', '8310');
-        affiliate.searchParams.set('campaign_id', '541');
-        affiliate.searchParams.set('u', target.toString());
-        return affiliate.toString();
-      };
-      esimButton?.addEventListener('click', () => openExternal(airaloAffiliateUrl()));
-    })();
-  </script>
+  <script src="./app.js?v=20260917-vk-moderation"></script>
 </body>
 </html>
