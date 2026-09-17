@@ -1,6 +1,7 @@
 (async () => {
   const $ = (id) => document.getElementById(id);
   const form = $('trip-form');
+  const departure = $('departure');
   const REVIEW_COMMAND = 'Проверить заявку';
   const REVIEW_PAYLOAD = { command: 'miniapp_review', version: 1 };
   const launchParams = location.search.slice(1);
@@ -9,6 +10,28 @@
   const bridge = window.vkBridge;
   let effectiveLaunchParams = launchParams;
   let payload;
+
+  const DEPARTURE_CITIES = Object.freeze([
+    'Архангельск', 'Москва', 'Санкт-Петербург', 'Мурманск', 'Казань',
+    'Екатеринбург', 'Новосибирск', 'Самара', 'Уфа', 'Челябинск',
+    'Нижний Новгород', 'Пермь', 'Омск', 'Тюмень', 'Сургут', 'Сочи',
+    'Минеральные Воды', 'Калининград', 'Красноярск', 'Иркутск',
+    'Владивосток', 'Хабаровск', 'Ростов-на-Дону'
+  ]);
+
+  const installDepartureAutocomplete = () => {
+    if (!departure || document.getElementById('departure-cities')) return;
+    const suggestions = document.createElement('datalist');
+    suggestions.id = 'departure-cities';
+    DEPARTURE_CITIES.forEach((city) => {
+      const option = document.createElement('option');
+      option.value = city;
+      suggestions.append(option);
+    });
+    departure.setAttribute('list', suggestions.id);
+    departure.setAttribute('autocomplete', 'off');
+    departure.insertAdjacentElement('afterend', suggestions);
+  };
 
   if (!inVK && bridge) {
     try {
@@ -204,6 +227,8 @@
       $('edit').disabled = false;
     }
   });
+
+  installDepartureAutocomplete();
 
   if (inVK && bridge) {
     bridge.send('VKWebAppInit').catch(() => {

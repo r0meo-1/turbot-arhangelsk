@@ -1,0 +1,23 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+TG_APP_JS = (ROOT / "miniapp" / "app.js").read_text(encoding="utf-8")
+TG_PUBLISHED_APP_JS = (ROOT / "docs" / "miniapp" / "app.js").read_text(encoding="utf-8")
+VK_APP_JS = (ROOT / "vk-miniapp" / "app.js").read_text(encoding="utf-8")
+
+
+def test_departure_autocomplete_is_available_in_both_miniapps():
+    for source in (TG_APP_JS, VK_APP_JS):
+        assert "DEPARTURE_CITIES" in source
+        assert "departure-cities" in source
+        assert "departure.setAttribute('list', suggestions.id)" in source
+        assert "departure.setAttribute('autocomplete', 'off')" in source
+        assert "Архангельск" in source
+        assert "Москва" in source
+        assert "Санкт-Петербург" in source
+        assert "Мурманск" in source
+
+
+def test_published_telegram_autocomplete_matches_source():
+    assert TG_PUBLISHED_APP_JS == TG_APP_JS
