@@ -104,8 +104,19 @@
 
       <p id="error" class="error" role="alert" aria-live="polite"></p>
       <button id="submit" class="primary" type="submit">Проверить параметры</button>
-      <p class="privacy-note">Сначала проверим параметры. Можно отдельно открыть Яндекс Путешествия или Booking.com, либо продолжить подбор пакетного тура в боте.</p>
+      <p class="privacy-note">Сначала проверим параметры. Дополнительно можно открыть авиабилеты, отели, трансфер или eSIM, либо продолжить подбор пакетного тура в боте.</p>
     </form>
+
+    <section class="card" aria-labelledby="flights-title" style="margin-top:12px">
+      <div class="section-row">
+        <div>
+          <strong id="flights-title">Авиабилеты</strong>
+          <div class="hint">Поиск рейсов через Авиасейлс</div>
+        </div>
+        <span aria-hidden="true" style="font-size:24px">✈️</span>
+      </div>
+      <button id="flights" class="secondary" type="button">Найти авиабилеты</button>
+    </section>
 
     <section class="card" aria-labelledby="yandex-travel-title" style="margin-top:12px">
       <div class="section-row">
@@ -127,6 +138,17 @@
         <span aria-hidden="true" style="font-size:24px">🚕</span>
       </div>
       <button id="transfer" class="secondary" type="button">Найти трансфер</button>
+    </section>
+
+    <section class="card" aria-labelledby="esim-title" style="margin-top:12px">
+      <div class="section-row">
+        <div>
+          <strong id="esim-title">eSIM для поездки</strong>
+          <div class="hint">Мобильный интернет Airalo в стране назначения</div>
+        </div>
+        <span aria-hidden="true" style="font-size:24px">📶</span>
+      </div>
+      <button id="esim" class="secondary" type="button">Подобрать eSIM</button>
     </section>
 
     <section id="review" class="card" hidden aria-labelledby="review-title">
@@ -153,6 +175,22 @@
       const transferButton = document.getElementById('transfer');
       const transferUrl = 'https://r0meo1.ru/apreltour/transfer/?utm_source=vk&utm_medium=miniapp&utm_campaign=turbot_transfer';
       transferButton?.addEventListener('click', () => openExternal(transferUrl));
+
+      const flightsButton = document.getElementById('flights');
+      const aviasalesAffiliateUrl = () => {
+        const target = new URL('https://www.aviasales.ru/');
+        target.searchParams.set('utm_source', 'turbot');
+        target.searchParams.set('utm_medium', 'miniapp');
+        target.searchParams.set('utm_campaign', 'flights');
+        target.searchParams.set('utm_content', 'vk');
+        const affiliate = new URL('https://tp.media/r');
+        affiliate.searchParams.set('marker', '778488.turbot_flights_vk');
+        affiliate.searchParams.set('trs', '574782');
+        affiliate.searchParams.set('p', '4114');
+        affiliate.searchParams.set('u', target.toString());
+        return affiliate.toString();
+      };
+      flightsButton?.addEventListener('click', () => openExternal(aviasalesAffiliateUrl()));
 
       const yandexButton = document.getElementById('yandex-travel');
       const yandexAffiliateUrl = () => {
@@ -196,6 +234,35 @@
         return affiliate.toString();
       };
       yandexButton?.addEventListener('click', () => openExternal(yandexAffiliateUrl()));
+
+      const esimButton = document.getElementById('esim');
+      const airaloAffiliateUrl = () => {
+        const rawDestination = document.getElementById('destination')?.value || '';
+        const destinationKey = rawDestination.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
+        const destinations = {
+          'таиланд': 'https://www.airalo.com/thailand-esim',
+          'thailand': 'https://www.airalo.com/thailand-esim',
+          'вьетнам': 'https://www.airalo.com/vietnam-esim',
+          'vietnam': 'https://www.airalo.com/vietnam-esim',
+          'шри-ланка': 'https://www.airalo.com/sri-lanka-esim',
+          'шри ланка': 'https://www.airalo.com/sri-lanka-esim',
+          'sri-lanka': 'https://www.airalo.com/sri-lanka-esim',
+          'sri lanka': 'https://www.airalo.com/sri-lanka-esim'
+        };
+        const target = new URL(destinations[destinationKey] || 'https://www.airalo.com/');
+        target.searchParams.set('utm_source', 'turbot');
+        target.searchParams.set('utm_medium', 'miniapp');
+        target.searchParams.set('utm_campaign', 'esim');
+        target.searchParams.set('utm_content', 'vk');
+        const affiliate = new URL('https://tp.media/r');
+        affiliate.searchParams.set('marker', '778488.turbot_esim_vk');
+        affiliate.searchParams.set('trs', '574782');
+        affiliate.searchParams.set('p', '8310');
+        affiliate.searchParams.set('campaign_id', '541');
+        affiliate.searchParams.set('u', target.toString());
+        return affiliate.toString();
+      };
+      esimButton?.addEventListener('click', () => openExternal(airaloAffiliateUrl()));
     })();
   </script>
 </body>
