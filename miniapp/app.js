@@ -173,7 +173,8 @@
     form.hidden = false;
     status.textContent = '';
     tg?.BackButton?.hide?.();
-    submit.focus({ preventScroll: true });
+    destination.focus({ preventScroll: true });
+    form.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   document.querySelectorAll('.chip').forEach((chip) => {
