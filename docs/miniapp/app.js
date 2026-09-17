@@ -3,6 +3,7 @@
   const API_URL = 'https://bot.r0meo1.ru/miniapp/submit';
   const form = document.getElementById('trip-form');
   const destination = document.getElementById('destination');
+  const departure = document.getElementById('departure');
   const children = document.getElementById('children');
   const childrenAgesCard = document.getElementById('children-ages-card');
   const childrenAges = document.getElementById('children-ages');
@@ -18,6 +19,28 @@
   const save = document.getElementById('save');
   const status = document.getElementById('status');
   let pendingPayload = null;
+
+  const DEPARTURE_CITIES = Object.freeze([
+    'Архангельск', 'Москва', 'Санкт-Петербург', 'Мурманск', 'Казань',
+    'Екатеринбург', 'Новосибирск', 'Самара', 'Уфа', 'Челябинск',
+    'Нижний Новгород', 'Пермь', 'Омск', 'Тюмень', 'Сургут', 'Сочи',
+    'Минеральные Воды', 'Калининград', 'Красноярск', 'Иркутск',
+    'Владивосток', 'Хабаровск', 'Ростов-на-Дону'
+  ]);
+
+  const installDepartureAutocomplete = () => {
+    if (!departure || document.getElementById('departure-cities')) return;
+    const suggestions = document.createElement('datalist');
+    suggestions.id = 'departure-cities';
+    DEPARTURE_CITIES.forEach((city) => {
+      const option = document.createElement('option');
+      option.value = city;
+      suggestions.append(option);
+    });
+    departure.setAttribute('list', suggestions.id);
+    departure.setAttribute('autocomplete', 'off');
+    departure.insertAdjacentElement('afterend', suggestions);
+  };
 
   const startParam =
     tg?.initDataUnsafe?.start_param ||
@@ -259,6 +282,7 @@
     }
   });
 
+  installDepartureAutocomplete();
   setBudget();
   setMinDate();
   renderChildAges();
