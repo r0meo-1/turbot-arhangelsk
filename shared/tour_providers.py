@@ -13,6 +13,7 @@ from typing import List, Optional, Sequence, Tuple
 
 import requests
 
+from shared import sletat as _sletat
 from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
 
@@ -22,6 +23,9 @@ logger = logging.getLogger("turbot.shared.tour_providers")
 @dataclass
 class ProviderSettings:
     order: Sequence[str] = ("travelata", "tourvisor")
+    sletat: _sletat.SletatSettings = field(
+        default_factory=_sletat.SletatSettings.from_env
+    )
     travelata: _travelata.TravelataSettings = field(
         default_factory=_travelata.TravelataSettings
     )
@@ -30,10 +34,24 @@ class ProviderSettings:
     )
 
     def enabled_names(self) -> List[str]:
+        ordered = [str(raw or "").strip().lower() for raw in self.order if str(raw or "").strip()]
+        # Sletat is the preferred Russian package-tour source. Existing VK
+        # deployments still default TOUR_PROVIDER_ORDER to travelata,tourvisor,
+        # so automatically put Sletat first once its credentials are present.
+        if (
+            self.sletat.enabled
+            and self.sletat.login
+            and self.sletat.password
+            and "sletat" not in ordered
+        ):
+            ordered.insert(0, "sletat")
+
         enabled: List[str] = []
-        for raw in self.order:
-            name = str(raw or "").strip().lower()
-            if name == "travelata":
+        for name in ordered:
+            if name == "sletat":
+                if self.sletat.enabled and self.sletat.login and self.sletat.password:
+                    enabled.append(name)
+            elif name == "travelata":
                 if (
                     self.travelata.enabled
                     and self.travelata.username
@@ -70,7 +88,11 @@ def search_tours(
 
     for name in settings.enabled_names():
         attempted = True
-        if name == "travelata":
+        if name == "sletat":
+            result = _sletat.search_tours(
+                settings.sletat, session, info, log=log
+            )
+        elif name == "travelata":
             result = _travelata.search_tours(
                 settings.travelata, session, info, log=log
             )
