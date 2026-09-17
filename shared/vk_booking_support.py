@@ -1,16 +1,13 @@
 """Existing-booking support workflow for the production VK bot.
 
-The tour-selection FSM is intentionally not reused here.  A customer who
-already has a booking needs a tiny, durable service flow: identify the booking,
-identify the tourist, describe the correction, and hand it to the manager.
+The tour-selection FSM is intentionally not reused here. A customer who already
+has a booking needs a tiny, durable service flow: identify the booking, identify
+the tourist, describe the correction, and hand it to the manager.
 
-Passport scans and passport numbers are deliberately rejected in VK chat.  The
+Passport scans and passport numbers are deliberately rejected in VK chat. The
 bot records only enough information to locate the booking and understand what
 needs changing; sensitive document values belong in the tour operator's
 protected agent cabinet.
-
-The module is installed at runtime so the large legacy ``vk_bot.py`` does not
-need another parallel state machine bolted directly into it.
 """
 from __future__ import annotations
 
@@ -42,11 +39,12 @@ _STATUS_RE = re.compile(
     re.IGNORECASE,
 )
 _BOOKING_RE = re.compile(r"^[A-Za-zА-Яа-я0-9._/-]{4,40}$")
-# Reject likely document numbers in free-text correction details. Booking number
-# is collected in its own step, so six consecutive digits here are unnecessary.
 _SENSITIVE_NUMBER_RE = re.compile(r"(?<!\d)\d{6,}(?!\d)")
 _OTI_CASE_RE = re.compile(r"\b(REQ-[A-ZА-Я0-9-]+(?:\.\d+)?)\b", re.IGNORECASE)
-_OTI_BOOKING_RE = re.compile(r"Номер\s+заявки\s*[:\-]?\s*([A-Za-zА-Яа-я0-9._/-]{4,40})", re.IGNORECASE)
+_OTI_BOOKING_RE = re.compile(
+    r"Номер\s+заявки\s*[:\-]?\s*([A-Za-zА-Яа-я0-9._/-]{4,40})",
+    re.IGNORECASE,
+)
 _OTI_STATUS_RE = re.compile(
     r"Статус\s*[:\-]?\s*(Закрыто|Закрыт|Открыто|Открыт|В работе|На рассмотрении|Отменено|Отменен|Отменён)",
     re.IGNORECASE,
@@ -171,20 +169,22 @@ def _send(bot: Any, user_id: int, text: str, *, confirm: bool = False) -> None:
 
 
 def _stop_tour_selection(bot: Any, user_id: int) -> bool:
-    """Remove an unfinished tour-selection session so it cannot follow-up."""
+    """Remove any unfinished tour-selection session so it cannot follow-up."""
     with bot._lock:
         had_selection = user_id in bot.user_data
         bot.user_data.pop(user_id, None)
-    if had_selection:
-        try:
-            bot.delete_session(user_id)
-        except Exception:
-            bot.logger.exception("Could not delete VK tour session before booking support")
+    # Delete unconditionally: after a process restart SQLite may still have a
+    # session even if the in-memory cache has not been restored yet.
+    try:
+        if bot.get_session(user_id) is not None:
+            had_selection = True
+        bot.delete_session(user_id)
+    except Exception:
+        bot.logger.exception("Could not delete VK tour session before booking support")
     return had_selection
 
 
 def start(bot: Any, user_id: int) -> None:
-    ensure_schema(bot)
     had_selection = _stop_tour_selection(bot, user_id)
     _clear_session(bot, user_id)
     _upsert_session(bot, user_id, stage="booking")
@@ -223,7 +223,6 @@ def _status_label(status: str) -> str:
 
 
 def show_status(bot: Any, user_id: int, booking_no: str) -> None:
-    ensure_schema(bot)
     booking_no = booking_no.upper()
     with bot._db_cursor() as cur:
         row = cur.execute(
@@ -239,7 +238,7 @@ def show_status(bot: Any, user_id: int, booking_no: str) -> None:
         bot.send_message(
             user_id,
             f"По брони {booking_no} у меня пока нет обращения. "
-            f"Чтобы создать его, напишите «Моя бронь».",
+            "Чтобы создать его, напишите «Моя бронь».",
         )
         return
     text = f"🧾 Бронь {row['booking_no']}\nСтатус: {_status_label(str(row['status']))}"
@@ -336,8 +335,6 @@ def _internal_status_from_operator(operator_status: str) -> str:
 
 
 def apply_operator_update(bot: Any, update: dict[str, str]) -> Optional[int]:
-    """Apply an operator/OTI status to the latest matching support request."""
-    ensure_schema(bot)
     booking_no = update["booking_no"].upper()
     now = int(time.time())
     with bot._db_cursor(commit=True) as cur:
@@ -411,7 +408,6 @@ def _handle_admin_operator_message(bot: Any, user_id: int, text: str) -> bool:
 
 def handle_message(bot: Any, event: dict[str, Any]) -> bool:
     """Return True when the booking-support flow consumed the VK message."""
-    ensure_schema(bot)
     user_id, text, attachments = _extract_event(event)
     if not user_id:
         return False
