@@ -94,7 +94,7 @@ def test_structured_delivery_maps_country_dates_and_sole_manager(monkeypatch):
             (lead_id,),
         )
         row = cur.fetchone()
-    assert row == ("synced", 1, 501, 601, 77, None)
+    assert tuple(row) == ("synced", 1, 501, 601, 77, None)
 
 
 def test_retry_reuses_tourist_and_recovers_ambiguous_preorder(monkeypatch):
@@ -148,7 +148,7 @@ def test_retry_reuses_tourist_and_recovers_ambiguous_preorder(monkeypatch):
             (lead_id,),
         )
         row = cur.fetchone()
-    assert row == ("synced", 2, 502, 602, 0)
+    assert tuple(row) == ("synced", 2, 502, 602, 0)
 
 
 def test_result_only_preorder_success_does_not_retry(monkeypatch):
@@ -180,4 +180,4 @@ def test_result_only_preorder_success_does_not_retry(monkeypatch):
             (lead_id,),
         )
         row = cur.fetchone()
-    assert row == ("synced", 1, None)
+    assert tuple(row) == ("synced", 1, None)
