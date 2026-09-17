@@ -33,6 +33,7 @@ class FakeBot:
             {"one_time": False, "inline": False, "buttons": [[self._btn("Начать", "positive")]]},
             ensure_ascii=False,
         )
+        support.ensure_schema(self)
 
     @contextmanager
     def _db_cursor(self, commit: bool = False):
@@ -50,6 +51,9 @@ class FakeBot:
     def send_message(self, user_id: int, text: str, **kwargs):
         self.sent.append((user_id, text, kwargs))
         return {"message_id": len(self.sent)}
+
+    def get_session(self, user_id: int):
+        return None
 
     def delete_session(self, user_id: int) -> None:
         self.deleted_sessions.append(user_id)
