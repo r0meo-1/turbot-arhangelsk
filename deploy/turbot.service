@@ -13,7 +13,10 @@ WorkingDirectory=/opt/turbot
 # an incident.
 Environment=HOME=/opt/turbot
 EnvironmentFile=/opt/turbot/.env
-ExecStart=/opt/turbot/venv/bin/gunicorn bot:app \
+# website_app imports the existing bot:app and registers only the public
+# /website/lead route plus its durable MDT retry worker. All Telegram routes
+# remain on the same Flask application.
+ExecStart=/opt/turbot/venv/bin/gunicorn website_app:app \
     --bind 127.0.0.1:8000 \
     --workers 1 \
     --threads 4 \
