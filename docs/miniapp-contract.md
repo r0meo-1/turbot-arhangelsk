@@ -14,13 +14,13 @@ Telegram and VK Mini Apps use the same `trip_request` payload shape. Platform-sp
   "children": 0,
   "childrenAges": [],
   "budgetMaxRub": 270000,
-  "budgetScope": "per_person",
+  "budgetScope": "total",
   "directOnly": false,
   "consent": true,
   "source": "telegram_mini_app"
 }
 ```
 
-`budgetScope` is either `per_person` or `total`. For backwards compatibility, Telegram payloads without the field are treated as `per_person`, while legacy VK Mini App payloads without it are treated as `total` by the VK adapter.
+Current Telegram and VK Mini Apps send `budgetScope: "total"`, so `budgetMaxRub` means the maximum budget for the whole trip. The backend still accepts `per_person` for compatibility with older clients and API callers. Telegram payloads that omit `budgetScope` retain the legacy `per_person` default, while legacy VK Mini App payloads without it are treated as `total` by the VK adapter.
 
 `source` is advisory on the browser payload. The backend assigns the authenticated platform source (`telegram_mini_app` or `vk_mini_app`) before persisting the draft.
