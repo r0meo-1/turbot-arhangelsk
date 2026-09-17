@@ -106,6 +106,17 @@
       <p class="privacy-note">Сначала проверьте параметры. После сохранения TurBot попросит выбрать способ связи и покажет финальную заявку перед передачей менеджеру.</p>
     </form>
 
+    <section class="card" aria-labelledby="transfer-title" style="margin-top:12px">
+      <div class="section-row">
+        <div>
+          <strong id="transfer-title">Трансфер из аэропорта</strong>
+          <div class="hint">Такси и трансферы Kiwitaxi по вашему направлению</div>
+        </div>
+        <span aria-hidden="true" style="font-size:24px">🚕</span>
+      </div>
+      <button id="transfer" class="secondary" type="button">Найти трансфер</button>
+    </section>
+
     <section id="review" class="card review-card" hidden aria-labelledby="review-title">
       <p class="review-kicker">Почти готово</p>
       <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
@@ -120,5 +131,22 @@
   </main>
 
   <script src="./app.js?v=20260916-1"></script>
+  <script>
+    (() => {
+      const button = document.getElementById('transfer');
+      const url = 'https://r0meo1.ru/apreltour/transfer/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_transfer';
+      if (!button) return;
+      button.addEventListener('click', () => {
+        const tg = window.Telegram?.WebApp;
+        try { tg?.HapticFeedback?.selectionChanged?.(); } catch (_) {}
+        if (tg?.openLink) {
+          tg.openLink(url);
+          return;
+        }
+        const popup = window.open(url, '_blank', 'noopener,noreferrer');
+        if (!popup) window.location.assign(url);
+      });
+    })();
+  </script>
 </body>
 </html>
