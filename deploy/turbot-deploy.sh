@@ -199,6 +199,11 @@ PY
   chown turbot:turbot /opt/turbot/.env
   chmod 600 /opt/turbot/.env
 
+  # Keep the live unit in sync with the checked-out repository. This matters
+  # when the WSGI entrypoint changes; merely daemon-reloading an old unit does
+  # not update ExecStart, a delightful little systemd trap.
+  cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
+  systemctl daemon-reload
   systemctl restart turbot
   systemctl restart vk-turbot
 
@@ -236,6 +241,8 @@ rollback() {
   echo "Deployment failed; restoring $previous" >&2
   git reset --hard "$previous"
   "$venv/pip" install --requirement requirements.txt
+  cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
   systemctl restart turbot
   systemctl restart vk-turbot 2>/dev/null || true
 }
@@ -267,6 +274,7 @@ PY
 
 git reset --hard "$target"
 "$venv/pip" install --requirement requirements.txt
+cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
 systemctl daemon-reload 2>/dev/null || true
 systemctl restart turbot 2>/dev/null || true
 systemctl restart vk-turbot 2>/dev/null || true
