@@ -82,6 +82,50 @@ def classify_restricted_topic(message: object) -> Optional[str]:
     return None
 
 
+_UNVERIFIED_OUTPUT_PATTERNS = {
+    "unverified_commercial_claim": (
+        re.compile(
+            r"(?i)(?<!\w)\d[\d\s.,]*\s*(?:₽|руб(?:\.|ля|лей)?|rub|usd|eur|thb|vnd|₫|฿|\$|€)\b?"
+        ),
+        re.compile(
+            r"(?i)\b(?:остал(?:ось|ись)\s+\d+\s+мест|"
+            r"(?:места|номера?|билеты?|туры?|рейсы?)\s+(?:есть|доступн(?:ы|о|а)|закончились)|"
+            r"(?:есть|доступн(?:ы|о|а))\s+(?:места|номера?|билеты?|туры?))\b"
+        ),
+        re.compile(
+            r"(?i)\b(?:available\s+(?:rooms?|seats?|tickets?|tours?)|"
+            r"(?:rooms?|seats?|tickets?|tours?)\s+(?:are\s+)?available|sold\s+out)\b"
+        ),
+    ),
+    "unverified_visa_or_entry_claim": (
+        re.compile(
+            r"(?i)\b(?:виза\s+(?:не\s+)?нужн\w*|безвиз\w*|"
+            r"можно\s+въехат\w*|въезд\s+(?:разреш[её]н|запрещ[её]н)|"
+            r"visa\s+(?:is\s+)?(?:not\s+)?required|visa[- ]free|"
+            r"entry\s+(?:is\s+)?(?:allowed|prohibited))\b"
+        ),
+    ),
+    "unverified_legal_or_refund_claim": (
+        re.compile(
+            r"(?i)\b(?:обязан(?:ы)?\s+вернут\w*|вам\s+вернут\w*|"
+            r"возврат\s+(?:положен|гарантирован)|имеете\s+право\s+на\s+возврат|"
+            r"must\s+refund|refund\s+(?:is\s+)?guaranteed)\b"
+        ),
+    ),
+}
+
+
+def classify_unverified_ai_output(value: object) -> Optional[str]:
+    """Flag high-risk factual claims that need verified provider or human data."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for reason, patterns in _UNVERIFIED_OUTPUT_PATTERNS.items():
+        if any(pattern.search(text) for pattern in patterns):
+            return reason
+    return None
+
+
 def guard_external_ai_message(message: object) -> GuardrailDecision:
     """Prepare a free-form chat message for an external model.
 
