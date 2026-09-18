@@ -38,8 +38,8 @@ def _signed_launch_params():
     return urlencode(params)
 
 
-def _fill_review_and_save(page):
-    page.locator("#destination").fill("Таиланд")
+def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
+    page.locator("#destination").fill(destination)
     page.locator("#departure").fill("Архангельск")
     page.locator("#consent").check()
     page.locator("#submit").click()
@@ -69,6 +69,17 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             browser = pw.chromium.launch(channel="msedge", headless=True)
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded")
+            destination_options = page.locator("#destination-options option").evaluate_all(
+                "els => els.map((el) => el.value)"
+            )
+            departure_options = page.locator("#departure-cities option").evaluate_all(
+                "els => els.map((el) => el.value)"
+            )
+            assert "Пхукет, Таиланд" in destination_options
+            assert "Хургада, Египет" in destination_options
+            assert "Архангельск" in departure_options
+            assert "Москва" in departure_options
+
             page.evaluate(
                 """
                 () => {
@@ -146,7 +157,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
     assert len(saved) == 2
     uid, info = saved[0]
     assert uid == USER_ID
-    assert info["destination"] == "Таиланд"
+    assert info["destination"] == "Пхукет, Таиланд"
     assert info["origin"] == "Архангельск"
     assert info["source"] == "vk_mini_app"
     assert info["budget_scope"] == "total"
