@@ -267,6 +267,10 @@ DATA_OPERATOR_NAME = os.getenv("DATA_OPERATOR_NAME", "ТА «АПРЕЛЬ тур
 # Days after which a client's personal data is auto-deleted (data minimisation,
 # 152-ФЗ ст. 5). Set to 0 to disable automatic retention cleanup.
 DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
+# Anonymous partner-click events contain no Telegram identity or contact data,
+# but they still need a bounded lifetime so the SQLite file cannot grow forever.
+# 0 disables event cleanup.
+PARTNER_ANALYTICS_RETENTION_DAYS = _env_int("PARTNER_ANALYTICS_RETENTION_DAYS", 365)
 # soft (default): no hard «Согласен» gate — short notice + flexible contact.
 # strict: classic consent buttons before any questions (old behaviour).
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -471,7 +475,8 @@ ADMIN_HELP = (
     "/users — список пользователей\n"
     "/stats — статистика\n"
     "/restart — сбросить все активные сессии\n"
-    "/analytics — аналитика (заявки, направления)\n"
+    "/analytics — общая аналитика (заявки, направления, партнёры)\n"
+    "/partners [дни] — партнёрские переходы за 1–365 дней\n"
     "/export — экспорт завершённых заявок\n"
     "/followup — напоминания незавершившим\n"
     "/mdt [test|reload] — статус MDT CRM\n"
@@ -728,6 +733,99 @@ def record_partner_click(
     except sqlite3.Error as exc:
         # Partner analytics must never prevent the user from opening a link.
         logger.warning("Could not store partner click analytics: %s", exc)
+
+
+def cleanup_partner_clicks(*, now: Optional[int] = None) -> int:
+    """Delete anonymous partner-click events older than their retention window."""
+    if PARTNER_ANALYTICS_RETENTION_DAYS <= 0:
+        return 0
+    current = int(time.time()) if now is None else int(now)
+    cutoff = current - PARTNER_ANALYTICS_RETENTION_DAYS * 86400
+    with _db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM partner_clicks WHERE created_at < ?", (cutoff,))
+        deleted = max(0, int(cur.rowcount or 0))
+    if deleted:
+        logger.info("Partner analytics cleanup removed %d old event(s)", deleted)
+    return deleted
+
+
+def get_partner_analytics(days: int = 30) -> Dict[str, Any]:
+    """Return aggregate partner activity without user-level attribution."""
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 30
+    days = max(1, min(365, days))
+    now = int(time.time())
+    cutoff = now - days * 86400
+
+    with _db_cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM partner_clicks WHERE created_at >= ?",
+            (cutoff,),
+        )
+        total = int(cur.fetchone()[0] or 0)
+        cur.execute(
+            "SELECT service, COUNT(*) as cnt FROM partner_clicks "
+            "WHERE created_at >= ? GROUP BY service ORDER BY cnt DESC, service ASC",
+            (cutoff,),
+        )
+        by_service = [(row[0], int(row[1])) for row in cur.fetchall()]
+        cur.execute(
+            "SELECT mode, COUNT(*) as cnt FROM partner_clicks "
+            "WHERE created_at >= ? GROUP BY mode ORDER BY cnt DESC, mode ASC",
+            (cutoff,),
+        )
+        by_mode = [(row[0], int(row[1])) for row in cur.fetchall()]
+        cur.execute(
+            "SELECT destination, COUNT(*) as cnt FROM partner_clicks "
+            "WHERE created_at >= ? AND destination != '' "
+            "GROUP BY destination ORDER BY cnt DESC, destination ASC LIMIT 10",
+            (cutoff,),
+        )
+        destinations = [(row[0], int(row[1])) for row in cur.fetchall()]
+        cur.execute(
+            "SELECT source, COUNT(*) as cnt FROM partner_clicks "
+            "WHERE created_at >= ? GROUP BY source ORDER BY cnt DESC, source ASC",
+            (cutoff,),
+        )
+        by_source = [(row[0], int(row[1])) for row in cur.fetchall()]
+        cur.execute(
+            "SELECT COUNT(*) FROM leads WHERE created_at >= ?",
+            (cutoff,),
+        )
+        leads = int(cur.fetchone()[0] or 0)
+        cur.execute(
+            "SELECT destination, COUNT(*) as cnt FROM leads "
+            "WHERE created_at >= ? AND destination IS NOT NULL AND destination != '' "
+            "GROUP BY destination ORDER BY cnt DESC, destination ASC LIMIT 10",
+            (cutoff,),
+        )
+        lead_destinations = [(row[0], int(row[1])) for row in cur.fetchall()]
+
+    mode_counts = dict(by_mode)
+    affiliate_events = mode_counts.get("api", 0) + mode_counts.get("redirect", 0)
+    direct_events = mode_counts.get("direct", 0)
+    affiliate_resolution_rate = (
+        100.0 * affiliate_events / total if total else None
+    )
+    aggregate_leads_per_click = (
+        100.0 * leads / total if total else None
+    )
+    return {
+        "days": days,
+        "total": total,
+        "leads": leads,
+        "by_service": by_service,
+        "by_mode": by_mode,
+        "by_source": by_source,
+        "destinations": destinations,
+        "lead_destinations": lead_destinations,
+        "affiliate_events": affiliate_events,
+        "direct_events": direct_events,
+        "affiliate_resolution_rate": affiliate_resolution_rate,
+        "aggregate_leads_per_click": aggregate_leads_per_click,
+    }
 
 
 def migrate_json_state() -> None:
@@ -1155,8 +1253,8 @@ def _start_timeout_worker() -> None:
 
 
 def _start_retention_worker() -> None:
-    """Start a daemon that periodically erases personal data past retention."""
-    if DATA_RETENTION_DAYS <= 0:
+    """Start a daemon that periodically enforces personal/event retention."""
+    if DATA_RETENTION_DAYS <= 0 and PARTNER_ANALYTICS_RETENTION_DAYS <= 0:
         logger.info("Data retention cleanup is disabled")
         return
 
@@ -1164,12 +1262,17 @@ def _start_retention_worker() -> None:
         while True:
             try:
                 cleanup_expired_data()
+                cleanup_partner_clicks()
             except Exception as exc:
                 logger.error("Error in retention worker: %s", exc)
             time.sleep(6 * 3600)  # re-check four times a day
 
     threading.Thread(target=_worker, daemon=True, name="data-retention").start()
-    logger.info("Data retention worker started (%s days)", DATA_RETENTION_DAYS)
+    logger.info(
+        "Data retention worker started (personal=%s days, partner_events=%s days)",
+        DATA_RETENTION_DAYS,
+        PARTNER_ANALYTICS_RETENTION_DAYS,
+    )
 
 # ---------------------------------------------------------------------------
 # Telegram API helpers
@@ -2198,36 +2301,9 @@ def _admin_analytics(chat_id: int, arg: str) -> bool:
             (now - 30 * 86400,),
         )
         leads_30d = cur.fetchone()[0]
-        cur.execute(
-            "SELECT COUNT(*) FROM partner_clicks WHERE created_at >= ?",
-            (now - 7 * 86400,),
-        )
-        partner_clicks_7d = cur.fetchone()[0]
-        cur.execute(
-            "SELECT COUNT(*) FROM partner_clicks WHERE created_at >= ?",
-            (now - 30 * 86400,),
-        )
-        partner_clicks_30d = cur.fetchone()[0]
-        cur.execute(
-            "SELECT service, COUNT(*) as cnt FROM partner_clicks "
-            "WHERE created_at >= ? GROUP BY service ORDER BY cnt DESC",
-            (now - 30 * 86400,),
-        )
-        partner_by_service = cur.fetchall()
-        cur.execute(
-            "SELECT mode, COUNT(*) as cnt FROM partner_clicks "
-            "WHERE created_at >= ? GROUP BY mode ORDER BY cnt DESC",
-            (now - 30 * 86400,),
-        )
-        partner_by_mode = cur.fetchall()
-        cur.execute(
-            "SELECT destination, COUNT(*) as cnt FROM partner_clicks "
-            "WHERE created_at >= ? GROUP BY destination "
-            "ORDER BY cnt DESC LIMIT 5",
-            (now - 30 * 86400,),
-        )
-        partner_destinations = cur.fetchall()
 
+    partner_7d = get_partner_analytics(7)
+    partner_30d = get_partner_analytics(30)
     conversion = (
         f"{100.0 * total_leads / consented:.1f}%"
         if consented
@@ -2255,22 +2331,91 @@ def _admin_analytics(chat_id: int, arg: str) -> bool:
         lines.append("\n📍 Нет завершённых заявок по направлениям")
 
     lines.append("\n🔗 Партнёрские переходы:")
-    lines.append(f"  за 7 дней: {partner_clicks_7d}")
-    lines.append(f"  за 30 дней: {partner_clicks_30d}")
-    if partner_by_service:
+    lines.append(f"  за 7 дней: {partner_7d['total']}")
+    lines.append(f"  за 30 дней: {partner_30d['total']}")
+    if partner_30d["by_service"]:
         labels = {"hotel": "отели", "esim": "eSIM", "transfer": "трансферы"}
         lines.append("  По сервисам за 30 дней:")
-        for service, cnt in partner_by_service:
+        for service, cnt in partner_30d["by_service"]:
             lines.append(f"    {labels.get(service, service)}: {cnt}")
-    if partner_by_mode:
-        mode_labels = {"api": "Partner Links API", "redirect": "affiliate redirect", "direct": "прямой fallback"}
+    if partner_30d["by_mode"]:
+        mode_labels = {
+            "api": "Partner Links API",
+            "redirect": "affiliate redirect",
+            "direct": "прямой fallback",
+        }
         lines.append("  По типу ссылки:")
-        for mode, cnt in partner_by_mode:
+        for mode, cnt in partner_30d["by_mode"]:
             lines.append(f"    {mode_labels.get(mode, mode)}: {cnt}")
-    if partner_destinations:
+    if partner_30d["destinations"]:
         lines.append("  Топ направлений:")
-        for destination, cnt in partner_destinations:
+        for destination, cnt in partner_30d["destinations"][:5]:
             lines.append(f"    {destination}: {cnt}")
+    send_message(chat_id, "\n".join(lines))
+    return True
+
+
+def _admin_partners(chat_id: int, arg: str) -> bool:
+    """Show aggregate partner-link activity for a configurable window."""
+    raw = (arg or "").strip()
+    if raw:
+        try:
+            days = int(raw)
+        except ValueError:
+            send_message(chat_id, "Использование: /partners [дни], например /partners 30")
+            return True
+        if not 1 <= days <= 365:
+            send_message(chat_id, "Период /partners должен быть от 1 до 365 дней.")
+            return True
+    else:
+        days = 30
+
+    stats = get_partner_analytics(days)
+    service_labels = {"hotel": "🏨 Отели", "esim": "📶 eSIM", "transfer": "🚕 Трансферы"}
+    mode_labels = {
+        "api": "Partner Links API",
+        "redirect": "affiliate redirect",
+        "direct": "прямой fallback",
+    }
+
+    lines = [
+        f"🔗 Партнёрская аналитика · {days} дн.",
+        "",
+        f"Переходов: {stats['total']}",
+        f"Заявок в боте за тот же период: {stats['leads']}",
+    ]
+    rate = stats["affiliate_resolution_rate"]
+    if rate is not None:
+        lines.append(f"Партнёрская ссылка получена: {rate:.1f}% событий")
+    aggregate = stats["aggregate_leads_per_click"]
+    if aggregate is not None:
+        lines.append(f"Сопоставление объёмов: {aggregate:.1f} заявок на 100 переходов")
+
+    if stats["by_service"]:
+        lines.append("\nПо сервисам:")
+        for service, cnt in stats["by_service"]:
+            lines.append(f"  {service_labels.get(service, service)}: {cnt}")
+
+    if stats["by_mode"]:
+        lines.append("\nКак открывались ссылки:")
+        for mode, cnt in stats["by_mode"]:
+            lines.append(f"  {mode_labels.get(mode, mode)}: {cnt}")
+
+    if stats["destinations"]:
+        lines.append("\nТоп направлений по переходам:")
+        for destination, cnt in stats["destinations"][:5]:
+            lines.append(f"  {destination}: {cnt}")
+
+    if stats["lead_destinations"]:
+        lines.append("\nТоп направлений по заявкам:")
+        for destination, cnt in stats["lead_destinations"][:5]:
+            lines.append(f"  {destination}: {cnt}")
+
+    lines.extend([
+        "",
+        "ℹ️ Без user-level ID: переходы и заявки не связываются по человеку.",
+        "Это агрегированное сопоставление объёмов, а не attribution клика к заявке.",
+    ])
     send_message(chat_id, "\n".join(lines))
     return True
 
@@ -2393,6 +2538,7 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/users":        _admin_users,
     "/stats":        _admin_stats,
     "/analytics":    _admin_analytics,
+    "/partners":     _admin_partners,
     "/export":       _admin_export,
     "/restart":      _admin_restart,
     "/send":         _admin_send,
