@@ -67,8 +67,12 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
         url = f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}"
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="msedge", headless=True)
-            page = browser.new_page()
+            context = browser.new_context(viewport={"width": 390, "height": 844})
+            page = context.new_page()
             page.goto(url, wait_until="domcontentloaded")
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+            assert page.locator("#destination").is_visible()
+            assert page.locator("#submit").is_visible()
             destination_options = page.locator("#destination-options option").evaluate_all(
                 "els => els.map((el) => el.value)"
             )
@@ -93,6 +97,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             )
 
             _fill_review_and_save(page)
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
             page.wait_for_function(
                 "() => document.querySelector('#status').textContent.includes('вводить команду не нужно')"
             )
@@ -114,7 +119,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             # app_payload is the preferred automatic handoff. If that Bridge
             # command is unavailable on a client, the already-saved draft must
             # stay successful and fall back to copying the review command.
-            fallback_page = browser.new_page()
+            fallback_page = context.new_page()
             fallback_page.goto(url, wait_until="domcontentloaded")
             fallback_page.evaluate(
                 """
