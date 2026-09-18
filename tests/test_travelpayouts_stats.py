@@ -15,8 +15,11 @@ def _response(payload, status_code=200):
 
 
 @pytest.fixture(autouse=True)
-def clear_stats_cache():
+def clear_stats_cache(monkeypatch):
     stats.clear_cache()
+    monkeypatch.setattr(stats, "_last_success_at", 0.0)
+    monkeypatch.setattr(stats, "_last_error_at", 0.0)
+    monkeypatch.setattr(stats, "_last_error_code", "")
     yield
     stats.clear_cache()
 
@@ -187,3 +190,62 @@ def test_fetch_partner_performance_rejects_invalid_payload(monkeypatch):
 
     with pytest.raises(stats.TravelpayoutsStatsError):
         stats.fetch_partner_performance(30, force=True)
+
+
+def test_force_refresh_bypasses_cache(monkeypatch):
+    calls = 0
+
+    def fake_post(url, json, headers, timeout):
+        nonlocal calls
+        calls += 1
+        return _response({"results": [], "total_rows": 0})
+
+    monkeypatch.setenv("TRAVELPAYOUTS_API_TOKEN", "stats-token")
+    monkeypatch.setenv("TRAVELPAYOUTS_STATS_CACHE_TTL", "300")
+    monkeypatch.setattr(stats.requests, "post", fake_post)
+
+    stats.fetch_partner_performance(30)
+    stats.fetch_partner_performance(30, force=True)
+
+    assert calls == 2
+
+
+def test_health_snapshot_is_secret_free_and_tracks_success(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_API_TOKEN", "super-secret-token")
+    monkeypatch.setenv("TRAVELPAYOUTS_STATS_CACHE_TTL", "300")
+    monkeypatch.setattr(
+        stats.requests,
+        "post",
+        lambda *args, **kwargs: _response({"results": [], "total_rows": 0}),
+    )
+    monkeypatch.setattr(stats.time, "time", lambda: 1000.0)
+
+    stats.fetch_partner_performance(30, force=True)
+    snapshot = stats.health_snapshot(now=1012.5)
+
+    assert snapshot["configured"] is True
+    assert snapshot["status"] == "ok"
+    assert snapshot["last_success_age_seconds"] == 12.5
+    assert snapshot["last_error_code"] is None
+    assert snapshot["cached_windows"] == [30]
+    assert "super-secret-token" not in repr(snapshot)
+
+
+def test_health_snapshot_tracks_sanitized_error(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_API_TOKEN", "bad-secret")
+    monkeypatch.setattr(
+        stats.requests,
+        "post",
+        lambda *args, **kwargs: _response({}, status_code=401),
+    )
+    monkeypatch.setattr(stats.time, "time", lambda: 2000.0)
+
+    with pytest.raises(stats.TravelpayoutsStatsNotConfigured):
+        stats.fetch_partner_performance(7, force=True)
+
+    snapshot = stats.health_snapshot(now=2003.0)
+    assert snapshot["configured"] is True
+    assert snapshot["status"] == "error"
+    assert snapshot["last_error_age_seconds"] == 3.0
+    assert snapshot["last_error_code"] == "not_configured"
+    assert "bad-secret" not in repr(snapshot)
