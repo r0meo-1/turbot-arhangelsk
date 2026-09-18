@@ -224,7 +224,7 @@ def test_admin_partners_reports_aggregate_not_attribution(monkeypatch, tmp_path)
     assert "Заявок в боте за тот же период: 1" in text
     assert "Сопоставление объёмов: 50.0 заявок на 100 переходов" in text
     assert "не связываются по человеку" in text
-    assert "не attribution" in text
+    assert "не user-level attribution" in text
 
 
 def test_admin_partners_validates_window(monkeypatch):
