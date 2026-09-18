@@ -109,6 +109,8 @@ def test_ai_beta_allows_only_allowlisted_chat_and_records_aggregate_metric(clien
     captured = {}
     monkeypatch.setattr(bot, "AI_CHAT_ENABLED", True)
     monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {321})
+    monkeypatch.setattr(bot, "AI_CHAT_EXTERNAL_PROVIDER_ENABLED", True)
+    monkeypatch.setattr(bot, "GROQ_ZDR_CONFIRMED", True)
     monkeypatch.setattr(bot, "groq_client", object())
     monkeypatch.setattr(
         bot,
@@ -144,6 +146,99 @@ def test_ai_beta_allows_only_allowlisted_chat_and_records_aggregate_metric(clien
     assert "chat_id" not in columns
     assert "prompt" not in columns
     assert "response" not in columns
+
+
+def test_ai_beta_external_provider_requires_explicit_gate(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(bot, "AI_CHAT_ENABLED", True)
+    monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {321})
+    monkeypatch.setattr(bot, "AI_CHAT_EXTERNAL_PROVIDER_ENABLED", False)
+    monkeypatch.setattr(bot, "GROQ_ZDR_CONFIRMED", True)
+    monkeypatch.setattr(bot, "groq_client", object())
+    monkeypatch.setattr(
+        bot,
+        "_generate_ai_chat_reply",
+        lambda question, **kwargs: (
+            captured.update(kwargs)
+            or SimpleNamespace(
+                text="Провайдер недоступен.",
+                used_external_model=False,
+                handoff_required=False,
+                reason="provider_unavailable",
+                topic=None,
+            )
+        ),
+    )
+
+    _post(client, 321, "/ai Что взять в поездку?")
+
+    assert captured["groq_client"] is None
+    assert bot._ai_external_provider_ready() is False
+    assert bot.ai_chat_metrics_snapshot() == {"fallback_provider_unavailable": 1}
+
+
+def test_ai_beta_external_provider_requires_zdr_confirmation(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(bot, "AI_CHAT_ENABLED", True)
+    monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {321})
+    monkeypatch.setattr(bot, "AI_CHAT_EXTERNAL_PROVIDER_ENABLED", True)
+    monkeypatch.setattr(bot, "GROQ_ZDR_CONFIRMED", False)
+    monkeypatch.setattr(bot, "groq_client", object())
+    monkeypatch.setattr(
+        bot,
+        "_generate_ai_chat_reply",
+        lambda question, **kwargs: (
+            captured.update(kwargs)
+            or SimpleNamespace(
+                text="Провайдер недоступен.",
+                used_external_model=False,
+                handoff_required=False,
+                reason="provider_unavailable",
+                topic=None,
+            )
+        ),
+    )
+
+    _post(client, 321, "/ai Что взять в поездку?")
+
+    assert captured["groq_client"] is None
+    assert bot._ai_external_provider_ready() is False
+    assert bot.ai_chat_metrics_snapshot() == {"fallback_provider_unavailable": 1}
+
+
+def test_admin_ai_status_is_diagnostic_without_secrets_or_tester_ids(client, monkeypatch):
+    sent = []
+    secret = "groq-secret-must-not-leak"
+    tester_id = 123456789
+    monkeypatch.setattr(bot, "AI_CHAT_ENABLED", True)
+    monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {bot.ADMIN_ID, tester_id})
+    monkeypatch.setattr(bot, "AI_CHAT_EXTERNAL_PROVIDER_ENABLED", True)
+    monkeypatch.setattr(bot, "GROQ_ZDR_CONFIRMED", True)
+    monkeypatch.setattr(bot, "GROQ_API_KEY", secret)
+    monkeypatch.setattr(bot, "groq_client", object())
+    monkeypatch.setattr(
+        bot, "send_message",
+        lambda cid, text, **k: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, bot.ADMIN_ID, "/ai_status")
+
+    body = "\n".join(text for _, text in sent)
+    assert "external_provider_ready: True" in body
+    assert f"model: {bot.GROQ_MODEL}" in body
+    assert secret not in body
+    assert str(tester_id) not in body
+    assert "allowlisted_testers: 2" in body
+
+
+def test_groq_runtime_defaults_use_current_replacement_model():
+    assert bot.GROQ_MODEL == "openai/gpt-oss-120b"
+    assert bot.AI_MODE == "template"
+    for path in ("bot.py", "vk_bot.py", "shared/ai.py", "shared/ai_chat.py"):
+        with open(path, encoding="utf-8") as fh:
+            code = fh.read()
+        assert "llama-3.3-70b-versatile" not in code, path
+        assert "openai/gpt-oss-120b" in code, path
 
 
 def test_ai_beta_rejects_non_allowlisted_chat_without_model_call(client, monkeypatch):
