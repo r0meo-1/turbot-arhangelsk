@@ -4,7 +4,7 @@ Minimal native Android shell for the existing TurBot web experience.
 
 ## Status
 
-The Android project now contains a **gated Start.io SDK integration**, but ads remain disabled by default.
+The Android project contains a **gated Start.io SDK integration** plus a native privacy choice UI, but ads remain disabled by default.
 
 Start.io can initialize only when all of the following are true:
 
@@ -52,7 +52,7 @@ gradle -p android :app:assembleDebug
 
 ## Start.io-enabled build
 
-After the app exists in Start.io Publisher Portal and the consent UI is wired:
+After the app exists in Start.io Publisher Portal:
 
 ```bash
 gradle -p android \
@@ -67,7 +67,16 @@ The App ID is intentionally not committed. It is configuration, not a password, 
 
 `StartIoManager` fails closed. If `AdConsentStore` returns `UNKNOWN`, the SDK is not initialized.
 
-A later privacy/CMP UI must persist either `GRANTED` or `DENIED` before Start.io can start. After initialization, the stored decision is forwarded to Start.io using the `pas` user-consent flag.
+When Start.io is configured:
+
+- the first advertising choice is shown before SDK initialization;
+- the user can agree or disagree;
+- declining does not block TurBot;
+- the privacy button remains available so the choice can be changed later;
+- each stored decision is sent through Start.io's `pas` consent flag;
+- Start.io privacy, service and data-partner links are exposed in the dialog.
+
+This native control is an application-level safety layer. Before production release, verify the final disclosure wording and whether a certified CMP/IAB framework is required for the jurisdictions and ad stack actually used. Do not treat this dialog alone as automatic legal compliance.
 
 No ad should ever be used as the mechanism that blocks the main travel-search or lead flow.
 
@@ -78,7 +87,7 @@ No ad should ever be used as the mechanism that blocks the main travel-search or
 - verify WebView navigation and external-link handling on physical devices;
 - add a user-facing offline/error state;
 - complete Google Play Data safety disclosures;
-- implement and test privacy/consent UI before enabling Start.io;
+- review the final Start.io disclosure/consent requirements for target jurisdictions;
 - review the web content for Play policy compliance;
 - publish the exact Start.io dashboard-provided app-ads.txt lines on the developer domain.
 
@@ -90,7 +99,7 @@ The intended order is:
 
 1. register the Android app in Start.io;
 2. obtain the real App ID;
-3. implement the consent/CMP surface;
+3. review the consent/CMP surface for production compliance;
 4. build with Start.io enabled in test mode;
 5. validate analytics, retention and lead conversion;
 6. add placements one at a time;

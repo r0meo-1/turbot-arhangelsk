@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
+import android.widget.Button;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -20,21 +22,41 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        // Start.io remains off unless the build is explicitly enabled, a real
-        // App ID is provided, and an advertising-consent decision is recorded.
-        StartIoManager.initializeIfAllowed(this);
-
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
         configureWebView(webView);
+
+        Button privacyButton = findViewById(R.id.privacy_button);
+        configurePrivacyControls(privacyButton);
 
         if (savedInstanceState == null) {
             webView.loadUrl(APP_URL);
         } else {
             webView.restoreState(savedInstanceState);
         }
+    }
+
+    private void configurePrivacyControls(Button privacyButton) {
+        if (!StartIoManager.isConfigured()) {
+            privacyButton.setVisibility(View.GONE);
+            return;
+        }
+
+        privacyButton.setVisibility(View.VISIBLE);
+        privacyButton.setOnClickListener(
+                view -> AdPrivacyDialog.show(this, false, this::applyAdvertisingChoice)
+        );
+
+        if (AdConsentStore.read(this) == AdConsentStore.Decision.UNKNOWN) {
+            AdPrivacyDialog.show(this, true, this::applyAdvertisingChoice);
+        } else {
+            StartIoManager.initializeIfAllowed(this);
+        }
+    }
+
+    private void applyAdvertisingChoice() {
+        StartIoManager.applyCurrentConsent(this);
     }
 
     private void configureWebView(WebView view) {

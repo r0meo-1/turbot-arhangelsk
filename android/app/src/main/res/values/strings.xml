@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">TurBot</string>
+    <string name="ad_privacy_settings">Приватность</string>
+    <string name="ad_privacy_title">Реклама и приватность</string>
+    <string name="ad_privacy_message">TurBot использует Start.io для показа рекламы. При согласии Start.io может использовать данные устройства и активности для персонализации рекламы. При отказе персонализированная реклама будет отключена.</string>
+    <string name="ad_privacy_equal_service">Выбор не ограничивает доступ к функциям TurBot. Его можно изменить позже через кнопку «Приватность».</string>
+    <string name="ad_privacy_agree">Согласен</string>
+    <string name="ad_privacy_disagree">Не согласен</string>
 </resources>
