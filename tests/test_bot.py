@@ -2360,6 +2360,10 @@ def test_p0_miniapp_preferences_survive_session_reload_and_lead_save(client, mon
         {"id": chat, "first_name": "Mini", "username": "mini"},
         payload,
     )
+    # The autouse test fixture intentionally stubs save_state() to keep webhook
+    # tests isolated. Persist the live Mini App session explicitly to exercise
+    # the same SQLite schema production save_state() uses.
+    bot.set_session(chat, bot.user_data[chat])
 
     stored = bot.get_session(chat)
     assert stored is not None
