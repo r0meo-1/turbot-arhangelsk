@@ -82,8 +82,20 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
             page.route(API_URL, accept_submit)
             page.goto(url, wait_until="domcontentloaded")
 
-            # start_param=thailand should prefill the destination.
+            # start_param=thailand should prefill the country, then the user may
+            # choose a more specific resort suggestion.
             assert page.locator("#destination").input_value() == "Таиланд"
+            destination_options = page.locator("#destination-options option").evaluate_all(
+                "els => els.map((el) => el.value)"
+            )
+            departure_options = page.locator("#departure-cities option").evaluate_all(
+                "els => els.map((el) => el.value)"
+            )
+            assert "Пхукет, Таиланд" in destination_options
+            assert "Нячанг, Вьетнам" in destination_options
+            assert "Архангельск" in departure_options
+            assert "Москва" in departure_options
+            page.locator("#destination").fill("Пхукет, Таиланд")
             page.locator("#departure").fill("Архангельск")
             page.locator("#nights").fill("10")
             page.locator("#adults").fill("2")
@@ -103,7 +115,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
             assert page.evaluate("window.__tgBackVisible") is True
             review_text = page.locator("#summary").inner_text().replace("\u00a0", " ")
             for expected in (
-                "Таиланд", "Архангельск", "10", "2", "5", "270 000", "Бюджет на всех", "только прямой"
+                "Пхукет, Таиланд", "Архангельск", "10", "2", "5", "270 000", "Бюджет на всех", "только прямой"
             ):
                 assert expected in review_text
 
@@ -131,7 +143,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
     assert payload == {
         "type": "trip_request",
         "version": 2,
-        "destination": "Таиланд",
+        "destination": "Пхукет, Таиланд",
         "departure": "Архангельск",
         "date": payload["date"],
         "nights": 10,
