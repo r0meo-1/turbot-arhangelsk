@@ -2333,3 +2333,67 @@ def test_p0_mdt_outage_keeps_local_lead_pending_then_recovers(client, monkeypatc
     assert row["mdt_attempts"] == 2
     assert row["mdt_next_retry_at"] is None
     assert attempts[-1] == (chat, f"tg-lead-{lead_id}")
+
+
+def test_p0_miniapp_preferences_survive_session_reload_and_lead_save(client, monkeypatch):
+    """Mini App P0 fields must survive SQLite session restore and final lead save."""
+    chat = 91005
+    payload = {
+        "type": "trip_request",
+        "version": 2,
+        "destination": "Таиланд",
+        "departure": "Архангельск",
+        "date": "2030-01-15",
+        "nights": 10,
+        "adults": 2,
+        "children": 2,
+        "childrenAges": [5, 9],
+        "budgetMaxRub": 600000,
+        "budgetScope": "total",
+        "directOnly": True,
+        "consent": True,
+    }
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **k: None)
+
+    bot._accept_miniapp_trip(
+        chat,
+        {"id": chat, "first_name": "Mini", "username": "mini"},
+        payload,
+    )
+
+    stored = bot.get_session(chat)
+    assert stored is not None
+    assert stored["state"] == bot.STATE_CONTACT
+    assert stored["nights"] == 10
+    assert stored["budget_scope"] == "total"
+    assert stored["direct_only"] == 1
+    assert stored["kids_ages"] == "5,9"
+
+    # Simulate process-memory loss while SQLite survives.
+    bot.user_data.pop(chat, None)
+    restored = bot.get_session(chat)
+    restored["kids_ages"] = bot._ages_from_db(restored["kids_ages"])
+    bot.user_data[chat] = restored
+
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    assert bot.user_data[chat]["state"] == bot.STATE_REVIEW
+    assert bot.user_data[chat]["nights"] == 10
+    assert bot.user_data[chat]["budget_scope"] == "total"
+    assert bot.user_data[chat]["direct_only"] == 1
+
+    _confirm_draft(client, chat)
+
+    with bot._db_cursor() as cur:
+        lead = cur.execute(
+            """
+            SELECT nights, kids_ages, budget, budget_scope, direct_only
+            FROM leads WHERE chat_id=?
+            """,
+            (chat,),
+        ).fetchone()
+    assert lead is not None
+    assert lead["nights"] == 10
+    assert lead["kids_ages"] == "5,9"
+    assert lead["budget"] == 600000
+    assert lead["budget_scope"] == "total"
+    assert lead["direct_only"] == 1
