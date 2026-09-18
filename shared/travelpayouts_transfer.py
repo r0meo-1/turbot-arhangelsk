@@ -18,6 +18,7 @@ import requests
 PARTNER_LINKS_URL = "https://api.travelpayouts.com/links/v1/create"
 DEFAULT_MARKER = 778488
 DEFAULT_TRS = 574782
+TRANSFER_SUB_ID = "tg_transfer"
 
 
 class TransferLinkError(RuntimeError):
@@ -134,7 +135,7 @@ def create_transfer_partner_link(destination: str, *, timeout: int = 12) -> str:
         "shorten": True,
         "links": [{
             "url": destination_url,
-            "sub_id": "tg_kiwitaxi_transfer",
+            "sub_id": TRANSFER_SUB_ID,
         }],
     }
     headers = {
