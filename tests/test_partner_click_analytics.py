@@ -114,3 +114,127 @@ def test_admin_analytics_includes_partner_click_summary(monkeypatch, tmp_path):
     assert "affiliate redirect: 1" in text
     assert "прямой fallback: 1" in text
     assert "Таиланд: 2" in text
+
+
+def test_partner_analytics_respects_requested_window(monkeypatch, tmp_path):
+    path = _use_temp_db(monkeypatch, tmp_path)
+    now = 2_000_000_000
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO partner_clicks "
+            "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("hotel", "Таиланд", "api", "telegram_mini_app", now - 2 * 86400),
+                ("esim", "Вьетнам", "redirect", "telegram_mini_app", now - 10 * 86400),
+                ("transfer", "Таиланд", "direct", "telegram_mini_app", now - 40 * 86400),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO leads "
+            "(chat_id, destination, phone, created_at) VALUES (?, ?, ?, ?)",
+            (101, "Таиланд", "+70000000000", now - 3 * 86400),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(bot.time, "time", lambda: now)
+
+    seven = bot.get_partner_analytics(7)
+    thirty = bot.get_partner_analytics(30)
+
+    assert seven["total"] == 1
+    assert seven["leads"] == 1
+    assert seven["by_service"] == [("hotel", 1)]
+    assert thirty["total"] == 2
+    assert dict(thirty["by_service"]) == {"hotel": 1, "esim": 1}
+    assert thirty["affiliate_resolution_rate"] == 100.0
+
+
+def test_cleanup_partner_clicks_honors_retention(monkeypatch, tmp_path):
+    path = _use_temp_db(monkeypatch, tmp_path)
+    now = 2_000_000_000
+    monkeypatch.setattr(bot, "PARTNER_ANALYTICS_RETENTION_DAYS", 30)
+
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO partner_clicks "
+            "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("hotel", "Таиланд", "api", "telegram_mini_app", now - 29 * 86400),
+                ("esim", "Вьетнам", "redirect", "telegram_mini_app", now - 31 * 86400),
+            ],
+        )
+        conn.commit()
+
+    assert bot.cleanup_partner_clicks(now=now) == 1
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute(
+            "SELECT service FROM partner_clicks ORDER BY service"
+        ).fetchall()
+    assert rows == [("hotel",)]
+
+
+def test_cleanup_partner_clicks_can_be_disabled(monkeypatch, tmp_path):
+    path = _use_temp_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(bot, "PARTNER_ANALYTICS_RETENTION_DAYS", 0)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO partner_clicks "
+            "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
+            ("hotel", "Таиланд", "api", "telegram_mini_app", 1),
+        )
+        conn.commit()
+
+    assert bot.cleanup_partner_clicks(now=2_000_000_000) == 0
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM partner_clicks").fetchone()[0] == 1
+
+
+def test_admin_partners_reports_aggregate_not_attribution(monkeypatch, tmp_path):
+    path = _use_temp_db(monkeypatch, tmp_path)
+    now = 2_000_000_000
+    monkeypatch.setattr(bot.time, "time", lambda: now)
+
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO partner_clicks "
+            "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("hotel", "Таиланд", "api", "telegram_mini_app", now - 100),
+                ("transfer", "Таиланд", "direct", "telegram_mini_app", now - 200),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO leads "
+            "(chat_id, destination, phone, created_at) VALUES (?, ?, ?, ?)",
+            (102, "Таиланд", "+70000000001", now - 300),
+        )
+        conn.commit()
+
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda chat_id, text, **kwargs: sent.append((chat_id, text)) or True,
+    )
+
+    assert bot._admin_partners(999, "30") is True
+    text = sent[-1][1]
+    assert "Партнёрская аналитика · 30 дн." in text
+    assert "Переходов: 2" in text
+    assert "Заявок в боте за тот же период: 1" in text
+    assert "Сопоставление объёмов: 50.0 заявок на 100 переходов" in text
+    assert "не связываются по человеку" in text
+    assert "не attribution" in text
+
+
+def test_admin_partners_validates_window(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda chat_id, text, **kwargs: sent.append(text) or True,
+    )
+    assert bot._admin_partners(999, "0") is True
+    assert "от 1 до 365" in sent[-1]
+    assert bot._admin_partners(999, "banana") is True
+    assert "Использование" in sent[-1]
