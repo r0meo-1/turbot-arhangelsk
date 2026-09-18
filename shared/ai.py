@@ -19,7 +19,7 @@ def generate_ai_selection(
     *,
     ai_mode: str = "template",
     groq_client: Any = None,
-    groq_model: str = "llama-3.3-70b-versatile",
+    groq_model: str = "openai/gpt-oss-120b",
     timeout: float = 20.0,
     log: Optional[logging.Logger] = None,
 ) -> str:
