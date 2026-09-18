@@ -1,0 +1,9 @@
+# TEMPLATE ONLY - DO NOT DEPLOY THIS FILE AS app-ads.txt
+#
+# Replace this file with the exact Start.io Authorized Digital Sellers
+# entries shown in the Start.io Publisher Dashboard for the TurBot app.
+#
+# Do not guess seller/account IDs and do not copy another publisher's lines.
+#
+# Expected production location:
+# https://<developer-domain>/app-ads.txt
