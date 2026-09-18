@@ -106,6 +106,7 @@ def test_country_maps_to_resort_not_capital():
     assert tutu.resolve_destination_city("Пхукет, Таиланд") == "Пхукет"
     assert tutu.resolve_destination_city("Нячанг, Вьетнам") == "Нячанг"
     assert tutu.resolve_destination_city("Хургада, Египет") == "Хургада"
+    assert tutu.resolve_destination_city("Бали, Индонезия") == "Бали"
 
 
 def test_unknown_destination_passes_through():
