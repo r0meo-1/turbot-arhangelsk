@@ -99,7 +99,7 @@ def resolve_destination_city(destination: str) -> str:
     if not raw:
         return ""
     parts = [part.strip() for part in raw.split(",", 1)]
-    if len(parts) == 2 and parts[0] and parts[1].lower() in COUNTRY_TO_RESORT:
+    if len(parts) == 2 and parts[0] and parts[1]:
         return parts[0]
     key = raw.lower()
     return COUNTRY_TO_RESORT.get(key, raw)
