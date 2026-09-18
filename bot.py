@@ -674,7 +674,60 @@ def init_db() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)"
         )
+        # Anonymous partner-click analytics. Deliberately no chat_id, username,
+        # phone, Telegram payload, or affiliate URL is stored here.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS partner_clicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                service TEXT NOT NULL,
+                destination TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                source TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_partner_clicks_created_at "
+            "ON partner_clicks(created_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_partner_clicks_service_created "
+            "ON partner_clicks(service, created_at)"
+        )
         cur.execute("PRAGMA journal_mode=WAL")
+
+
+def record_partner_click(
+    service: str,
+    destination: str,
+    mode: str,
+    *,
+    source: str = "telegram_mini_app",
+) -> None:
+    """Persist anonymous partner-click analytics without Telegram identity."""
+    service = str(service or "").strip().lower()[:32]
+    destination = str(destination or "").strip()[:100]
+    mode = str(mode or "").strip().lower()[:32]
+    source = str(source or "").strip().lower()[:64]
+    if service not in {"hotel", "esim", "transfer"}:
+        return
+    if mode not in {"api", "redirect", "direct"}:
+        return
+    if not destination or not source:
+        return
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "INSERT INTO partner_clicks "
+                "(service, destination, mode, source, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (service, destination, mode, source, int(time.time())),
+            )
+    except sqlite3.Error as exc:
+        # Partner analytics must never prevent the user from opening a link.
+        logger.warning("Could not store partner click analytics: %s", exc)
 
 
 def migrate_json_state() -> None:
@@ -2145,6 +2198,35 @@ def _admin_analytics(chat_id: int, arg: str) -> bool:
             (now - 30 * 86400,),
         )
         leads_30d = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM partner_clicks WHERE created_at >= ?",
+            (now - 7 * 86400,),
+        )
+        partner_clicks_7d = cur.fetchone()[0]
+        cur.execute(
+            "SELECT COUNT(*) FROM partner_clicks WHERE created_at >= ?",
+            (now - 30 * 86400,),
+        )
+        partner_clicks_30d = cur.fetchone()[0]
+        cur.execute(
+            "SELECT service, COUNT(*) as cnt FROM partner_clicks "
+            "WHERE created_at >= ? GROUP BY service ORDER BY cnt DESC",
+            (now - 30 * 86400,),
+        )
+        partner_by_service = cur.fetchall()
+        cur.execute(
+            "SELECT mode, COUNT(*) as cnt FROM partner_clicks "
+            "WHERE created_at >= ? GROUP BY mode ORDER BY cnt DESC",
+            (now - 30 * 86400,),
+        )
+        partner_by_mode = cur.fetchall()
+        cur.execute(
+            "SELECT destination, COUNT(*) as cnt FROM partner_clicks "
+            "WHERE created_at >= ? GROUP BY destination "
+            "ORDER BY cnt DESC LIMIT 5",
+            (now - 30 * 86400,),
+        )
+        partner_destinations = cur.fetchall()
 
     conversion = (
         f"{100.0 * total_leads / consented:.1f}%"
@@ -2171,6 +2253,24 @@ def _admin_analytics(chat_id: int, arg: str) -> bool:
             lines.append(f"  {dest}: {cnt}")
     else:
         lines.append("\n📍 Нет завершённых заявок по направлениям")
+
+    lines.append("\n🔗 Партнёрские переходы:")
+    lines.append(f"  за 7 дней: {partner_clicks_7d}")
+    lines.append(f"  за 30 дней: {partner_clicks_30d}")
+    if partner_by_service:
+        labels = {"hotel": "отели", "esim": "eSIM", "transfer": "трансферы"}
+        lines.append("  По сервисам за 30 дней:")
+        for service, cnt in partner_by_service:
+            lines.append(f"    {labels.get(service, service)}: {cnt}")
+    if partner_by_mode:
+        mode_labels = {"api": "Partner Links API", "redirect": "affiliate redirect", "direct": "прямой fallback"}
+        lines.append("  По типу ссылки:")
+        for mode, cnt in partner_by_mode:
+            lines.append(f"    {mode_labels.get(mode, mode)}: {cnt}")
+    if partner_destinations:
+        lines.append("  Топ направлений:")
+        for destination, cnt in partner_destinations:
+            lines.append(f"    {destination}: {cnt}")
     send_message(chat_id, "\n".join(lines))
     return True
 
@@ -3352,11 +3452,14 @@ def miniapp_transfer_link() -> Response:
         url = _travelpayouts_transfer.create_transfer_partner_link(destination)
     except _travelpayouts_transfer.TransferLinkNotConfigured as exc:
         logger.warning("Kiwitaxi partner link not configured: %s", exc)
+        record_partner_click("transfer", destination, "direct")
         return _miniapp_json({"ok": True, "url": fallback_url, "affiliate": False})
     except _travelpayouts_transfer.TransferLinkError as exc:
         logger.warning("Kiwitaxi partner link unavailable: %s", exc)
+        record_partner_click("transfer", destination, "direct")
         return _miniapp_json({"ok": True, "url": fallback_url, "affiliate": False})
 
+    record_partner_click("transfer", destination, "api")
     return _miniapp_json({"ok": True, "url": url, "affiliate": True})
 
 
@@ -3412,6 +3515,7 @@ def miniapp_partner_link() -> Response:
         except _travelpayouts_transfer.TransferLinkError as exc:
             logger.warning("Kiwitaxi partner link unavailable: %s", exc)
 
+    record_partner_click(service, destination, mode)
     logger.info("Mini App partner link resolved service=%s mode=%s", service, mode)
     return _miniapp_json({
         "ok": True,
