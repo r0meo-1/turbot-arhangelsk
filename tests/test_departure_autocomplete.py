@@ -32,6 +32,11 @@ def test_destination_autocomplete_is_available_in_both_miniapps():
         assert "ОАЭ" in source
         assert "Турция" in source
         assert "Танзания" in source
+        assert "Пхукет, Таиланд" in source
+        assert "Нячанг, Вьетнам" in source
+        assert "Хургада, Египет" in source
+        assert "Анталья, Турция" in source
+        assert "Занзибар, Танзания" in source
 
 
 def test_published_telegram_autocomplete_matches_source():
