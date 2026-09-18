@@ -6,6 +6,7 @@ import com.startapp.sdk.adsbase.StartAppSDK;
 
 final class StartIoManager {
     private static boolean initialized;
+    private static boolean consentApplied;
 
     private StartIoManager() {}
 
@@ -16,6 +17,7 @@ final class StartIoManager {
     }
 
     static boolean initializeIfAllowed(Activity activity) {
+        consentApplied = false;
         if (!isConfigured()) {
             return false;
         }
@@ -25,14 +27,32 @@ final class StartIoManager {
             return false;
         }
 
-        if (!initialized) {
-            // Return ads stay off. Splash ads are disabled in AndroidManifest.xml.
-            StartAppSDK.init(activity, BuildConfig.STARTIO_APP_ID, false);
-            initialized = true;
-        }
+        try {
+            if (!initialized) {
+                // Return ads stay off. Splash ads are disabled in AndroidManifest.xml.
+                StartAppSDK.init(activity, BuildConfig.STARTIO_APP_ID, false);
+                initialized = true;
+            }
 
-        submitConsent(activity, decision);
-        return true;
+            submitConsent(activity, decision);
+            consentApplied = true;
+            return true;
+        } catch (RuntimeException sdkFailure) {
+            // Advertising must never interrupt loading TurBot or saving privacy choices.
+            return false;
+        }
+    }
+
+    static boolean mayRequest(
+            Activity activity, AdPlacement placement, AdFlow flow,
+            boolean userInitiated, boolean foreground, long nowMs
+    ) {
+        return AdPlacementPolicy.mayRequest(placement, flow, userInitiated, foreground)
+                && isConfigured()
+                && initialized
+                && consentApplied
+                && AdConsentStore.read(activity) != AdConsentStore.Decision.UNKNOWN
+                && AdFrequencyGate.canShow(activity, placement, nowMs);
     }
 
     static boolean applyCurrentConsent(Activity activity) {
