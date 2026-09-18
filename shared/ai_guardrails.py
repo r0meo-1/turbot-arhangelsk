@@ -85,7 +85,7 @@ def classify_restricted_topic(message: object) -> Optional[str]:
 _UNVERIFIED_OUTPUT_PATTERNS = {
     "unverified_commercial_claim": (
         re.compile(
-            r"(?i)(?<!\w)\d[\d\s.,]*\s*(?:₽|руб(?:\.|ля|лей)?|rub|usd|eur|thb|vnd|₫|฿|\$|€)\b?"
+            r"(?i)(?<!\w)\d[\d\s.,]*\s*(?:₽|руб(?:\.|ля|лей)?|rub|usd|eur|thb|vnd|₫|฿|\$|€)(?=\s|[.,;:!?)]|$)"
         ),
         re.compile(
             r"(?i)\b(?:остал(?:ось|ись)\s+\d+\s+мест|"
