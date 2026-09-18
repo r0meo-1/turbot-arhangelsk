@@ -4,6 +4,7 @@ import json
 import os
 import time
 import tempfile
+from types import SimpleNamespace
 
 # Configure the bot before it is imported.
 os.environ.setdefault("BOT_TOKEN", "dummy-token")
@@ -46,6 +47,7 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM users")
         cur.execute("DELETE FROM leads")
         cur.execute("DELETE FROM partner_clicks")
+        cur.execute("DELETE FROM ai_chat_metrics")
     bot._seen_update_ids.clear()
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
@@ -79,6 +81,132 @@ def test_validate_budget():
     assert bot.validate_budget("60 000 руб") == (True, 60000)
     assert bot.validate_budget("0") == (False, None)
     assert bot.validate_budget("abc") == (False, None)
+
+
+def test_ai_beta_is_hidden_when_disabled(client, monkeypatch):
+    called = []
+    sent = []
+    monkeypatch.setattr(bot, "AI_CHAT_ENABLED", False)
+    monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {321})
+    monkeypatch.setattr(
+        bot, "_generate_ai_chat_reply",
+        lambda *a, **k: called.append(True) or None,
+    )
+    monkeypatch.setattr(
+        bot, "send_message",
+        lambda cid, text, **k: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, 321, "/ai Что взять на Пхукет?")
+
+    assert called == []
+    assert not any("AI beta · ИИ-помощник" in text for _, text in sent)
+    assert any("Такой команды нет" in text for _, text in sent)
+
+
+def test_ai_beta_allows_only_allowlisted_chat_and_records_aggregate_metric(client, monkeypatch):
+    sent = []
+    captured = {}
+    monkeypatch.setattr(bot, "AI_CHAT_ENABLED", True)
+    monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {321})
+    monkeypatch.setattr(bot, "groq_client", object())
+    monkeypatch.setattr(
+        bot,
+        "_generate_ai_chat_reply",
+        lambda question, **kwargs: (
+            captured.update({"question": question, **kwargs})
+            or SimpleNamespace(
+                text="Возьмите лёгкую одежду и зарядку.",
+                used_external_model=True,
+                handoff_required=False,
+                reason="",
+                topic=None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        bot, "send_message",
+        lambda cid, text, **k: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, 321, "/ai Что взять на Пхукет?")
+
+    assert captured["question"] == "Что взять на Пхукет?"
+    assert captured["enabled"] is True
+    assert captured["groq_client"] is bot.groq_client
+    assert any("AI beta · ИИ-помощник" in text for _, text in sent)
+    assert bot.ai_chat_metrics_snapshot() == {"external_ok": 1}
+
+    with bot._db_cursor() as cur:
+        cur.execute("PRAGMA table_info(ai_chat_metrics)")
+        columns = {row["name"] for row in cur.fetchall()}
+    assert columns == {"outcome", "count", "updated_at"}
+    assert "chat_id" not in columns
+    assert "prompt" not in columns
+    assert "response" not in columns
+
+
+def test_ai_beta_rejects_non_allowlisted_chat_without_model_call(client, monkeypatch):
+    called = []
+    monkeypatch.setattr(bot, "AI_CHAT_ENABLED", True)
+    monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {321})
+    monkeypatch.setattr(
+        bot, "_generate_ai_chat_reply",
+        lambda *a, **k: called.append(True) or None,
+    )
+
+    _post(client, 322, "/ai Расскажи про Таиланд")
+
+    assert called == []
+    assert bot.ai_chat_metrics_snapshot() == {}
+
+
+def test_ai_beta_handoff_is_counted_without_storing_question(client, monkeypatch):
+    secret_question = "Вернут ли деньги по договору?"
+    monkeypatch.setattr(bot, "AI_CHAT_ENABLED", True)
+    monkeypatch.setattr(bot, "AI_CHAT_BETA_IDS", {321})
+    monkeypatch.setattr(
+        bot,
+        "_generate_ai_chat_reply",
+        lambda *a, **k: SimpleNamespace(
+            text="Передам вопрос менеджеру.",
+            used_external_model=False,
+            handoff_required=True,
+            reason="verified_source_or_human_required",
+            topic="legal_or_contract",
+        ),
+    )
+
+    _post(client, 321, f"/ai {secret_question}")
+
+    assert bot.ai_chat_metrics_snapshot() == {
+        "handoff_verified_source_or_human_required": 1
+    }
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT outcome FROM ai_chat_metrics")
+        stored = "\n".join(row["outcome"] for row in cur.fetchall())
+    assert secret_question not in stored
+
+
+def test_admin_ai_stats_reports_only_aggregate_outcomes(client, monkeypatch):
+    sent = []
+    bot.record_ai_chat_outcome(
+        SimpleNamespace(
+            used_external_model=False,
+            handoff_required=True,
+            reason="unverified_commercial_claim",
+        )
+    )
+    monkeypatch.setattr(
+        bot, "send_message",
+        lambda cid, text, **k: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, bot.ADMIN_ID, "/ai_stats")
+
+    body = "\n".join(text for _, text in sent)
+    assert "AI beta: 1 запросов" in body
+    assert "handoff_unverified_commercial_claim: 1" in body
 
 
 def test_health_endpoint(client):
