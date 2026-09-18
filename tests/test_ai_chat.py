@@ -118,3 +118,54 @@ def test_empty_model_output_uses_safe_fallback():
     )
     assert reply.used_external_model is False
     assert reply.reason == "provider_error"
+
+
+def test_unverified_price_or_availability_from_model_is_not_shown_as_fact():
+    reply = generate_ai_chat_reply(
+        "Что можно посмотреть на Пхукете?",
+        enabled=True,
+        groq_client=_FakeGroq({}, content="Тур стоит 149 900 ₽, места есть."),
+    )
+    assert reply.used_external_model is True
+    assert reply.handoff_required is True
+    assert reply.reason == "unverified_commercial_claim"
+    assert "149 900" not in reply.text
+    assert "места есть" not in reply.text
+
+
+def test_unverified_visa_claim_from_model_routes_to_verified_source():
+    reply = generate_ai_chat_reply(
+        "Что взять с собой в поездку?",
+        enabled=True,
+        groq_client=_FakeGroq({}, content="Для граждан РФ виза не нужна на 30 дней."),
+    )
+    assert reply.used_external_model is True
+    assert reply.handoff_required is True
+    assert reply.reason == "unverified_visa_or_entry_claim"
+    assert reply.topic == "visa_or_entry"
+    assert "30 дней" not in reply.text
+
+
+def test_unverified_refund_claim_from_model_routes_to_manager():
+    reply = generate_ai_chat_reply(
+        "Что посмотреть в отпуске?",
+        enabled=True,
+        groq_client=_FakeGroq({}, content="По договору вам обязаны вернуть деньги."),
+    )
+    assert reply.used_external_model is True
+    assert reply.handoff_required is True
+    assert reply.reason == "unverified_legal_or_refund_claim"
+    assert reply.topic == "legal_or_contract"
+    assert "обязаны вернуть" not in reply.text
+
+
+def test_noncommercial_travel_advice_still_passes():
+    reply = generate_ai_chat_reply(
+        "Что взять с собой в поездку?",
+        enabled=True,
+        groq_client=_FakeGroq({}, content="Возьмите лёгкую одежду, головной убор и зарядку."),
+    )
+    assert reply.used_external_model is True
+    assert reply.handoff_required is False
+    assert reply.reason == ""
+    assert "лёгкую одежду" in reply.text
