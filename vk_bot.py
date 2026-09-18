@@ -116,7 +116,7 @@ VK_SECRET_KEY        = os.getenv("VK_SECRET_KEY", "")  # optional callback secre
 VK_API_BASE          = "https://api.vk.com/method/"
 
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 PORT              = _env_int("VK_PORT", _env_int("PORT", 5100))
 DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", os.getenv("DATABASE_PATH", "vk_bot_state.sqlite"))
