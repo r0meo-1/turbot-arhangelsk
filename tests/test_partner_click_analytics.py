@@ -238,3 +238,102 @@ def test_admin_partners_validates_window(monkeypatch):
     assert "от 1 до 365" in sent[-1]
     assert bot._admin_partners(999, "banana") is True
     assert "Использование" in sent[-1]
+
+
+def test_admin_partners_includes_travelpayouts_money(monkeypatch, tmp_path):
+    path = _use_temp_db(monkeypatch, tmp_path)
+    now = 2_000_000_000
+    monkeypatch.setattr(bot.time, "time", lambda: now)
+
+    with sqlite3.connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO partner_clicks "
+            "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("hotel", "Таиланд", "api", "telegram_mini_app", now - 100),
+                ("transfer", "Вьетнам", "redirect", "telegram_mini_app", now - 200),
+            ],
+        )
+        conn.commit()
+
+    monkeypatch.setattr(
+        bot._travelpayouts_stats,
+        "fetch_partner_performance",
+        lambda days: {
+            "totals": {
+                "bookings": 2,
+                "paid": 1,
+                "processing": 1,
+                "canceled": 0,
+                "other": 0,
+                "booking_value_eur": 620.0,
+                "paid_profit_eur": 42.5,
+            },
+            "by_service": {
+                "hotel": {
+                    "bookings": 1,
+                    "paid": 1,
+                    "processing": 0,
+                    "canceled": 0,
+                    "other": 0,
+                    "booking_value_eur": 500.0,
+                    "paid_profit_eur": 35.0,
+                },
+                "esim": {
+                    "bookings": 0,
+                    "paid": 0,
+                    "processing": 0,
+                    "canceled": 0,
+                    "other": 0,
+                    "booking_value_eur": 0.0,
+                    "paid_profit_eur": 0.0,
+                },
+                "transfer": {
+                    "bookings": 1,
+                    "paid": 0,
+                    "processing": 1,
+                    "canceled": 0,
+                    "other": 0,
+                    "booking_value_eur": 120.0,
+                    "paid_profit_eur": 7.5,
+                },
+            },
+        },
+    )
+
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda chat_id, text, **kwargs: sent.append(text) or True,
+    )
+
+    assert bot._admin_partners(999, "30") is True
+    text = sent[-1]
+    assert "💶 Travelpayouts:" in text
+    assert "Брони: 2" in text
+    assert "оплачено: 1" in text
+    assert "в обработке: 1" in text
+    assert "Подтверждённый доход: €42.50" in text
+    assert "Стоимость неотменённых броней: €620.00" in text
+    assert "active bookings / affiliate clicks: 100.0%" in text
+    assert "🏨 Отели: 1 брон., 1 оплач., €35.00" in text
+    assert "🚕 Трансферы: 1 брон., 0 оплач., €7.50" in text
+
+
+def test_admin_partners_survives_stats_api_failure(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+
+    def fail(_days):
+        raise bot._travelpayouts_stats.TravelpayoutsStatsError("down")
+
+    monkeypatch.setattr(bot._travelpayouts_stats, "fetch_partner_performance", fail)
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda chat_id, text, **kwargs: sent.append(text) or True,
+    )
+
+    assert bot._admin_partners(999, "30") is True
+    assert "Статистика временно недоступна" in sent[-1]
