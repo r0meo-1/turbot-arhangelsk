@@ -6,6 +6,7 @@ import pytest
 from hotel_recommendation.providers import (
     TripadvisorConfigurationError,
     TripadvisorRateLimitError,
+    TripadvisorResponseError,
     TripadvisorTerraClient,
     TripadvisorTerraSettings,
     TripadvisorUnavailableError,
@@ -192,3 +193,68 @@ def test_location_details_and_photos_have_dedicated_endpoints():
     )
     assert session.calls[0][0].endswith("/locations/1634352")
     assert session.calls[1][0].endswith("/locations/1634352/photos")
+
+
+@pytest.mark.parametrize("variable,value", [
+    ("TRIPADVISOR_TIMEOUT_SECONDS", "invalid"),
+    ("TRIPADVISOR_TIMEOUT_SECONDS", "0"),
+    ("TRIPADVISOR_TIMEOUT_SECONDS", "-1"),
+    ("TRIPADVISOR_TIMEOUT_SECONDS", "nan"),
+    ("TRIPADVISOR_TIMEOUT_SECONDS", "inf"),
+    ("TRIPADVISOR_CACHE_TTL_SECONDS", "-1"),
+    ("TRIPADVISOR_CACHE_TTL_SECONDS", "oops"),
+    ("TRIPADVISOR_CACHE_MAX_ENTRIES", "0"),
+    ("TRIPADVISOR_CACHE_MAX_ENTRIES", "1.5"),
+])
+def test_invalid_environment_is_a_typed_configuration_error(monkeypatch, variable, value):
+    monkeypatch.setenv(variable, value)
+    with pytest.raises(TripadvisorConfigurationError):
+        TripadvisorTerraSettings.from_env()
+
+
+def test_settings_repr_does_not_expose_key():
+    assert "test-key" not in repr(settings())
+
+
+@pytest.mark.parametrize("url", [
+    "http://terra.tripadvisor.com/api", "https://", "https://user:secret@example.com/api",
+    "https://example.com/api?key=secret", "https://example.com/api#fragment",
+])
+def test_invalid_base_url_fails_before_network(url):
+    session = FakeSession()
+    client = TripadvisorTerraClient(settings(base_url=url), session=session)
+    with pytest.raises(TripadvisorConfigurationError):
+        client.search_hotels("Phuket")
+    assert not session.calls
+
+
+@pytest.mark.parametrize("status,error", [
+    (301, TripadvisorResponseError), (401, TripadvisorConfigurationError),
+    (403, TripadvisorConfigurationError), (404, TripadvisorResponseError),
+    (500, TripadvisorUnavailableError), (503, TripadvisorUnavailableError),
+])
+def test_http_errors_are_typed_and_redirects_are_disabled(status, error):
+    session = FakeSession(FakeResponse(status_code=status, payload={}))
+    with pytest.raises(error):
+        TripadvisorTerraClient(settings(), session=session).search_hotels("Phuket")
+    assert session.calls[0][1]["allow_redirects"] is False
+
+
+@pytest.mark.parametrize("payload", [None, "bad", {}, {"data": {}}, ValueError("bad JSON")])
+def test_malformed_response_is_not_reported_as_empty_success(payload):
+    client = TripadvisorTerraClient(settings(), session=FakeSession(FakeResponse(payload=payload)))
+    with pytest.raises(TripadvisorResponseError):
+        client.search_hotels("Phuket")
+
+
+def test_empty_search_is_valid():
+    client = TripadvisorTerraClient(settings(), session=FakeSession(FakeResponse(payload={"data": []})))
+    assert client.search_hotels("Phuket").hotels == ()
+
+
+def test_timeout_error_does_not_expose_transport_details():
+    client = TripadvisorTerraClient(settings(), session=FakeSession(requests.Timeout("secret transport data")))
+    with pytest.raises(TripadvisorUnavailableError) as error:
+        client.search_hotels("Phuket")
+    assert "secret" not in str(error.value)
+    assert error.value.__suppress_context__ is True
