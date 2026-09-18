@@ -253,11 +253,14 @@ def resolve_hotel_link(
     try:
         return create_partner_link(target, sub_id=HOTELS_SUB_ID), "api"
     except PartnerLinkError:
-        return build_legacy_redirect(
-            target,
-            program=YANDEX_TRAVEL_PROGRAM,
-            sub_id=HOTELS_SUB_ID,
-        ), "redirect"
+        try:
+            return build_legacy_redirect(
+                target,
+                program=YANDEX_TRAVEL_PROGRAM,
+                sub_id=HOTELS_SUB_ID,
+            ), "redirect"
+        except PartnerLinkError:
+            return target, "direct"
 
 
 def resolve_esim_link(destination: str) -> tuple[str, str]:
@@ -266,9 +269,12 @@ def resolve_esim_link(destination: str) -> tuple[str, str]:
     try:
         return create_partner_link(target, sub_id=ESIM_SUB_ID), "api"
     except PartnerLinkError:
-        return build_legacy_redirect(
-            target,
-            program=AIRALO_PROGRAM,
-            campaign_id=AIRALO_CAMPAIGN_ID,
-            sub_id=ESIM_SUB_ID,
-        ), "redirect"
+        try:
+            return build_legacy_redirect(
+                target,
+                program=AIRALO_PROGRAM,
+                campaign_id=AIRALO_CAMPAIGN_ID,
+                sub_id=ESIM_SUB_ID,
+            ), "redirect"
+        except PartnerLinkError:
+            return target, "direct"
