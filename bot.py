@@ -639,10 +639,13 @@ def init_db() -> None:
                 destination TEXT,
                 origin TEXT,
                 dates TEXT,
+                nights INTEGER,
                 people TEXT,
                 kids INTEGER,
                 infants INTEGER,
                 budget INTEGER,
+                budget_scope TEXT,
+                direct_only INTEGER,
                 phone TEXT,
                 updated_at INTEGER NOT NULL
             )
@@ -659,10 +662,13 @@ def init_db() -> None:
                 destination TEXT,
                 origin TEXT,
                 dates TEXT,
+                nights INTEGER,
                 people TEXT,
                 kids INTEGER,
                 infants INTEGER,
                 budget INTEGER,
+                budget_scope TEXT,
+                direct_only INTEGER,
                 phone TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             )
@@ -684,6 +690,12 @@ def init_db() -> None:
             # actually get debugged from.
             if "kids_ages" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN kids_ages TEXT")
+            if "nights" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN nights INTEGER")
+            if "budget_scope" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN budget_scope TEXT")
+            if "direct_only" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN direct_only INTEGER")
         cur.execute("PRAGMA table_info(sessions)")
         if "review_token" not in {row[1] for row in cur.fetchall()}:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
@@ -938,25 +950,42 @@ def migrate_json_state() -> None:
 # Session helpers
 # ---------------------------------------------------------------------------
 
+def _sqlite_bool(value: Any) -> Optional[int]:
+    """Normalize Python/SQLite boolean representations without turning NULL into false."""
+    if value is None:
+        return None
+    if value is True or value == 1 or value == "1":
+        return 1
+    if value is False or value == 0 or value == "0":
+        return 0
+    return None
+
+
 def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     """Insert or replace a dialog session."""
     now = int(time.time())
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
-            INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
-                                  kids, kids_ages, infants, budget, phone, review_token, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (
+                chat_id, state, destination, origin, dates, nights, people,
+                kids, kids_ages, infants, budget, budget_scope, direct_only,
+                phone, review_token, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
                 origin=excluded.origin,
                 dates=excluded.dates,
+                nights=excluded.nights,
                 people=excluded.people,
                 kids=excluded.kids,
                 kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
                 budget=excluded.budget,
+                budget_scope=excluded.budget_scope,
+                direct_only=excluded.direct_only,
                 phone=excluded.phone,
                 review_token=excluded.review_token,
                 updated_at=excluded.updated_at
@@ -967,11 +996,14 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("destination"),
                 data.get("origin"),
                 data.get("dates"),
+                data.get("nights"),
                 data.get("people"),
                 data.get("kids"),
                 _ages_to_db(data.get("kids_ages")),
                 data.get("infants"),
                 data.get("budget"),
+                data.get("budget_scope"),
+                _sqlite_bool(data.get("direct_only")),
                 data.get("phone"),
                 data.get("review_token"),
                 data.get("updated_at", now),
@@ -981,8 +1013,11 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
 
 def update_session(chat_id: int, **kwargs) -> None:
     """Update specific fields of an existing session."""
-    allowed = {"state", "destination", "origin", "dates", "people", "kids",
-               "kids_ages", "infants", "budget", "phone", "review_token", "updated_at"}
+    allowed = {
+        "state", "destination", "origin", "dates", "nights", "people", "kids",
+        "kids_ages", "infants", "budget", "budget_scope", "direct_only",
+        "phone", "review_token", "updated_at",
+    }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -993,11 +1028,16 @@ def update_session(chat_id: int, **kwargs) -> None:
 
 
 def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
-    """Return the current session for a user, or None."""
+    """Return the current session for a user, normalizing SQLite booleans."""
     with _db_cursor() as cur:
         cur.execute("SELECT * FROM sessions WHERE chat_id = ?", (chat_id,))
         row = cur.fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    data = dict(row)
+    if data.get("direct_only") is not None:
+        data["direct_only"] = bool(data["direct_only"])
+    return data
 
 
 def session_exists(chat_id: int) -> bool:
@@ -1058,9 +1098,10 @@ def save_lead(
         cur.execute(
             """
             INSERT INTO leads (
-                chat_id, first_name, username, destination, origin, dates,
-                people, kids, kids_ages, infants, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                chat_id, first_name, username, destination, origin, dates, nights,
+                people, kids, kids_ages, infants, budget, budget_scope, direct_only,
+                phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -1069,11 +1110,14 @@ def save_lead(
                 info.get("destination"),
                 info.get("origin"),
                 info.get("dates"),
+                info.get("nights"),
                 info.get("people"),
                 info.get("kids"),
                 _ages_to_db(info.get("kids_ages")),
                 info.get("infants"),
                 info.get("budget"),
+                info.get("budget_scope"),
+                _sqlite_bool(info.get("direct_only")),
                 phone,
                 now,
             ),
@@ -3726,14 +3770,39 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     delivery_info = dict(info)
     delivery_info["_mdt_delivery_key"] = f"tg-lead-{lead_id}"
     delivery_info["_local_lead_id"] = lead_id
-    _queue_mdt_lead(lead_id, chat_id, delivery_info, phone, client_name)
 
-    _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
-    # 2. Notify bot creator / admins in Telegram (sync — ops must see it)
-    _notify_admin(chat_id, info, phone, client_name, username=username or "")
+    # Everything below is downstream of the durable local INSERT. A broken
+    # notifier, retry-queue update or Telegram call must not strand the session
+    # in _completing and tempt a later retry into creating a second local lead.
+    try:
+        _queue_mdt_lead(lead_id, chat_id, delivery_info, phone, client_name)
+    except Exception as exc:
+        logger.error("Failed to queue MDT delivery for local lead %s: %s", lead_id, exc)
+        _alert_admin_error("Failed to queue MDT delivery", exc)
+
+    try:
+        _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
+    except Exception as exc:
+        logger.error("Failed to confirm saved lead %s to client %s: %s", lead_id, chat_id, exc)
+        _alert_admin_error("Failed to confirm saved lead to client", exc)
+
+    # 2. Notify bot creator / admins in Telegram. Failure is operationally
+    # important, but the customer's already-saved request must remain durable.
+    try:
+        _notify_admin(chat_id, info, phone, client_name, username=username or "")
+    except Exception as exc:
+        logger.error("Failed to notify manager about saved lead %s: %s", lead_id, exc)
+        _alert_admin_error("Failed to notify manager about saved lead", exc)
+
     with _lock:                                       # 3. Clean up session promptly
         user_data.pop(chat_id, None)
-    delete_session(chat_id)
+    try:
+        delete_session(chat_id)
+    except Exception as exc:
+        # In-memory cleanup still prevents a duplicate in this process. Alert
+        # because the stale SQLite session should be cleaned operationally.
+        logger.error("Failed to delete completed session for lead %s: %s", lead_id, exc)
+        _alert_admin_error("Failed to delete completed session", exc)
 
     # 4–5. CRM + AI can be slow (network); don't block Telegram's webhook ACK.
     if SYNC_COMPLETION:
@@ -4403,6 +4472,8 @@ def load_state() -> None:
             d = dict(row)
             chat_id = d.pop("chat_id")
             d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
+            if d.get("direct_only") is not None:
+                d["direct_only"] = bool(d["direct_only"])
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():

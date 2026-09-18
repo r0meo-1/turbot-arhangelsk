@@ -2113,3 +2113,291 @@ def test_tutu_search_preserves_total_budget_scope(monkeypatch):
 
     assert seen["budget"] == 270000
     assert seen["budget_is_total"] is True
+
+
+# ---------------------------------------------------------------------------
+# P0 launch acceptance: Telegram lead durability
+# ---------------------------------------------------------------------------
+
+def test_p0_telegram_full_funnel_reaches_one_durable_lead(client, monkeypatch):
+    """Release-gate path: every customer step ends in exactly one SQLite lead."""
+    chat = 91001
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **k: None)
+
+    _post(client, chat, "/start")
+    assert bot.user_data[chat]["state"] == bot.STATE_CONSENT
+
+    _callback(client, chat, bot.CB_CONSENT_YES)
+    assert bot.user_data[chat]["state"] == bot.STATE_DESTINATION
+
+    _post(client, chat, "Таиланд")
+    assert bot.user_data[chat]["state"] == bot.STATE_ORIGIN
+
+    _post(client, chat, "Москва")
+    assert bot.user_data[chat]["state"] == bot.STATE_DATES
+
+    _post(client, chat, "15-22 января 2030")
+    assert bot.user_data[chat]["state"] == bot.STATE_PEOPLE
+
+    _post(client, chat, "2")
+    assert bot.user_data[chat]["state"] == bot.STATE_KIDS_AGES
+
+    _post(client, chat, "5, 9")
+    assert bot.user_data[chat]["state"] == bot.STATE_BUDGET
+
+    _post(client, chat, "120000")
+    assert bot.user_data[chat]["state"] == bot.STATE_CONTACT
+
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    assert bot.user_data[chat]["state"] == bot.STATE_REVIEW
+    assert bot.count_leads() == 0, "review is a draft, not a submitted lead"
+
+    _confirm_draft(client, chat)
+
+    assert bot.count_leads() == 1
+    assert chat not in bot.user_data
+    assert not bot.session_exists(chat)
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            """
+            SELECT destination, origin, dates, people, kids, kids_ages,
+                   infants, budget
+            FROM leads WHERE chat_id=?
+            """,
+            (chat,),
+        ).fetchone()
+    assert row is not None
+    assert row["destination"] == "Таиланд"
+    assert row["origin"] == "Москва"
+    assert row["people"] == "2"
+    assert row["kids"] == 2
+    assert row["kids_ages"] == "5,9"
+    assert row["infants"] == 0
+    assert row["budget"] == 120000
+
+
+def test_p0_local_lead_insert_precedes_downstream_actions(monkeypatch):
+    """Nothing external may run before the durable local lead exists."""
+    chat = 91002
+    token = "p0-order-token"
+    bot.user_data[chat] = {
+        "state": bot.STATE_REVIEW,
+        "review_token": token,
+        "destination": "Вьетнам",
+        "origin": "Москва",
+        "dates": "1-10 февраля 2030",
+        "people": "2",
+        "kids": 0,
+        "kids_ages": [],
+        "infants": 0,
+        "budget": 250000,
+        "phone": "Telegram @p0",
+        "updated_at": int(time.time()),
+    }
+    events = []
+    real_save = bot.save_lead
+
+    def save_first(*args, **kwargs):
+        lead_id = real_save(*args, **kwargs)
+        events.append("sqlite_insert")
+        return lead_id
+
+    def assert_persisted(stage):
+        assert bot.count_leads() == 1, f"{stage} ran before local SQLite insert"
+        events.append(stage)
+
+    monkeypatch.setattr(bot, "save_lead", save_first)
+    monkeypatch.setattr(
+        bot, "_queue_mdt_lead",
+        lambda *a, **k: assert_persisted("mdt_queue"),
+    )
+    monkeypatch.setattr(
+        bot, "_confirm_to_user",
+        lambda *a, **k: assert_persisted("client_notify"),
+    )
+    monkeypatch.setattr(
+        bot, "_notify_admin",
+        lambda *a, **k: assert_persisted("manager_notify"),
+    )
+    monkeypatch.setattr(
+        bot, "_post_completion_side_effects",
+        lambda *a, **k: assert_persisted("network_side_effects"),
+    )
+
+    bot.handle_completion(
+        chat,
+        "Telegram @p0",
+        {"from": {"first_name": "P0", "username": "p0"}},
+        review_token=token,
+    )
+
+    assert events == [
+        "sqlite_insert",
+        "mdt_queue",
+        "client_notify",
+        "manager_notify",
+        "network_side_effects",
+    ]
+
+
+def test_p0_manager_notification_exception_does_not_strand_saved_lead(client, monkeypatch):
+    """A notifier bug after INSERT must not lose or duplicate the customer request."""
+    chat = 91003
+    _reach_contact(client, chat)
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    token = bot.user_data[chat]["review_token"]
+    side_effects = []
+    alerts = []
+
+    def broken_notify(*args, **kwargs):
+        raise RuntimeError("simulated manager notification crash")
+
+    monkeypatch.setattr(bot, "_notify_admin", broken_notify)
+    monkeypatch.setattr(
+        bot, "_alert_admin_error",
+        lambda message, exc=None, **kwargs: alerts.append((message, exc)),
+    )
+    monkeypatch.setattr(
+        bot, "_post_completion_side_effects",
+        lambda *a, **k: side_effects.append(a),
+    )
+
+    _callback(client, chat, f"{bot.CB_REVIEW_PREFIX}send:{token}")
+
+    assert bot.count_leads() == 1
+    assert chat not in bot.user_data
+    assert not bot.session_exists(chat)
+    assert len(side_effects) == 1
+    assert any("notify manager" in message.lower() for message, _ in alerts)
+
+    # An old/replayed button after cleanup cannot create a second lead.
+    _callback(client, chat, f"{bot.CB_REVIEW_PREFIX}send:{token}")
+    assert bot.count_leads() == 1
+
+
+def test_p0_mdt_outage_keeps_local_lead_pending_then_recovers(client, monkeypatch):
+    """CRM outage must leave one local lead with an idempotent retry path."""
+    chat = 91004
+    monkeypatch.setattr(bot, "MDT_ENABLED", True)
+    monkeypatch.setattr(bot, "MDT_MODE", "lead")
+    monkeypatch.setattr(bot, "MDT_RETRY_ENABLED", True)
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    monkeypatch.setattr(bot, "TUTU_ENABLED", False)
+    monkeypatch.setattr(bot, "_send_ai_blurb", lambda *a, **k: None)
+
+    attempts = []
+    monkeypatch.setattr(
+        bot,
+        "_send_lead_to_mdt_once",
+        lambda chat_id, info, phone, client_name: attempts.append(
+            (chat_id, info.get("_mdt_delivery_key"))
+        ) or False,
+    )
+
+    _reach_contact(client, chat)
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    _confirm_draft(client, chat)
+
+    assert bot.count_leads() == 1
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            """
+            SELECT id, mdt_status, mdt_attempts, mdt_next_retry_at, mdt_payload
+            FROM leads WHERE chat_id=?
+            """,
+            (chat,),
+        ).fetchone()
+    assert row is not None
+    lead_id = int(row["id"])
+    assert row["mdt_status"] == "pending"
+    assert row["mdt_attempts"] == 1
+    assert row["mdt_next_retry_at"] is not None
+    assert row["mdt_payload"]
+    assert attempts[-1] == (chat, f"tg-lead-{lead_id}")
+
+    monkeypatch.setattr(
+        bot,
+        "_send_lead_to_mdt_once",
+        lambda chat_id, info, phone, client_name: attempts.append(
+            (chat_id, info.get("_mdt_delivery_key"))
+        ) or True,
+    )
+    assert bot._deliver_mdt_lead(lead_id) is True
+
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT mdt_status, mdt_attempts, mdt_next_retry_at FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+    assert row["mdt_status"] == "synced"
+    assert row["mdt_attempts"] == 2
+    assert row["mdt_next_retry_at"] is None
+    assert attempts[-1] == (chat, f"tg-lead-{lead_id}")
+
+
+def test_p0_miniapp_preferences_survive_session_reload_and_lead_save(client, monkeypatch):
+    """Mini App P0 fields must survive SQLite session restore and final lead save."""
+    chat = 91005
+    payload = {
+        "type": "trip_request",
+        "version": 2,
+        "destination": "Таиланд",
+        "departure": "Архангельск",
+        "date": "2030-01-15",
+        "nights": 10,
+        "adults": 2,
+        "children": 2,
+        "childrenAges": [5, 9],
+        "budgetMaxRub": 600000,
+        "budgetScope": "total",
+        "directOnly": True,
+        "consent": True,
+    }
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **k: None)
+
+    bot._accept_miniapp_trip(
+        chat,
+        {"id": chat, "first_name": "Mini", "username": "mini"},
+        payload,
+    )
+    # The autouse test fixture intentionally stubs save_state() to keep webhook
+    # tests isolated. Persist the live Mini App session explicitly to exercise
+    # the same SQLite schema production save_state() uses.
+    bot.set_session(chat, bot.user_data[chat])
+
+    stored = bot.get_session(chat)
+    assert stored is not None
+    assert stored["state"] == bot.STATE_CONTACT
+    assert stored["nights"] == 10
+    assert stored["budget_scope"] == "total"
+    assert stored["direct_only"] == 1
+    assert stored["kids_ages"] == "5,9"
+
+    # Simulate process-memory loss while SQLite survives.
+    bot.user_data.pop(chat, None)
+    restored = bot.get_session(chat)
+    restored["kids_ages"] = bot._ages_from_db(restored["kids_ages"])
+    bot.user_data[chat] = restored
+
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    assert bot.user_data[chat]["state"] == bot.STATE_REVIEW
+    assert bot.user_data[chat]["nights"] == 10
+    assert bot.user_data[chat]["budget_scope"] == "total"
+    assert bot.user_data[chat]["direct_only"] == 1
+
+    _confirm_draft(client, chat)
+
+    with bot._db_cursor() as cur:
+        lead = cur.execute(
+            """
+            SELECT nights, kids_ages, budget, budget_scope, direct_only
+            FROM leads WHERE chat_id=?
+            """,
+            (chat,),
+        ).fetchone()
+    assert lead is not None
+    assert lead["nights"] == 10
+    assert lead["kids_ages"] == "5,9"
+    assert lead["budget"] == 600000
+    assert lead["budget_scope"] == "total"
+    assert lead["direct_only"] == 1
