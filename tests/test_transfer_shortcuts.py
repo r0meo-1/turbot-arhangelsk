@@ -42,6 +42,9 @@ def test_telegram_miniapp_has_transfer_shortcut():
     assert TRANSFER_PATH in TG_INDEX
     assert "utm_source=telegram" in TG_INDEX
     assert "utm_campaign=turbot_transfer" in TG_INDEX
+    assert "https://bot.r0meo1.ru/miniapp/transfer-link" in TG_INDEX
+    assert "tg.initData" in TG_INDEX
+    assert "destination" in TG_INDEX
     assert "tg.openLink(url)" in TG_INDEX
 
 
