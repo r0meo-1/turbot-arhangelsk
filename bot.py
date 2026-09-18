@@ -639,10 +639,13 @@ def init_db() -> None:
                 destination TEXT,
                 origin TEXT,
                 dates TEXT,
+                nights INTEGER,
                 people TEXT,
                 kids INTEGER,
                 infants INTEGER,
                 budget INTEGER,
+                budget_scope TEXT,
+                direct_only INTEGER,
                 phone TEXT,
                 updated_at INTEGER NOT NULL
             )
@@ -659,10 +662,13 @@ def init_db() -> None:
                 destination TEXT,
                 origin TEXT,
                 dates TEXT,
+                nights INTEGER,
                 people TEXT,
                 kids INTEGER,
                 infants INTEGER,
                 budget INTEGER,
+                budget_scope TEXT,
+                direct_only INTEGER,
                 phone TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             )
@@ -684,6 +690,12 @@ def init_db() -> None:
             # actually get debugged from.
             if "kids_ages" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN kids_ages TEXT")
+            if "nights" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN nights INTEGER")
+            if "budget_scope" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN budget_scope TEXT")
+            if "direct_only" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN direct_only INTEGER")
         cur.execute("PRAGMA table_info(sessions)")
         if "review_token" not in {row[1] for row in cur.fetchall()}:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
@@ -944,19 +956,25 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
-            INSERT INTO sessions (chat_id, state, destination, origin, dates, people,
-                                  kids, kids_ages, infants, budget, phone, review_token, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO sessions (
+                chat_id, state, destination, origin, dates, nights, people,
+                kids, kids_ages, infants, budget, budget_scope, direct_only,
+                phone, review_token, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
                 origin=excluded.origin,
                 dates=excluded.dates,
+                nights=excluded.nights,
                 people=excluded.people,
                 kids=excluded.kids,
                 kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
                 budget=excluded.budget,
+                budget_scope=excluded.budget_scope,
+                direct_only=excluded.direct_only,
                 phone=excluded.phone,
                 review_token=excluded.review_token,
                 updated_at=excluded.updated_at
@@ -967,11 +985,14 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("destination"),
                 data.get("origin"),
                 data.get("dates"),
+                data.get("nights"),
                 data.get("people"),
                 data.get("kids"),
                 _ages_to_db(data.get("kids_ages")),
                 data.get("infants"),
                 data.get("budget"),
+                data.get("budget_scope"),
+                1 if data.get("direct_only") is True else 0 if data.get("direct_only") is False else None,
                 data.get("phone"),
                 data.get("review_token"),
                 data.get("updated_at", now),
@@ -981,8 +1002,11 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
 
 def update_session(chat_id: int, **kwargs) -> None:
     """Update specific fields of an existing session."""
-    allowed = {"state", "destination", "origin", "dates", "people", "kids",
-               "kids_ages", "infants", "budget", "phone", "review_token", "updated_at"}
+    allowed = {
+        "state", "destination", "origin", "dates", "nights", "people", "kids",
+        "kids_ages", "infants", "budget", "budget_scope", "direct_only",
+        "phone", "review_token", "updated_at",
+    }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -1058,9 +1082,10 @@ def save_lead(
         cur.execute(
             """
             INSERT INTO leads (
-                chat_id, first_name, username, destination, origin, dates,
-                people, kids, kids_ages, infants, budget, phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                chat_id, first_name, username, destination, origin, dates, nights,
+                people, kids, kids_ages, infants, budget, budget_scope, direct_only,
+                phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -1069,11 +1094,14 @@ def save_lead(
                 info.get("destination"),
                 info.get("origin"),
                 info.get("dates"),
+                info.get("nights"),
                 info.get("people"),
                 info.get("kids"),
                 _ages_to_db(info.get("kids_ages")),
                 info.get("infants"),
                 info.get("budget"),
+                info.get("budget_scope"),
+                1 if info.get("direct_only") is True else 0 if info.get("direct_only") is False else None,
                 phone,
                 now,
             ),
