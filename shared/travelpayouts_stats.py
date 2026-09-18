@@ -294,7 +294,9 @@ def health_snapshot(*, now: float | None = None) -> Dict[str, Any]:
     """Return non-secret operational state without making a network request."""
     current = time.time() if now is None else float(now)
     configured = bool(os.getenv("TRAVELPAYOUTS_API_TOKEN", "").strip())
-    if _last_success_at:
+    if _last_error_at > _last_success_at:
+        status = "error"
+    elif _last_success_at:
         status = "ok"
     elif _last_error_at:
         status = "error"
