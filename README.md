@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-webhook-000)](https://flask.palletsprojects.com/)
 [![tests](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml/badge.svg)](https://github.com/r0meo-1/turbot-arhangelsk/actions/workflows/tests.yml)
-[![tests](https://img.shields.io/badge/tests-200_passed-2ea44f)](tests)
+[![tests](https://img.shields.io/badge/tests-500%2B_passed-2ea44f)](tests)
 [![channels](https://img.shields.io/badge/channels-Telegram_%2B_VK-0077ff)](#живое-демо)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -23,7 +23,7 @@
 | Результат | Реализация |
 |-----------|------------|
 | **2 канала** | Telegram и VK используют общие модули валидации, дат, CRM и политики ПДн |
-| **200 тестов** | Диалоговые ветки, webhook security, Tourvisor, дедупликация, конкуренция, CRM и сетевые ошибки |
+| **500+ тестов** | Диалоговые ветки, webhook security, Mini Apps, Tourvisor, дедупликация, конкуренция, CRM и сетевые ошибки |
 | **Подбор без менеджера** | VK показывает туры, фильтрует их по цене, категории и питанию, сравнивает похожие варианты |
 | **Заявка сначала сохраняется** | SQLite фиксирует лид до обращения к MDT, Tutu или AI |
 | **Продакшен на VPS** | nginx, TLS, systemd, health-check, watchdog, ночные backup и проверяемый deploy |
@@ -35,9 +35,16 @@
 |-------------|---------------------|
 | [VK-сообщество](https://vk.ru/club240310110) | Боевой вход в диалог и клиентский путь подбора тура |
 | [Health API](https://bot.r0meo1.ru/health) | Статус сервиса и ревизию реально запущенного кода |
-| [Политика ПДн](https://bot.r0meo1.ru/privacy) | Публичную страницу, которую показывает бот перед сбором контакта |
+| [Политика VK Mini App](https://bot.r0meo1.ru/vk/miniapp/privacy.html) | Финальную публичную политику, используемую VK Mini App |
 | [GitHub Actions](https://github.com/r0meo-1/turbot-arhangelsk/actions) | Результаты тестов на каждом push и pull request |
 | [Сайт автора](https://r0meo1.ru) | Другие проекты и контакты |
+
+## QA и ручная проверка
+
+Для внешнего smoke/regression есть [QA-чеклист](https://github.com/r0meo-1/turbot-arhangelsk/issues/85).
+Отдельные воспроизводимые проблемы оформляются через [структурированную QA-форму](https://github.com/r0meo-1/turbot-arhangelsk/issues/new?template=qa-bug.yml): платформа, окружение, шаги, expected/actual, severity и evidence.
+
+Продакшен-тесты не должны создавать реальные бронирования или платежи и не должны содержать токены, пароли или лишние персональные данные.
 
 ## Что здесь важно инженеру
 
