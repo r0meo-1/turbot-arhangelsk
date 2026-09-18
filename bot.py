@@ -3726,14 +3726,39 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     delivery_info = dict(info)
     delivery_info["_mdt_delivery_key"] = f"tg-lead-{lead_id}"
     delivery_info["_local_lead_id"] = lead_id
-    _queue_mdt_lead(lead_id, chat_id, delivery_info, phone, client_name)
 
-    _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
-    # 2. Notify bot creator / admins in Telegram (sync — ops must see it)
-    _notify_admin(chat_id, info, phone, client_name, username=username or "")
+    # Everything below is downstream of the durable local INSERT. A broken
+    # notifier, retry-queue update or Telegram call must not strand the session
+    # in _completing and tempt a later retry into creating a second local lead.
+    try:
+        _queue_mdt_lead(lead_id, chat_id, delivery_info, phone, client_name)
+    except Exception as exc:
+        logger.error("Failed to queue MDT delivery for local lead %s: %s", lead_id, exc)
+        _alert_admin_error("Failed to queue MDT delivery", exc)
+
+    try:
+        _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
+    except Exception as exc:
+        logger.error("Failed to confirm saved lead %s to client %s: %s", lead_id, chat_id, exc)
+        _alert_admin_error("Failed to confirm saved lead to client", exc)
+
+    # 2. Notify bot creator / admins in Telegram. Failure is operationally
+    # important, but the customer's already-saved request must remain durable.
+    try:
+        _notify_admin(chat_id, info, phone, client_name, username=username or "")
+    except Exception as exc:
+        logger.error("Failed to notify manager about saved lead %s: %s", lead_id, exc)
+        _alert_admin_error("Failed to notify manager about saved lead", exc)
+
     with _lock:                                       # 3. Clean up session promptly
         user_data.pop(chat_id, None)
-    delete_session(chat_id)
+    try:
+        delete_session(chat_id)
+    except Exception as exc:
+        # In-memory cleanup still prevents a duplicate in this process. Alert
+        # because the stale SQLite session should be cleaned operationally.
+        logger.error("Failed to delete completed session for lead %s: %s", lead_id, exc)
+        _alert_admin_error("Failed to delete completed session", exc)
 
     # 4–5. CRM + AI can be slow (network); don't block Telegram's webhook ACK.
     if SYNC_COMPLETION:
