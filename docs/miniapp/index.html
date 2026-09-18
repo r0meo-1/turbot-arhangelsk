@@ -203,8 +203,37 @@
       siteButton?.addEventListener('click', () => openExternal(siteUrl));
 
       const transferButton = document.getElementById('transfer');
-      const transferUrl = 'https://r0meo1.ru/apreltour/transfer/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_transfer';
-      transferButton?.addEventListener('click', () => openExternal(transferUrl));
+      const transferFallbackUrl = 'https://r0meo1.ru/apreltour/transfer/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_transfer';
+      const transferLinkApi = 'https://bot.r0meo1.ru/miniapp/transfer-link';
+      const resolveTransferUrl = async () => {
+        const destination = document.getElementById('destination')?.value?.trim() || '';
+        if (!tg?.initData || !destination) return transferFallbackUrl;
+        const response = await fetch(transferLinkApi, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ initData: tg.initData, destination })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.ok !== true || typeof payload.url !== 'string') {
+          throw new Error('Kiwitaxi link is unavailable');
+        }
+        return payload.url;
+      };
+      transferButton?.addEventListener('click', async () => {
+        const defaultText = transferButton.textContent;
+        transferButton.disabled = true;
+        transferButton.textContent = 'Открываем трансфер…';
+        let url = transferFallbackUrl;
+        try {
+          url = await resolveTransferUrl();
+        } catch (error) {
+          console.warn('TurBot transfer link fallback', error);
+        } finally {
+          transferButton.disabled = false;
+          transferButton.textContent = defaultText;
+        }
+        openExternal(url);
+      });
 
       const flightsButton = document.getElementById('flights');
       const flightsUrl = 'https://travel.r0meo1.ru/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_flights';

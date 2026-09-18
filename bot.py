@@ -59,6 +59,7 @@ from shared import tutu as _tutu
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
+from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.telegram_webapp import (
     MiniAppValidationError, validate_init_data, validate_trip_request,
 )
@@ -3321,6 +3322,41 @@ def miniapp_submit() -> Response:
         logger.exception("Mini App submission failed")
         return _miniapp_json({"ok": False, "error": "Could not save the request"}, 500)
     return _miniapp_json({"ok": True, "state": info.get("state")})
+
+
+@app.route("/miniapp/transfer-link", methods=["POST", "OPTIONS"])
+def miniapp_transfer_link() -> Response:
+    """Return a Kiwitaxi partner link for an authenticated Telegram Mini App."""
+    origin = request.headers.get("Origin", "")
+    if not MINI_APP_ORIGIN or origin != MINI_APP_ORIGIN:
+        return _miniapp_json({"ok": False, "error": "Origin is not allowed"}, 403)
+    if request.method == "OPTIONS":
+        return _miniapp_json({"ok": True}, 204)
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _miniapp_json({"ok": False, "error": "Invalid JSON body"}, 400)
+    try:
+        validate_init_data(str(body.get("initData") or ""), BOT_TOKEN, max_age=3600)
+    except MiniAppValidationError as exc:
+        logger.info("Rejected Mini App transfer initData: %s", exc)
+        return _miniapp_json({"ok": False, "error": "Telegram authorization failed"}, 401)
+
+    destination = str(body.get("destination") or "").strip()
+    if not destination or len(destination) > 100:
+        return _miniapp_json({"ok": False, "error": "Destination is invalid"}, 400)
+
+    fallback_url = _travelpayouts_transfer.build_kiwitaxi_url(destination)
+    try:
+        url = _travelpayouts_transfer.create_transfer_partner_link(destination)
+    except _travelpayouts_transfer.TransferLinkNotConfigured as exc:
+        logger.warning("Kiwitaxi partner link not configured: %s", exc)
+        return _miniapp_json({"ok": True, "url": fallback_url, "affiliate": False})
+    except _travelpayouts_transfer.TransferLinkError as exc:
+        logger.warning("Kiwitaxi partner link unavailable: %s", exc)
+        return _miniapp_json({"ok": True, "url": fallback_url, "affiliate": False})
+
+    return _miniapp_json({"ok": True, "url": url, "affiliate": True})
 
 
 @app.route("/")
