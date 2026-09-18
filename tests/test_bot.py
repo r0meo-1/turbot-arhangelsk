@@ -45,6 +45,7 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM sessions")
         cur.execute("DELETE FROM users")
         cur.execute("DELETE FROM leads")
+        cur.execute("DELETE FROM partner_clicks")
     bot._seen_update_ids.clear()
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
