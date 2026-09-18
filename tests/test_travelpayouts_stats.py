@@ -249,3 +249,29 @@ def test_health_snapshot_tracks_sanitized_error(monkeypatch):
     assert snapshot["last_error_age_seconds"] == 3.0
     assert snapshot["last_error_code"] == "not_configured"
     assert "bad-secret" not in repr(snapshot)
+
+
+def test_health_snapshot_latest_error_wins_after_success(monkeypatch):
+    monkeypatch.setenv("TRAVELPAYOUTS_API_TOKEN", "stats-token")
+    monkeypatch.setattr(
+        stats.requests,
+        "post",
+        lambda *args, **kwargs: _response({"results": [], "total_rows": 0}),
+    )
+    monkeypatch.setattr(stats.time, "time", lambda: 3000.0)
+    stats.fetch_partner_performance(30, force=True)
+
+    monkeypatch.setattr(
+        stats.requests,
+        "post",
+        lambda *args, **kwargs: _response({}, status_code=500),
+    )
+    monkeypatch.setattr(stats.time, "time", lambda: 3010.0)
+    with pytest.raises(stats.TravelpayoutsStatsError):
+        stats.fetch_partner_performance(30, force=True)
+
+    snapshot = stats.health_snapshot(now=3015.0)
+    assert snapshot["status"] == "error"
+    assert snapshot["last_success_age_seconds"] == 15.0
+    assert snapshot["last_error_age_seconds"] == 5.0
+    assert snapshot["last_error_code"] == "api_error"
