@@ -35,7 +35,7 @@ jobs:
           gradle-version: "9.6.0"
 
       - name: Build debug APK
-        run: gradle -p android --no-daemon :app:assembleDebug
+        run: gradle -p android --no-daemon :app:testDebugUnitTest :app:assembleDebug
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7

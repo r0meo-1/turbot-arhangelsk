@@ -50,4 +50,5 @@ android {
 
 dependencies {
     implementation("com.startapp:inapp-sdk:5.3.1")
+    testImplementation("junit:junit:4.13.2")
 }

@@ -40,7 +40,43 @@ The tour lead funnel is more valuable than an extra impression. Therefore:
 - ads must never obscure operator/airline/hotel information or the CTA that creates a lead;
 - ad failure must degrade to normal application behavior.
 
-## Privacy
+## Native safety infrastructure (no App ID required)
+
+`AdPlacementPolicy` requires an explicit native-owned `AdFlow` and foreground state.
+Unknown state, onboarding, search parameter entry, search loading, and lead/contact
+submission prohibit every placement, including user-initiated rewarded ads.
+Native inventory is eligible only when results are visible; interstitial inventory
+only after a completed action. Rewarded inventory requires an explicit tap in a
+safe flow. Return inventory remains prohibited. Legacy callers without flow state
+fail closed.
+
+`StartIoManager.mayRequest` additionally requires build configuration, successful
+SDK initialization and consent submission, a stored consent decision, and the
+existing persistent frequency gate. A denied personalization decision remains a
+valid decision; TurBot always remains accessible. SDK initialization or consent
+submission exceptions return failure without blocking TurBot.
+
+The shell currently has **no ad load/show calls and no trusted WebView flow
+bridge**. Do not infer safe state from page load completion, URLs, or arbitrary
+JavaScript. Future integration must establish trusted flow events, invalidate
+pending inventory on navigation/background/consent changes, and recheck all gates
+immediately before display. Mark the frequency timestamp only after an actual
+impression. Never wait for inventory before completing a primary action, retry
+automatically in a loop, or grant a reward on load failure/close alone.
+
+Android CI runs policy unit tests and builds the disabled debug APK without an
+App ID. This verifies infrastructure, not live SDK delivery or production consent
+compliance.
+
+Before activation, record device/build and outcomes for: cold/warm start; each
+consent decision and later changes; all critical flows; offline/slow network;
+load/show failure; close/back; rapid taps; background/resume; navigation after
+preload; and the four-minute interstitial boundary. Each case must leave primary
+actions usable and critical flows ad-free. Real inventory testing, publisher
+registration, dashboard app-ads.txt lines, production disclosures, and revenue /
+retention / lead-conversion / stability monitoring remain activation requirements.
+
+## Privacy requirements
 
 Do not add Start.io-specific disclosure to production privacy text until the SDK/data flow is actually enabled. Before release, update the privacy policy and consent flow using the then-current Start.io Publisher Agreement and End User Privacy Policy.
 
