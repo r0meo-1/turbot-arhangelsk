@@ -1,2 +1,13 @@
-# TurBot Android shell currently has no custom reflection rules.
-# Add SDK-specific rules only when the dependency is actually enabled.
+# Start.io rules required for release builds with shrinking/obfuscation.
+-keep class com.startapp.** {
+    *;
+}
+
+-keep class com.truenet.** {
+    *;
+}
+
+-keepattributes Exceptions,InnerClasses,Signature,Deprecated,SourceFile,LineNumberTable,*Annotation*,EnclosingMethod
+-dontwarn android.webkit.JavascriptInterface
+-dontwarn com.startapp.**
+-dontwarn org.jetbrains.annotations.**
