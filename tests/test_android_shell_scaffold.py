@@ -74,3 +74,40 @@ def test_startio_is_fail_closed_until_consent_is_recorded():
     assert "Decision.UNKNOWN" in manager
     assert "return false;" in manager
     assert 'StartAppSDK.setUserConsent(' in manager
+
+
+def test_privacy_choice_is_visible_and_changeable_when_startio_is_configured():
+    activity = (
+        ANDROID
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "ru"
+        / "r0meo1"
+        / "turbot"
+        / "MainActivity.java"
+    ).read_text(encoding="utf-8")
+    dialog = (
+        ANDROID
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "ru"
+        / "r0meo1"
+        / "turbot"
+        / "AdPrivacyDialog.java"
+    ).read_text(encoding="utf-8")
+    layout = (
+        ANDROID / "app" / "src" / "main" / "res" / "layout" / "activity_main.xml"
+    ).read_text(encoding="utf-8")
+
+    assert "privacy_button" in layout
+    assert "AdPrivacyDialog.show(this, true" in activity
+    assert "AdPrivacyDialog.show(this, false" in activity
+    assert "Decision.GRANTED" in dialog
+    assert "Decision.DENIED" in dialog
+    assert "start.io/policy/privacy-policy" in dialog
+    assert "startio-data-partners-list" in dialog
+    assert "startio-services" in dialog
