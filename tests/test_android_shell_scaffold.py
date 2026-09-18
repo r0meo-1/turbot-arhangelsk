@@ -111,3 +111,56 @@ def test_privacy_choice_is_visible_and_changeable_when_startio_is_configured():
     assert "start.io/policy/privacy-policy" in dialog
     assert "startio-data-partners-list" in dialog
     assert "startio-services" in dialog
+
+
+def test_ad_placement_policy_reserves_named_startio_placements():
+    placement = (
+        ANDROID
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "ru"
+        / "r0meo1"
+        / "turbot"
+        / "AdPlacement.java"
+    ).read_text(encoding="utf-8")
+    policy = (
+        ANDROID
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "ru"
+        / "r0meo1"
+        / "turbot"
+        / "AdPlacementPolicy.java"
+    ).read_text(encoding="utf-8")
+
+    assert '"results_native"' in placement
+    assert '"post_action_interstitial"' in placement
+    assert '"rewarded_optional"' in placement
+    assert '"return_ad"' in placement
+    assert "4 * 60_000L" in placement
+    assert "return userInitiated;" in policy
+    assert "RETURN_AD" in policy
+    assert "return false;" in policy
+
+
+def test_ad_frequency_gate_is_persistent_and_fail_safe():
+    gate = (
+        ANDROID
+        / "app"
+        / "src"
+        / "main"
+        / "java"
+        / "ru"
+        / "r0meo1"
+        / "turbot"
+        / "AdFrequencyGate.java"
+    ).read_text(encoding="utf-8")
+
+    assert "SharedPreferences" in gate
+    assert "last_shown_" in gate
+    assert "minimumIntervalMs()" in gate
+    assert "markShown" in gate
