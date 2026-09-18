@@ -1849,3 +1849,27 @@ def test_send_lead_to_mdt_once_returns_dispatch_result(monkeypatch):
 
     assert result is True
     assert len(calls) == 1
+
+
+def test_tutu_search_preserves_total_budget_scope(monkeypatch):
+    """Telegram Mini App total budget must not be multiplied by party size."""
+    seen = {}
+    monkeypatch.setattr(bot, "TUTU_ENABLED", True)
+    monkeypatch.setattr(
+        bot._tutu,
+        "search_offers",
+        lambda *args, **kwargs: seen.update(kwargs) or None,
+    )
+
+    bot._tutu_search({
+        "destination": "Таиланд",
+        "origin": "Москва",
+        "dates": "2030-01-10",
+        "people": "2",
+        "kids_ages": [],
+        "budget": 270000,
+        "budget_scope": "total",
+    })
+
+    assert seen["budget"] == 270000
+    assert seen["budget_is_total"] is True

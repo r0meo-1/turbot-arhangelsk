@@ -468,8 +468,8 @@ def search_offers(
         arguments["children"] = children
     if babies:
         arguments["infants"] = babies
-    # Tutu caps the whole offer. Telegram and legacy VK sessions use a
-    # per-person budget; the current VK funnel supplies a total trip budget.
+    # Tutu caps the whole offer. Classic Telegram and legacy VK sessions use
+    # a per-person budget; current Telegram/VK Mini Apps use a total trip budget.
     try:
         if budget:
             amount = int(budget)

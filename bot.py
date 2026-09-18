@@ -3152,6 +3152,7 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
             kids=_children,
             infants=_infants,
             budget=info.get("budget"),
+            budget_is_total=info.get("budget_scope") == "total",
             log=logger,
         )
     except Exception as exc:  # defensive: a search must never break completion
