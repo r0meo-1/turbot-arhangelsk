@@ -259,7 +259,7 @@ def test_admin_partners_includes_travelpayouts_money(monkeypatch, tmp_path):
     monkeypatch.setattr(
         bot._travelpayouts_stats,
         "fetch_partner_performance",
-        lambda days: {
+        lambda days, force=False: {
             "totals": {
                 "bookings": 2,
                 "paid": 1,
@@ -324,7 +324,7 @@ def test_admin_partners_includes_travelpayouts_money(monkeypatch, tmp_path):
 def test_admin_partners_survives_stats_api_failure(monkeypatch, tmp_path):
     _use_temp_db(monkeypatch, tmp_path)
 
-    def fail(_days):
+    def fail(_days, force=False):
         raise bot._travelpayouts_stats.TravelpayoutsStatsError("down")
 
     monkeypatch.setattr(bot._travelpayouts_stats, "fetch_partner_performance", fail)
@@ -337,3 +337,58 @@ def test_admin_partners_survives_stats_api_failure(monkeypatch, tmp_path):
 
     assert bot._admin_partners(999, "30") is True
     assert "Статистика временно недоступна" in sent[-1]
+
+
+def test_admin_partners_reload_forces_travelpayouts_refresh(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+    captured = []
+
+    def fake_performance(days, *, force=False):
+        captured.append((days, force))
+        return {
+            "totals": {
+                "bookings": 0,
+                "paid": 0,
+                "processing": 0,
+                "canceled": 0,
+                "other": 0,
+                "booking_value_eur": 0.0,
+                "paid_profit_eur": 0.0,
+            },
+            "by_service": {
+                "hotel": {"bookings": 0, "paid": 0, "paid_profit_eur": 0.0},
+                "esim": {"bookings": 0, "paid": 0, "paid_profit_eur": 0.0},
+                "transfer": {"bookings": 0, "paid": 0, "paid_profit_eur": 0.0},
+            },
+        }
+
+    monkeypatch.setattr(
+        bot._travelpayouts_stats,
+        "fetch_partner_performance",
+        fake_performance,
+    )
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda chat_id, text, **kwargs: sent.append(text) or True,
+    )
+
+    assert bot._admin_partners(999, "90 reload") is True
+    assert captured == [(90, True)]
+    assert "♻️ Данные принудительно обновлены." in sent[-1]
+
+
+def test_admin_partners_reload_uses_default_window(monkeypatch, tmp_path):
+    _use_temp_db(monkeypatch, tmp_path)
+    captured = []
+
+    def fail(days, *, force=False):
+        captured.append((days, force))
+        raise bot._travelpayouts_stats.TravelpayoutsStatsError("down")
+
+    monkeypatch.setattr(bot._travelpayouts_stats, "fetch_partner_performance", fail)
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: True)
+
+    assert bot._admin_partners(999, "reload") is True
+    assert captured == [(30, True)]
