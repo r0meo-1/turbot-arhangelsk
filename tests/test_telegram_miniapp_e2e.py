@@ -33,7 +33,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
         url = f"http://127.0.0.1:{server.server_port}/index.html"
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="msedge", headless=True)
-            context = browser.new_context()
+            context = browser.new_context(viewport={"width": 390, "height": 844})
             context.add_init_script(
                 f"""
                 window.__tgClosed = false;
@@ -81,6 +81,9 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
 
             page.route(API_URL, accept_submit)
             page.goto(url, wait_until="domcontentloaded")
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+            assert page.locator("#destination").is_visible()
+            assert page.locator("#submit").is_visible()
 
             # start_param=thailand should prefill the country, then the user may
             # choose a more specific resort suggestion.
@@ -110,6 +113,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
 
             # Review is local only: no backend write and no WebView close yet.
             page.locator("#review").wait_for(state="visible")
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
             assert captured == []
             assert page.evaluate("window.__tgClosed") is False
             assert page.evaluate("window.__tgBackVisible") is True
