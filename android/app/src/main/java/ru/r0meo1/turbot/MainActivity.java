@@ -18,6 +18,20 @@ public final class MainActivity extends Activity {
     private static final String FIRST_PARTY_HOST = "r0meo1.ru";
 
     private WebView webView;
+    // No SDK delivery adapter or trusted flow integration exists yet. Keep UNKNOWN.
+    private final AdController ads = new AdController(new AdController.Adapter() {
+        public void load(AdPlacement placement, Events events) { events.failed(); }
+        public void show() { throw new IllegalStateException("Ad delivery unavailable"); }
+        public void cancel() { }
+    }, new AdController.Gates() {
+        public boolean eligible(AdPlacement placement, long nowMs) {
+            return StartIoManager.mayRequest(MainActivity.this, placement, AdFlow.UNKNOWN,
+                    false, false, nowMs);
+        }
+        public void impression(AdPlacement placement, long nowMs) {
+            AdFrequencyGate.markShown(MainActivity.this, placement, nowMs);
+        }
+    }, System::currentTimeMillis, () -> { });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -56,6 +70,7 @@ public final class MainActivity extends Activity {
     }
 
     private void applyAdvertisingChoice() {
+        ads.invalidate();
         StartIoManager.applyCurrentConsent(this);
     }
 
@@ -71,7 +86,13 @@ public final class MainActivity extends Activity {
         view.setWebChromeClient(new WebChromeClient());
         view.setWebViewClient(new WebViewClient() {
             @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                ads.invalidate(); // Invalidation only; URLs never establish a safe flow.
+            }
+
+            @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                ads.invalidate();
                 Uri uri = request.getUrl();
                 if (isFirstPartyHttps(uri)) {
                     return false;
@@ -95,6 +116,7 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        ads.invalidate();
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
             return;
@@ -112,6 +134,8 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        ads.setForeground(false);
+        ads.invalidate();
         if (webView != null) {
             webView.stopLoading();
             webView.setWebChromeClient(null);
@@ -120,5 +144,17 @@ public final class MainActivity extends Activity {
             webView = null;
         }
         super.onDestroy();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        ads.setForeground(true); // Flow stays UNKNOWN even after resume/page completion.
+    }
+
+    @Override
+    protected void onPause() {
+        ads.setForeground(false);
+        super.onPause();
     }
 }

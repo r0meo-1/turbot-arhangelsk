@@ -16,11 +16,7 @@ final class AdFrequencyGate {
         }
 
         long lastShown = preferences(context).getLong(KEY_PREFIX + placement.id(), Long.MIN_VALUE);
-        if (lastShown == Long.MIN_VALUE) {
-            return true;
-        }
-
-        return nowMs - lastShown >= interval;
+        return AdFrequencyPolicy.elapsed(lastShown, nowMs, interval);
     }
 
     static void markShown(Context context, AdPlacement placement, long nowMs) {

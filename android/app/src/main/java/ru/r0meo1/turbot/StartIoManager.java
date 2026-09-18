@@ -7,13 +7,12 @@ import com.startapp.sdk.adsbase.StartAppSDK;
 final class StartIoManager {
     private static boolean initialized;
     private static boolean consentApplied;
+    private static AdConsentStore.Decision appliedDecision = AdConsentStore.Decision.UNKNOWN;
 
     private StartIoManager() {}
 
     static boolean isConfigured() {
-        return BuildConfig.STARTIO_ENABLED
-                && BuildConfig.STARTIO_APP_ID != null
-                && !BuildConfig.STARTIO_APP_ID.trim().isEmpty();
+        return AdDeliveryPolicy.configured(BuildConfig.STARTIO_ENABLED, BuildConfig.STARTIO_APP_ID);
     }
 
     static boolean initializeIfAllowed(Activity activity) {
@@ -35,6 +34,7 @@ final class StartIoManager {
             }
 
             submitConsent(activity, decision);
+            appliedDecision = decision;
             consentApplied = true;
             return true;
         } catch (RuntimeException sdkFailure) {
@@ -48,10 +48,8 @@ final class StartIoManager {
             boolean userInitiated, boolean foreground, long nowMs
     ) {
         return AdPlacementPolicy.mayRequest(placement, flow, userInitiated, foreground)
-                && isConfigured()
-                && initialized
-                && consentApplied
-                && AdConsentStore.read(activity) != AdConsentStore.Decision.UNKNOWN
+                && AdDeliveryPolicy.eligible(isConfigured(), initialized, consentApplied,
+                        AdConsentStore.read(activity), appliedDecision)
                 && AdFrequencyGate.canShow(activity, placement, nowMs);
     }
 
