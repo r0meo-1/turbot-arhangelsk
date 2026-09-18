@@ -135,6 +135,41 @@ retention / lead-conversion / stability monitoring remain activation requirement
 
 ## Privacy requirements
 
+## Readiness and disablement checklist
+
+| Layer | Current evidence | Required before activation |
+| --- | --- | --- |
+| Policy/controller | Four policy and thirteen fake-controller JUnit tests; disabled APK build in CI | Revalidate after real adapter and flow integration |
+| Default shell | Build defaults are disabled/empty; no controller request/show call sites; UNKNOWN flow and unavailable adapter | Device/network inspection to confirm no ad delivery |
+| Live SDK | Initialization and consent gates only | Real publisher App ID, SDK adapter/callback review and test inventory |
+| Funnel integration | Navigation/lifecycle invalidation only | Reviewed trustworthy frontend/native protocol and protected-flow device tests |
+| Production | Not enabled | Publisher configuration, disclosures/CMP review, exact app-ads.txt entries and monitoring |
+
+Future test activation is a separate reviewed change, not a switch to turn on now:
+
+1. Complete and test the real delivery adapter, trustworthy flow integration,
+   native rendering and optional reward redemption contract. Keep defaults off.
+2. Register the app and obtain the real ID; keep it in local/CI build configuration.
+   Review consent/data-flow requirements before initializing on any test device.
+3. Confirm the pinned SDK's supported test-inventory configuration from official
+   documentation. Enabling the SDK alone does not establish test mode.
+4. Build an isolated debug artifact with explicit enabled configuration and the
+   real ID. Verify effective build configuration and run the device/network matrix
+   above, including granted/denied consent and all protected flows.
+5. Require a separate production release review before enabling delivery, with
+   disclosures, publisher entries and retention/conversion/stability monitoring.
+
+To disable in a subsequent build, explicitly set `STARTIO_ENABLED=false` and remove
+`STARTIO_APP_ID` from local/CI build inputs (including user Gradle properties), then
+rebuild and verify the generated configuration is disabled/empty. Never remove the
+consent store to disable advertising. Existing installed enabled binaries do not
+change when build inputs change: distribute the disabled replacement and verify it
+on devices. No remote kill switch exists; do not claim immediate remote disablement.
+
+The normal CI command runs `:app:testDebugUnitTest :app:assembleDebug` without ID or
+enablement inputs. Source and fake-ad checks do not substitute for inspecting a
+future enabled artifact or observing SDK network behavior on a device.
+
 Do not add Start.io-specific disclosure to production privacy text until the SDK/data flow is actually enabled. Before release, update the privacy policy and consent flow using the then-current Start.io Publisher Agreement and End User Privacy Policy.
 
 ## app-ads.txt
