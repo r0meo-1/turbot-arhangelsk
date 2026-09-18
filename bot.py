@@ -58,6 +58,7 @@ from shared.privacy import consent_text as _shared_consent_text, privacy_text as
 from shared import tutu as _tutu
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
+from shared.ai_chat import generate_ai_chat_reply as _generate_ai_chat_reply
 from shared import mdt as mdt_shared
 from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
@@ -127,6 +128,9 @@ ADMIN_ID          = _env_int("ADMIN_ID", 0)
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 AI_MODE           = os.getenv("AI_MODE", "groq").lower().strip()
+AI_CHAT_ENABLED   = os.getenv("AI_CHAT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
+AI_CHAT_MAX_CHARS = max(100, min(8000, _env_int("AI_CHAT_MAX_CHARS", 2000)))
+AI_CHAT_TIMEOUT_SECONDS = max(3, min(30, _env_int("AI_CHAT_TIMEOUT_SECONDS", 15)))
 PORT                 = _env_int("PORT", 5000)
 STATE_FILE           = os.getenv("STATE_FILE", "bot_state.json")
 DATABASE_PATH        = os.getenv("DATABASE_PATH", "bot_state.sqlite")
@@ -143,7 +147,7 @@ DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
 
-def _parse_chat_ids(raw: str) -> List[int]:
+def _parse_chat_ids(raw: str, *, env_name: str = "LEAD_NOTIFY_IDS") -> List[int]:
     """Parse comma-separated Telegram chat IDs; skip empty/invalid parts."""
     ids: List[int] = []
     for part in (raw or "").split(","):
@@ -153,8 +157,17 @@ def _parse_chat_ids(raw: str) -> List[int]:
         try:
             ids.append(int(part))
         except ValueError:
-            logger.warning("Invalid chat id in LEAD_NOTIFY_IDS: %r", part)
+            logger.warning("Invalid chat id in %s: %r", env_name, part)
     return ids
+
+
+# Closed AI beta: the master flag is OFF by default and only allowlisted chats
+# can use /ai. ADMIN_ID is treated as an internal tester when the flag is on.
+AI_CHAT_BETA_IDS = set(
+    _parse_chat_ids(os.getenv("AI_CHAT_BETA_IDS", ""), env_name="AI_CHAT_BETA_IDS")
+)
+if ADMIN_ID:
+    AI_CHAT_BETA_IDS.add(ADMIN_ID)
 
 
 # Who receives new leads in Telegram. LEAD_NOTIFY_IDS wins if set; otherwise ADMIN_ID.
@@ -481,6 +494,8 @@ ADMIN_HELP = (
     "/export — экспорт завершённых заявок\n"
     "/followup — напоминания незавершившим\n"
     "/mdt [test|reload] — статус MDT CRM\n"
+    "/ai <вопрос> — закрытая AI beta (если включена)\n"
+    "/ai_stats — агрегированная статистика AI beta\n"
     "/help — эта справка\n\n"
     "В уведомлении о заявке есть кнопка «✍️ Ответить клиенту».\n"
     "HTML: <b>жирный</b>, <i>курсив</i>"
@@ -702,7 +717,60 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_partner_clicks_service_created "
             "ON partner_clicks(service, created_at)"
         )
+        # Aggregate-only AI beta telemetry. No chat_id, prompt, response text or
+        # other user data is stored here.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_chat_metrics (
+                outcome TEXT PRIMARY KEY,
+                count INTEGER NOT NULL DEFAULT 0,
+                updated_at INTEGER NOT NULL
+            )
+            """
+        )
         cur.execute("PRAGMA journal_mode=WAL")
+
+
+def _ai_chat_metric_key(reply: Any) -> str:
+    """Map an AI reply to a bounded aggregate outcome with no user content."""
+    reason = re.sub(r"[^a-z0-9_]+", "_", str(getattr(reply, "reason", "") or "").lower())
+    reason = reason.strip("_")[:64] or "none"
+    if bool(getattr(reply, "handoff_required", False)):
+        return f"handoff_{reason}"
+    if bool(getattr(reply, "used_external_model", False)):
+        return "external_ok"
+    return f"fallback_{reason}"
+
+
+def record_ai_chat_outcome(reply: Any) -> None:
+    """Increment privacy-minimized beta telemetry; never store prompt/response text."""
+    outcome = _ai_chat_metric_key(reply)
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                """
+                INSERT INTO ai_chat_metrics (outcome, count, updated_at)
+                VALUES (?, 1, ?)
+                ON CONFLICT(outcome) DO UPDATE SET
+                    count = count + 1,
+                    updated_at = excluded.updated_at
+                """,
+                (outcome, int(time.time())),
+            )
+    except sqlite3.Error as exc:
+        # Metrics are observational only and must never break a chat response.
+        logger.warning("Could not store AI beta metric: %s", exc)
+
+
+def ai_chat_metrics_snapshot() -> Dict[str, int]:
+    """Return aggregate counters only."""
+    try:
+        with _db_cursor() as cur:
+            cur.execute("SELECT outcome, count FROM ai_chat_metrics ORDER BY outcome")
+            return {str(row["outcome"]): int(row["count"]) for row in cur.fetchall()}
+    except sqlite3.Error as exc:
+        logger.warning("Could not read AI beta metrics: %s", exc)
+        return {}
 
 
 def record_partner_click(
@@ -2056,6 +2124,47 @@ def generate_ai_selection(destination: str, dates: str, people: str, budget: str
         log=logger,
     )
 
+
+def _ai_beta_allowed(chat_id: int) -> bool:
+    """Closed beta gate. No public route exists even when this is enabled."""
+    return AI_CHAT_ENABLED and chat_id in AI_CHAT_BETA_IDS
+
+
+def _handle_ai_beta_command(chat_id: int, text: str) -> bool:
+    """Handle /ai for allowlisted internal testers without altering lead state."""
+    command, _, raw_question = text.partition(" ")
+    if command != "/ai" or not _ai_beta_allowed(chat_id):
+        return False
+
+    question = raw_question.strip()
+    if not question:
+        send_message(
+            chat_id,
+            "🧪 AI beta\n\nИспользование: /ai ваш вопрос о поездке\n"
+            "Не отправляйте паспорт, данные карты, пароли или медицинские данные.",
+        )
+        return True
+    if len(question) > AI_CHAT_MAX_CHARS:
+        send_message(
+            chat_id,
+            f"🧪 AI beta: вопрос слишком длинный. Максимум {AI_CHAT_MAX_CHARS} символов.",
+        )
+        return True
+
+    send_typing(chat_id)
+    reply = _generate_ai_chat_reply(
+        question,
+        enabled=True,
+        groq_client=groq_client,
+        groq_model=GROQ_MODEL,
+        timeout=float(AI_CHAT_TIMEOUT_SECONDS),
+        log=logger,
+    )
+    record_ai_chat_outcome(reply)
+    send_message(chat_id, f"🧪 AI beta · ИИ-помощник\n\n{reply.text}")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Admin commands
 # ---------------------------------------------------------------------------
@@ -2093,6 +2202,19 @@ def _admin_stats(chat_id: int, arg: str) -> bool:
         f"Активных диалогов: {active}\n"
         f"Завершённых заявок: {leads}",
     )
+    return True
+
+
+def _admin_ai_stats(chat_id: int, arg: str) -> bool:
+    metrics = ai_chat_metrics_snapshot()
+    if not metrics:
+        send_message(chat_id, "🧪 AI beta: статистики пока нет.")
+        return True
+    total = sum(metrics.values())
+    lines = [f"🧪 AI beta: {total} запросов"]
+    for outcome, count in metrics.items():
+        lines.append(f"• {outcome}: {count}")
+    send_message(chat_id, "\n".join(lines))
     return True
 
 
@@ -2612,6 +2734,7 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/followup":     _admin_followup,
     "/mdt":          _admin_mdt,
     "/tutu":         _admin_tutu,
+    "/ai_stats":     _admin_ai_stats,
 }
 
 
@@ -4118,6 +4241,12 @@ def _process_update(data: Dict[str, Any]) -> None:
     # Normalise /cmd@botname → /cmd
     if text.startswith("/"):
         text = text.split("@", 1)[0]
+
+    # Closed beta command is checked before normal/admin routing. Unauthorized
+    # users get the ordinary unknown-command behavior below, so no beta surface
+    # is advertised publicly.
+    if (text == "/ai" or text.startswith("/ai ")) and _handle_ai_beta_command(chat_id, text):
+        return
 
     # --- Admin: pending reply to client, then admin commands ---
     if chat_id == ADMIN_ID or chat_id in LEAD_NOTIFY_IDS:
