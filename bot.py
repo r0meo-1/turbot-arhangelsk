@@ -59,6 +59,7 @@ from shared import tutu as _tutu
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
+from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.telegram_webapp import (
     MiniAppValidationError, validate_init_data, validate_trip_request,
@@ -3357,6 +3358,68 @@ def miniapp_transfer_link() -> Response:
         return _miniapp_json({"ok": True, "url": fallback_url, "affiliate": False})
 
     return _miniapp_json({"ok": True, "url": url, "affiliate": True})
+
+
+@app.route("/miniapp/partner-link", methods=["POST", "OPTIONS"])
+def miniapp_partner_link() -> Response:
+    """Resolve Telegram Mini App partner links on the trusted backend."""
+    origin = request.headers.get("Origin", "")
+    if not MINI_APP_ORIGIN or origin != MINI_APP_ORIGIN:
+        return _miniapp_json({"ok": False, "error": "Origin is not allowed"}, 403)
+    if request.method == "OPTIONS":
+        return _miniapp_json({"ok": True}, 204)
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _miniapp_json({"ok": False, "error": "Invalid JSON body"}, 400)
+    try:
+        validate_init_data(str(body.get("initData") or ""), BOT_TOKEN, max_age=3600)
+    except MiniAppValidationError as exc:
+        logger.info("Rejected Mini App partner initData: %s", exc)
+        return _miniapp_json({"ok": False, "error": "Telegram authorization failed"}, 401)
+
+    service = str(body.get("service") or "").strip().lower()
+    if service not in {"hotel", "esim", "transfer"}:
+        return _miniapp_json({"ok": False, "error": "Partner service is invalid"}, 400)
+
+    destination = str(body.get("destination") or "").strip()
+    if not destination or len(destination) > 100:
+        return _miniapp_json({"ok": False, "error": "Destination is invalid"}, 400)
+
+    if service == "hotel":
+        try:
+            nights = int(body.get("nights") or 0)
+            adults = int(body.get("adults") or 2)
+        except (TypeError, ValueError):
+            return _miniapp_json({"ok": False, "error": "Trip parameters are invalid"}, 400)
+        checkin = str(body.get("date") or "").strip()
+        url, mode = _travelpayouts_links.resolve_hotel_link(
+            destination,
+            checkin=checkin,
+            nights=nights,
+            adults=adults,
+        )
+    elif service == "esim":
+        url, mode = _travelpayouts_links.resolve_esim_link(destination)
+    else:
+        url = _travelpayouts_transfer.build_kiwitaxi_url(destination)
+        mode = "direct"
+        try:
+            url = _travelpayouts_transfer.create_transfer_partner_link(destination)
+            mode = "api"
+        except _travelpayouts_transfer.TransferLinkNotConfigured as exc:
+            logger.warning("Kiwitaxi partner link not configured: %s", exc)
+        except _travelpayouts_transfer.TransferLinkError as exc:
+            logger.warning("Kiwitaxi partner link unavailable: %s", exc)
+
+    logger.info("Mini App partner link resolved service=%s mode=%s", service, mode)
+    return _miniapp_json({
+        "ok": True,
+        "service": service,
+        "url": url,
+        "affiliate": mode != "direct",
+        "mode": mode,
+    })
 
 
 @app.route("/")

@@ -42,30 +42,39 @@ def test_telegram_miniapp_has_transfer_shortcut():
     assert TRANSFER_PATH in TG_INDEX
     assert "utm_source=telegram" in TG_INDEX
     assert "utm_campaign=turbot_transfer" in TG_INDEX
-    assert "https://bot.r0meo1.ru/miniapp/transfer-link" in TG_INDEX
+    assert "https://bot.r0meo1.ru/miniapp/partner-link" in TG_INDEX
+    assert "'transfer'" in TG_INDEX
     assert "tg.initData" in TG_INDEX
     assert "destination" in TG_INDEX
     assert "tg.openLink(url)" in TG_INDEX
 
 
-def test_telegram_miniapp_has_yandex_travel_affiliate_shortcut():
+def test_telegram_miniapp_routes_yandex_travel_through_backend():
     assert 'id="yandex-travel"' in TG_INDEX
     assert YANDEX_TRAVEL_PATH in TG_INDEX
-    assert YANDEX_AFFILIATE_REDIRECT in TG_INDEX
-    assert "affiliate.searchParams.set('marker', '778488')" in TG_INDEX
-    assert "affiliate.searchParams.set('trs', '574782')" in TG_INDEX
-    assert "affiliate.searchParams.set('p', '5916')" in TG_INDEX
-    assert "target.searchParams.set('checkinDate', checkin)" in TG_INDEX
-    assert "target.searchParams.set('checkoutDate'" in TG_INDEX
-    assert "target.searchParams.set('utm_content', 'telegram')" in TG_INDEX
+    assert "https://bot.r0meo1.ru/miniapp/partner-link" in TG_INDEX
+    assert "'hotel'" in TG_INDEX
 
 
-def test_telegram_miniapp_has_airalo_affiliate_shortcut():
+def test_telegram_miniapp_routes_airalo_through_backend():
     assert 'id="esim"' in TG_INDEX
-    assert all(path in TG_INDEX for path in AIRALO_PATHS)
-    assert "778488.turbot_esim_tg" in TG_INDEX
-    assert "affiliate.searchParams.set('p', '8310')" in TG_INDEX
-    assert "affiliate.searchParams.set('campaign_id', '541')" in TG_INDEX
+    assert "https://www.airalo.com/" in TG_INDEX
+    assert "https://bot.r0meo1.ru/miniapp/partner-link" in TG_INDEX
+    assert "'esim'" in TG_INDEX
+
+
+def test_telegram_miniapp_keeps_affiliate_configuration_server_side():
+    forbidden = (
+        YANDEX_AFFILIATE_REDIRECT,
+        "778488",
+        "574782",
+        "5916",
+        "8310",
+        "campaign_id",
+        "affiliate.searchParams",
+    )
+    for value in forbidden:
+        assert value not in TG_INDEX
 
 
 def test_telegram_miniapp_keeps_authenticated_backend_crm_handoff():

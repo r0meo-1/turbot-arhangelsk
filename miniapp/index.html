@@ -188,128 +188,75 @@
         if (!popup) window.location.assign(url);
       };
 
-      const partnerLink = (target, marker, program, campaignId = '') => {
-        const affiliate = new URL('https://tp.media/r');
-        affiliate.searchParams.set('marker', marker);
-        affiliate.searchParams.set('trs', '574782');
-        affiliate.searchParams.set('p', program);
-        if (campaignId) affiliate.searchParams.set('campaign_id', campaignId);
-        affiliate.searchParams.set('u', target);
-        return affiliate.toString();
+      const partnerLinkApi = 'https://bot.r0meo1.ru/miniapp/partner-link';
+      const tripPartnerContext = () => ({
+        destination: document.getElementById('destination')?.value?.trim() || '',
+        date: document.getElementById('date')?.value || '',
+        nights: Math.trunc(Number(document.getElementById('nights')?.value || 0)),
+        adults: Math.trunc(Number(document.getElementById('adults')?.value || 2))
+      });
+      const resolvePartnerUrl = async (service) => {
+        if (!tg?.initData) throw new Error('Telegram authorization is unavailable');
+        const response = await fetch(partnerLinkApi, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            initData: tg.initData,
+            service,
+            ...tripPartnerContext()
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload.ok !== true || typeof payload.url !== 'string') {
+          throw new Error('Partner link is unavailable');
+        }
+        return payload.url;
+      };
+      const bindPartnerButton = (id, service, fallbackUrl, loadingText) => {
+        const button = document.getElementById(id);
+        button?.addEventListener('click', async () => {
+          const defaultText = button.textContent;
+          button.disabled = true;
+          button.textContent = loadingText;
+          let url = fallbackUrl;
+          try {
+            url = await resolvePartnerUrl(service);
+          } catch (error) {
+            console.warn(`TurBot ${service} link fallback`, error);
+          } finally {
+            button.disabled = false;
+            button.textContent = defaultText;
+          }
+          openExternal(url);
+        });
       };
 
       const siteButton = document.getElementById('apreltour-site');
       const siteUrl = 'https://r0meo1.ru/apreltour/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_site';
       siteButton?.addEventListener('click', () => openExternal(siteUrl));
 
-      const transferButton = document.getElementById('transfer');
-      const transferFallbackUrl = 'https://r0meo1.ru/apreltour/transfer/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_transfer';
-      const transferLinkApi = 'https://bot.r0meo1.ru/miniapp/transfer-link';
-      const resolveTransferUrl = async () => {
-        const destination = document.getElementById('destination')?.value?.trim() || '';
-        if (!tg?.initData || !destination) return transferFallbackUrl;
-        const response = await fetch(transferLinkApi, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ initData: tg.initData, destination })
-        });
-        const payload = await response.json().catch(() => ({}));
-        if (!response.ok || payload.ok !== true || typeof payload.url !== 'string') {
-          throw new Error('Kiwitaxi link is unavailable');
-        }
-        return payload.url;
-      };
-      transferButton?.addEventListener('click', async () => {
-        const defaultText = transferButton.textContent;
-        transferButton.disabled = true;
-        transferButton.textContent = 'Открываем трансфер…';
-        let url = transferFallbackUrl;
-        try {
-          url = await resolveTransferUrl();
-        } catch (error) {
-          console.warn('TurBot transfer link fallback', error);
-        } finally {
-          transferButton.disabled = false;
-          transferButton.textContent = defaultText;
-        }
-        openExternal(url);
-      });
-
       const flightsButton = document.getElementById('flights');
       const flightsUrl = 'https://travel.r0meo1.ru/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_flights';
       flightsButton?.addEventListener('click', () => openExternal(flightsUrl));
 
-      const yandexButton = document.getElementById('yandex-travel');
-      const yandexAffiliateUrl = () => {
-        const rawDestination = document.getElementById('destination')?.value || '';
-        const destinationKey = rawDestination.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
-        const slugs = {
-          'таиланд': 'thailand',
-          'thailand': 'thailand',
-          'вьетнам': 'vietnam',
-          'vietnam': 'vietnam',
-          'шри-ланка': 'sri-lanka',
-          'шри ланка': 'sri-lanka',
-          'sri-lanka': 'sri-lanka',
-          'sri lanka': 'sri-lanka'
-        };
-        const slug = slugs[destinationKey];
-        const target = new URL(slug
-          ? `https://travel.yandex.ru/hotels/${slug}/`
-          : 'https://travel.yandex.ru/hotels/');
-
-        const checkin = document.getElementById('date')?.value || '';
-        const nights = Math.trunc(Number(document.getElementById('nights')?.value || 0));
-        const adults = Math.trunc(Number(document.getElementById('adults')?.value || 2));
-        if (/^\d{4}-\d{2}-\d{2}$/.test(checkin) && nights > 0) {
-          const checkout = new Date(`${checkin}T00:00:00Z`);
-          checkout.setUTCDate(checkout.getUTCDate() + nights);
-          target.searchParams.set('checkinDate', checkin);
-          target.searchParams.set('checkoutDate', checkout.toISOString().slice(0, 10));
-        }
-        target.searchParams.set('adults', String(Math.max(1, Math.min(8, adults || 2))));
-        target.searchParams.set('utm_source', 'turbot');
-        target.searchParams.set('utm_medium', 'miniapp');
-        target.searchParams.set('utm_campaign', 'yandex_travel');
-        target.searchParams.set('utm_content', 'telegram');
-
-        const affiliate = new URL('https://tp.media/r');
-        affiliate.searchParams.set('marker', '778488');
-        affiliate.searchParams.set('trs', '574782');
-        affiliate.searchParams.set('p', '5916');
-        affiliate.searchParams.set('u', target.toString());
-        return affiliate.toString();
-      };
-      yandexButton?.addEventListener('click', () => openExternal(yandexAffiliateUrl()));
-
-      const esimButton = document.getElementById('esim');
-      const airaloAffiliateUrl = () => {
-        const rawDestination = document.getElementById('destination')?.value || '';
-        const destinationKey = rawDestination.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/\s+/g, ' ').trim();
-        const destinations = {
-          'таиланд': 'https://www.airalo.com/thailand-esim',
-          'thailand': 'https://www.airalo.com/thailand-esim',
-          'вьетнам': 'https://www.airalo.com/vietnam-esim',
-          'vietnam': 'https://www.airalo.com/vietnam-esim',
-          'шри-ланка': 'https://www.airalo.com/sri-lanka-esim',
-          'шри ланка': 'https://www.airalo.com/sri-lanka-esim',
-          'sri-lanka': 'https://www.airalo.com/sri-lanka-esim',
-          'sri lanka': 'https://www.airalo.com/sri-lanka-esim'
-        };
-        const target = new URL(destinations[destinationKey] || 'https://www.airalo.com/');
-        target.searchParams.set('utm_source', 'turbot');
-        target.searchParams.set('utm_medium', 'miniapp');
-        target.searchParams.set('utm_campaign', 'esim');
-        target.searchParams.set('utm_content', 'telegram');
-        const affiliate = new URL('https://tp.media/r');
-        affiliate.searchParams.set('marker', '778488.turbot_esim_tg');
-        affiliate.searchParams.set('trs', '574782');
-        affiliate.searchParams.set('p', '8310');
-        affiliate.searchParams.set('campaign_id', '541');
-        affiliate.searchParams.set('u', target.toString());
-        return affiliate.toString();
-      };
-      esimButton?.addEventListener('click', () => openExternal(airaloAffiliateUrl()));
+      bindPartnerButton(
+        'yandex-travel',
+        'hotel',
+        'https://travel.yandex.ru/hotels/',
+        'Ищем отель…'
+      );
+      bindPartnerButton(
+        'transfer',
+        'transfer',
+        'https://r0meo1.ru/apreltour/transfer/?utm_source=telegram&utm_medium=miniapp&utm_campaign=turbot_transfer',
+        'Открываем трансфер…'
+      );
+      bindPartnerButton(
+        'esim',
+        'esim',
+        'https://www.airalo.com/',
+        'Подбираем eSIM…'
+      );
     })();
   </script>
 </body>
