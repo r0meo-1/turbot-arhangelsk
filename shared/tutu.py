@@ -94,9 +94,15 @@ COUNTRY_TO_RESORT: Dict[str, str] = {
 
 
 def resolve_destination_city(destination: str) -> str:
-    """Map a country name to the resort city clients actually mean."""
-    key = (destination or "").strip().lower()
-    return COUNTRY_TO_RESORT.get(key, (destination or "").strip())
+    """Map a country or "resort, country" suggestion to a search city."""
+    raw = (destination or "").strip()
+    if not raw:
+        return ""
+    parts = [part.strip() for part in raw.split(",", 1)]
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return parts[0]
+    key = raw.lower()
+    return COUNTRY_TO_RESORT.get(key, raw)
 
 
 # ---------------------------------------------------------------------------
