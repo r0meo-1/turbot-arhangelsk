@@ -60,6 +60,7 @@ from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
 from shared import travelpayouts_links as _travelpayouts_links
+from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.telegram_webapp import (
     MiniAppValidationError, validate_init_data, validate_trip_request,
@@ -2411,10 +2412,55 @@ def _admin_partners(chat_id: int, arg: str) -> bool:
         for destination, cnt in stats["lead_destinations"][:5]:
             lines.append(f"  {destination}: {cnt}")
 
+    lines.append("\n💶 Travelpayouts:")
+    try:
+        performance = _travelpayouts_stats.fetch_partner_performance(days)
+    except _travelpayouts_stats.TravelpayoutsStatsNotConfigured:
+        lines.append("  API статистики не настроен — локальные клики считаются, брони/доход пока нет.")
+    except _travelpayouts_stats.TravelpayoutsStatsError as exc:
+        logger.warning("Travelpayouts statistics unavailable: %s", exc)
+        lines.append("  Статистика временно недоступна; локальные клики выше сохранены.")
+    else:
+        totals = performance["totals"]
+        active_bookings = totals["paid"] + totals["processing"]
+        lines.extend([
+            f"  Брони: {totals['bookings']}",
+            f"    оплачено: {totals['paid']}",
+            f"    в обработке: {totals['processing']}",
+            f"    отменено: {totals['canceled']}",
+            f"  Подтверждённый доход: €{totals['paid_profit_eur']:.2f}",
+            f"  Стоимость неотменённых броней: €{totals['booking_value_eur']:.2f}",
+        ])
+        affiliate_events = stats["affiliate_events"]
+        if affiliate_events:
+            ratio = 100.0 * active_bookings / affiliate_events
+            lines.append(
+                f"  Агрегат active bookings / affiliate clicks: {ratio:.1f}%"
+            )
+
+        service_labels = {
+            "hotel": "🏨 Отели",
+            "esim": "📶 eSIM",
+            "transfer": "🚕 Трансферы",
+        }
+        service_rows = []
+        for service, values in performance["by_service"].items():
+            if not values["bookings"] and not values["paid_profit_eur"]:
+                continue
+            service_rows.append(
+                f"  {service_labels.get(service, service)}: "
+                f"{values['bookings']} брон., {values['paid']} оплач., "
+                f"€{values['paid_profit_eur']:.2f}"
+            )
+        if service_rows:
+            lines.append("  По сервисам:")
+            lines.extend(service_rows)
+
     lines.extend([
         "",
         "ℹ️ Без user-level ID: переходы и заявки не связываются по человеку.",
-        "Это агрегированное сопоставление объёмов, а не attribution клика к заявке.",
+        "Travelpayouts брони связывает с нашими SubID, но не с конкретным chat_id.",
+        "Проценты выше — агрегат по периоду, не user-level attribution.",
     ])
     send_message(chat_id, "\n".join(lines))
     return True
