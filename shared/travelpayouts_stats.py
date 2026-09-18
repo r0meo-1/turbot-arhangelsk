@@ -40,6 +40,9 @@ class TravelpayoutsStatsNotConfigured(TravelpayoutsStatsError):
 
 
 _cache: Dict[int, tuple[float, Dict[str, Any]]] = {}
+_last_success_at: float = 0.0
+_last_error_at: float = 0.0
+_last_error_code: str = ""
 
 
 def _cache_ttl() -> int:
@@ -267,13 +270,55 @@ def fetch_partner_performance(
     if not force and ttl > 0 and cached and cached[0] >= time.monotonic() - ttl:
         return copy.deepcopy(cached[1])
 
-    rows, start_date, end_date = _fetch_rows(days, timeout=timeout)
+    global _last_success_at, _last_error_at, _last_error_code
+    try:
+        rows, start_date, end_date = _fetch_rows(days, timeout=timeout)
+    except TravelpayoutsStatsError as exc:
+        _last_error_at = time.time()
+        _last_error_code = (
+            "not_configured"
+            if isinstance(exc, TravelpayoutsStatsNotConfigured)
+            else "api_error"
+        )
+        raise
+
     result = _summarize(rows, days=days, start_date=start_date, end_date=end_date)
+    _last_success_at = time.time()
+    _last_error_code = ""
     if ttl > 0:
         _cache[days] = (time.monotonic(), copy.deepcopy(result))
     return result
 
 
+def health_snapshot(*, now: float | None = None) -> Dict[str, Any]:
+    """Return non-secret operational state without making a network request."""
+    current = time.time() if now is None else float(now)
+    configured = bool(os.getenv("TRAVELPAYOUTS_API_TOKEN", "").strip())
+    if _last_success_at:
+        status = "ok"
+    elif _last_error_at:
+        status = "error"
+    else:
+        status = "never"
+    return {
+        "configured": configured,
+        "status": status,
+        "cache_ttl_seconds": _cache_ttl(),
+        "cached_windows": sorted(_cache),
+        "last_success_age_seconds": (
+            round(max(0.0, current - _last_success_at), 1)
+            if _last_success_at
+            else None
+        ),
+        "last_error_age_seconds": (
+            round(max(0.0, current - _last_error_at), 1)
+            if _last_error_at
+            else None
+        ),
+        "last_error_code": _last_error_code or None,
+    }
+
+
 def clear_cache() -> None:
-    """Clear in-memory statistics cache (used by tests and manual reloads)."""
+    """Clear in-memory statistics cache; health history remains intact."""
     _cache.clear()
