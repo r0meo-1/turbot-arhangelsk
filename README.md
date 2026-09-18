@@ -191,11 +191,23 @@ affiliate URL в таблице `partner_clicks` нет.
 
 `/partners` показывает число переходов, сервисы, способ разрешения ссылки
 (`api / redirect / direct`), топ направлений и число заявок за тот же период.
-**Это агрегированное сопоставление объёмов, не user-level attribution**:
-переход и заявка намеренно не связываются по человеку.
+Если задан `TRAVELPAYOUTS_API_TOKEN`, тот же отчёт через актуальный
+Travelpayouts Statistics API добавляет **брони, paid/processing/canceled,
+стоимость неотменённых броней и подтверждённый доход в EUR** по нашим SubID.
 
-Старые события удаляются автоматически через
-`PARTNER_ANALYTICS_RETENTION_DAYS` (по умолчанию 365 дней).
+В статистике поддерживаются текущие и исторические SubID:
+`tg_hotels`, `tg_esim`, `turbot_esim_tg`,
+`tg_kiwitaxi_transfer` и `tg_transfer`. Это важно: переименование метки не
+должно превращать прошлый доход в археологию.
+
+**Это агрегированное сопоставление объёмов, не user-level attribution**:
+переход и заявка намеренно не связываются по человеку. Travelpayouts связывает
+брони с SubID, но TurBot не хранит связь брони с Telegram chat_id.
+
+Старые локальные события удаляются автоматически через
+`PARTNER_ANALYTICS_RETENTION_DAYS` (по умолчанию 365 дней). Ответ
+Travelpayouts кратко кэшируется через `TRAVELPAYOUTS_STATS_CACHE_TTL`
+(по умолчанию 300 секунд).
 
 ---
 
