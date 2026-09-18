@@ -78,8 +78,8 @@ Render (по переменной `RENDER`), на своей VM выключен
 - **Бюджет** — одна максимальная сумма: `100000`, `100 000 ₽`, `100 тыс` или `100к`. Диапазон `100000–120000` просит уточнить лимит и не склеивает числа. В обычном Telegram-диалоге сумма на человека; Telegram и VK Mini App передают бюджет на всю поездку.  
 - **Проверка заявки** — в Telegram контакт сохраняет черновик; отправка менеджеру требует отдельного нажатия. Можно изменить поля или отменить. Кнопка старой версии черновика не отправляет новую заявку.  
 - **AI / template** — Groq или локальные шаблоны (`AI_MODE=template`, без «а у нас VPN лёг»)  
-- **SQLite** — сессии, юзеры, **история leads** (да, `/export` теперь не пустой — мы тоже удивились)  
-- **Админка** — `/send`, `/broadcast` (в фоне, webhook не стонет), `/stats`, `/analytics`, `/mdt`…  
+- **SQLite** — сессии, юзеры, **история leads** и анонимные события партнёрских переходов (без Telegram ID/телефона/URL)  
+- **Админка** — `/send`, `/broadcast` (в фоне, webhook не стонет), `/stats`, `/analytics`, `/partners [дни]`, `/mdt`…  
 - **MDT CRM** — lead / preorder / both, push, напоминания  
 - **VK-бот** — `vk_bot.py`, тот же мозг в `shared/`, связь через VK / телефон / MAX  
 - **Контакты** — согласие перед телефоном, `/privacy`, `/delete` (lead для заявки, не «навсегда в чате»)  
@@ -109,6 +109,8 @@ MDT, Tutu и AI **не блокируют** ответ Telegram. Потому ч
 | GET | `/` | «Я жив» |
 | GET | `/health` | JSON для uptime (и чтобы было что смотреть в 3 ночи) |
 | POST | `/webhook` | Telegram |
+| POST | `/miniapp/submit` | Telegram Mini App → черновик заявки |
+| POST | `/miniapp/partner-link` | Telegram Mini App → server-side партнёрская ссылка |
 | POST | `/vk/webhook` | VK |
 
 ---
@@ -167,6 +169,33 @@ curl "https://api.telegram.org/bot$BOT_TOKEN/setWebhook?url=https://ВАШ_ДО�
 pip install -r requirements-dev.txt
 pytest
 ```
+
+---
+
+## Партнёрская аналитика Telegram Mini App
+
+Кнопки **отелей**, **eSIM** и **трансфера** разрешаются через backend, поэтому
+`marker/trs/program/campaign_id` не лежат в клиентском HTML. При каждом
+успешном разрешении ссылки бот сохраняет только:
+
+`service · destination · mode · source · created_at`
+
+Никаких `chat_id`, username, телефона, Telegram `initData` или полного
+affiliate URL в таблице `partner_clicks` нет.
+
+Админу доступны:
+
+- `/analytics` — общий обзор, включая переходы за 7/30 дней;
+- `/partners` — подробности за 30 дней;
+- `/partners 7`, `/partners 90` и т. п. — окно от 1 до 365 дней.
+
+`/partners` показывает число переходов, сервисы, способ разрешения ссылки
+(`api / redirect / direct`), топ направлений и число заявок за тот же период.
+**Это агрегированное сопоставление объёмов, не user-level attribution**:
+переход и заявка намеренно не связываются по человеку.
+
+Старые события удаляются автоматически через
+`PARTNER_ANALYTICS_RETENTION_DAYS` (по умолчанию 365 дней).
 
 ---
 
