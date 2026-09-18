@@ -1,6 +1,9 @@
 package ru.r0meo1.turbot;
 
 import org.junit.Test;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.*;
 import static org.junit.Assert.*;
 
 /** Fake adapter tests only: no SDK, device, credentials or network delivery. */
@@ -145,8 +148,10 @@ public class AdControllerTest {
 
     @Test public void navigationBackgroundConsentAndBackInvalidateStaleInventory() {
         for (int change = 0; change < 4; change++) {
+          for (boolean loaded : new boolean[] {false, true}) {
             Fixture f = new Fixture();
-            f.ready();
+            assertTrue(f.controller.request(AdPlacement.POST_ACTION_INTERSTITIAL, false));
+            if (loaded) f.adapter.events.loaded();
             AdController.Adapter.Events stale = f.adapter.events;
             switch (change) {
                 case 0: f.controller.setFlow(AdFlow.SEARCH_LOADING); break;
@@ -162,6 +167,7 @@ public class AdControllerTest {
             stale.loaded(); stale.failed(); stale.impression(); stale.rewardCompleted(); stale.dismissed();
             assertEquals(AdController.State.READY, f.controller.state());
             assertEquals(0, f.impressions);
+          }
         }
     }
 
@@ -259,5 +265,34 @@ public class AdControllerTest {
         f.adapter.events.failed();
         assertEquals(AdController.State.FAILED, f.controller.state());
         assertEquals(0, f.impressions);
+    }
+
+    @Test public void concurrentTapRacesStartOnlyOneLoadAndOneDisplay() throws Exception {
+        Fixture f = new Fixture();
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        try {
+            for (boolean display : new boolean[] {false, true}) {
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<Boolean>> attempts = new ArrayList<>();
+                for (int i = 0; i < 32; i++) {
+                    attempts.add(pool.submit(() -> {
+                        start.await();
+                        return display ? f.controller.showIfReady(false)
+                                : f.controller.request(AdPlacement.POST_ACTION_INTERSTITIAL, false);
+                    }));
+                }
+                start.countDown();
+                int accepted = 0;
+                for (Future<Boolean> attempt : attempts) {
+                    if (attempt.get(5, TimeUnit.SECONDS)) accepted++;
+                }
+                assertEquals(1, accepted);
+                if (!display) f.adapter.events.loaded();
+            }
+            assertEquals(1, f.adapter.loads);
+            assertEquals(1, f.adapter.shows);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }
