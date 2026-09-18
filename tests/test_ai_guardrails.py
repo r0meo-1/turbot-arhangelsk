@@ -4,6 +4,7 @@ from shared.ai import generate_ai_selection
 from shared.ai_guardrails import (
     TRAVEL_ASSISTANT_SYSTEM_PROMPT,
     classify_restricted_topic,
+    classify_unverified_ai_output,
     guard_external_ai_message,
     redact_external_ai_text,
     restricted_topic_handoff,
@@ -149,3 +150,14 @@ def test_empty_external_ai_output_falls_back_to_template():
 
     assert result
     assert "предварительная информационная подсказка" not in result
+
+
+def test_output_guard_flags_only_high_risk_unverified_claims():
+    assert classify_unverified_ai_output("Тур стоит 150 000 ₽.") == "unverified_commercial_claim"
+    assert classify_unverified_ai_output("Осталось 2 места.") == "unverified_commercial_claim"
+    assert classify_unverified_ai_output("Виза не нужна.") == "unverified_visa_or_entry_claim"
+    assert (
+        classify_unverified_ai_output("Вам обязаны вернуть деньги.")
+        == "unverified_legal_or_refund_claim"
+    )
+    assert classify_unverified_ai_output("Возьмите лёгкую одежду и зарядку.") is None

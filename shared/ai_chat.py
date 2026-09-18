@@ -13,6 +13,7 @@ from typing import Any, Optional
 
 from shared.ai_guardrails import (
     TRAVEL_ASSISTANT_SYSTEM_PROMPT,
+    classify_unverified_ai_output,
     guard_external_ai_message,
     restricted_topic_handoff,
 )
@@ -42,6 +43,11 @@ _SENSITIVE_TEXT = (
 _FALLBACK_TEXT = (
     "Сейчас ИИ-помощник недоступен. "
     "Параметры поездки можно продолжить оформлять без него, менеджер подключится при необходимости."
+)
+
+_UNVERIFIED_FACT_TEXT = (
+    "Цена, наличие и другие условия должны приходить из проверенного источника. "
+    "ИИ не будет выдавать непроверенный факт. Менеджер уточнит актуальные данные."
 )
 
 
@@ -126,6 +132,25 @@ def generate_ai_chat_reply(
         content = str(response.choices[0].message.content or "").strip()
         if not content:
             raise ValueError("empty AI chat response")
+
+        output_reason = classify_unverified_ai_output(content)
+        if output_reason:
+            topic = None
+            text = _UNVERIFIED_FACT_TEXT
+            if output_reason == "unverified_visa_or_entry_claim":
+                topic = "visa_or_entry"
+                text = restricted_topic_handoff(topic)
+            elif output_reason == "unverified_legal_or_refund_claim":
+                topic = "legal_or_contract"
+                text = restricted_topic_handoff(topic)
+            return AIChatReply(
+                text=text,
+                used_external_model=True,
+                handoff_required=True,
+                reason=output_reason,
+                topic=topic,
+            )
+
         return AIChatReply(
             text=content,
             used_external_model=True,
