@@ -950,6 +950,17 @@ def migrate_json_state() -> None:
 # Session helpers
 # ---------------------------------------------------------------------------
 
+def _sqlite_bool(value: Any) -> Optional[int]:
+    """Normalize Python/SQLite boolean representations without turning NULL into false."""
+    if value is None:
+        return None
+    if value is True or value == 1 or value == "1":
+        return 1
+    if value is False or value == 0 or value == "0":
+        return 0
+    return None
+
+
 def set_session(chat_id: int, data: Dict[str, Any]) -> None:
     """Insert or replace a dialog session."""
     now = int(time.time())
@@ -992,7 +1003,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("infants"),
                 data.get("budget"),
                 data.get("budget_scope"),
-                1 if data.get("direct_only") is True else 0 if data.get("direct_only") is False else None,
+                _sqlite_bool(data.get("direct_only")),
                 data.get("phone"),
                 data.get("review_token"),
                 data.get("updated_at", now),
@@ -1017,11 +1028,16 @@ def update_session(chat_id: int, **kwargs) -> None:
 
 
 def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
-    """Return the current session for a user, or None."""
+    """Return the current session for a user, normalizing SQLite booleans."""
     with _db_cursor() as cur:
         cur.execute("SELECT * FROM sessions WHERE chat_id = ?", (chat_id,))
         row = cur.fetchone()
-        return dict(row) if row else None
+    if not row:
+        return None
+    data = dict(row)
+    if data.get("direct_only") is not None:
+        data["direct_only"] = bool(data["direct_only"])
+    return data
 
 
 def session_exists(chat_id: int) -> bool:
@@ -1101,7 +1117,7 @@ def save_lead(
                 info.get("infants"),
                 info.get("budget"),
                 info.get("budget_scope"),
-                1 if info.get("direct_only") is True else 0 if info.get("direct_only") is False else None,
+                _sqlite_bool(info.get("direct_only")),
                 phone,
                 now,
             ),
@@ -4456,6 +4472,8 @@ def load_state() -> None:
             d = dict(row)
             chat_id = d.pop("chat_id")
             d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
+            if d.get("direct_only") is not None:
+                d["direct_only"] = bool(d["direct_only"])
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():
