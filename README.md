@@ -187,7 +187,8 @@ affiliate URL в таблице `partner_clicks` нет.
 
 - `/analytics` — общий обзор, включая переходы за 7/30 дней;
 - `/partners` — подробности за 30 дней;
-- `/partners 7`, `/partners 90` и т. п. — окно от 1 до 365 дней.
+- `/partners 7`, `/partners 90` и т. п. — окно от 1 до 365 дней;
+- `/partners reload` или `/partners 90 reload` — обойти cache и запросить свежие данные Travelpayouts.
 
 `/partners` показывает число переходов, сервисы, способ разрешения ссылки
 (`api / redirect / direct`), топ направлений и число заявок за тот же период.
@@ -197,7 +198,7 @@ Travelpayouts Statistics API добавляет **брони, paid/processing/ca
 
 В статистике поддерживаются текущие и исторические SubID:
 `tg_hotels`, `tg_esim`, `turbot_esim_tg`,
-`tg_kiwitaxi_transfer` и `tg_transfer`. Это важно: переименование метки не
+текущий `tg_transfer` и исторический `tg_kiwitaxi_transfer`. Это важно: переименование метки не
 должно превращать прошлый доход в археологию.
 
 **Это агрегированное сопоставление объёмов, не user-level attribution**:
@@ -207,7 +208,9 @@ Travelpayouts Statistics API добавляет **брони, paid/processing/ca
 Старые локальные события удаляются автоматически через
 `PARTNER_ANALYTICS_RETENTION_DAYS` (по умолчанию 365 дней). Ответ
 Travelpayouts кратко кэшируется через `TRAVELPAYOUTS_STATS_CACHE_TTL`
-(по умолчанию 300 секунд).
+(по умолчанию 300 секунд). `/health` показывает только безопасный статус
+интеграции (настроена ли она, возраст последнего успеха/ошибки и cache), без
+API-token и без денежных данных.
 
 ---
 
