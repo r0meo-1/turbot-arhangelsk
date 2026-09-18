@@ -1,0 +1,91 @@
+name: QA bug report
+description: Report a reproducible problem found while testing TurBot
+title: "[QA] "
+body:
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where did the problem happen?
+      options:
+        - Telegram Mini App
+        - VK Mini App
+        - Telegram bot chat
+        - VK bot/community chat
+        - Backend/API
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Device, OS, browser/app version if known
+      placeholder: "Example: Android 15, Telegram 12.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: preconditions
+    attributes:
+      label: Preconditions
+      description: Anything that must be true before reproducing the bug
+      placeholder: "Example: Mini App opened from /start, no saved draft"
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Number the exact actions needed to reproduce the issue
+      placeholder: |
+        1. Open ...
+        2. Enter ...
+        3. Tap ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      placeholder: "What should have happened?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      placeholder: "What happened instead?"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Blocker
+        - Major
+        - Minor
+        - Cosmetic
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Screenshot / video / logs
+      description: Attach evidence here. Remove or blur personal data and secrets.
+      placeholder: "Drag files here or paste a safe excerpt."
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I did not include passwords, tokens, payment data, or unnecessary personal information.
+          required: true
+        - label: I did not intentionally create a real booking/payment while testing.
+          required: true
