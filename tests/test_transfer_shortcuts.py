@@ -71,7 +71,7 @@ def test_telegram_miniapp_keeps_affiliate_configuration_server_side():
         "5916",
         "8310",
         "campaign_id",
-        "partnerLink",
+        "affiliate.searchParams",
     )
     for value in forbidden:
         assert value not in TG_INDEX
