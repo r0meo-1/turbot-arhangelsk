@@ -20,6 +20,11 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Start.io remains off unless the build is explicitly enabled, a real
+        // App ID is provided, and an advertising-consent decision is recorded.
+        StartIoManager.initializeIfAllowed(this);
+
         setContentView(R.layout.activity_main);
 
         webView = findViewById(R.id.webview);
