@@ -90,6 +90,22 @@ def test_health_endpoint(client):
     assert "bot_token_configured" not in data
     assert data["mdt_retry"]["available"] is True
     assert data["mdt_retry"]["pending"] == 0
+    assert "travelpayouts_stats" in data
+    assert "configured" in data["travelpayouts_stats"]
+    assert "status" in data["travelpayouts_stats"]
+
+
+def test_health_travelpayouts_stats_never_exposes_token(client, monkeypatch):
+    secret = "tp-secret-should-never-appear"
+    monkeypatch.setenv("TRAVELPAYOUTS_API_TOKEN", secret)
+
+    resp = client.get("/health")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    data = resp.get_json()
+    assert data["travelpayouts_stats"]["configured"] is True
+    assert secret not in body
 
 
 def test_health_reports_mdt_retry_queue_without_pii(client, monkeypatch):

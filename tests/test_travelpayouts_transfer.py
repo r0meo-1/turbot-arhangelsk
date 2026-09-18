@@ -71,7 +71,7 @@ def test_partner_link_api_request(monkeypatch):
     assert captured["headers"]["X-Access-Token"] == "secret-token"
     assert captured["json"]["marker"] == 778488
     assert captured["json"]["trs"] == 574782
-    assert captured["json"]["links"][0]["sub_id"] == "tg_kiwitaxi_transfer"
+    assert captured["json"]["links"][0]["sub_id"] == "tg_transfer"
     assert captured["json"]["links"][0]["url"] == "https://kiwitaxi.com/en/thailand"
 
 

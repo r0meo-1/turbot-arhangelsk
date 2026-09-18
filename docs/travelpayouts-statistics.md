@@ -37,8 +37,8 @@ The reporting client recognizes both current and historical identifiers:
 | `tg_hotels` | Yandex Travel hotels |
 | `tg_esim` | Airalo eSIM |
 | `turbot_esim_tg` | historical Airalo Telegram placement |
-| `tg_kiwitaxi_transfer` | Kiwitaxi transfer |
-| `tg_transfer` | transfer alias reserved for normalized naming |
+| `tg_transfer` | current Kiwitaxi transfer placement |
+| `tg_kiwitaxi_transfer` | historical Kiwitaxi transfer placement |
 
 Rows from unrelated Travelpayouts tools are ignored.
 
@@ -66,6 +66,10 @@ do not contain Telegram IDs, and Travelpayouts action rows are not joined to a
   that external statistics are temporarily unavailable.
 - Duplicate action updates: the newest record per `action_id` wins.
 - API result cache: `TRAVELPAYOUTS_STATS_CACHE_TTL=300` by default.
+- `/partners reload` or `/partners 90 reload` bypasses that cache once.
+- `/health` exposes only safe operational metadata: configured/not configured,
+  cache windows, last success/error age, and a sanitized error code. It never
+  returns the API token.
 - No Travelpayouts API response is persisted into SQLite.
 
 ## Production environment

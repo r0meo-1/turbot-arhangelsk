@@ -477,7 +477,7 @@ ADMIN_HELP = (
     "/stats — статистика\n"
     "/restart — сбросить все активные сессии\n"
     "/analytics — общая аналитика (заявки, направления, партнёры)\n"
-    "/partners [дни] — партнёрские переходы за 1–365 дней\n"
+    "/partners [дни] [reload] — партнёрские переходы, брони и доход\n"
     "/export — экспорт завершённых заявок\n"
     "/followup — напоминания незавершившим\n"
     "/mdt [test|reload] — статус MDT CRM\n"
@@ -2359,11 +2359,31 @@ def _admin_analytics(chat_id: int, arg: str) -> bool:
 def _admin_partners(chat_id: int, arg: str) -> bool:
     """Show aggregate partner-link activity for a configurable window."""
     raw = (arg or "").strip()
-    if raw:
+    tokens = raw.split() if raw else []
+    force_refresh = False
+    day_tokens: List[str] = []
+    for token in tokens:
+        lowered = token.lower()
+        if lowered in {"reload", "refresh"}:
+            force_refresh = True
+        else:
+            day_tokens.append(token)
+
+    if len(day_tokens) > 1:
+        send_message(
+            chat_id,
+            "Использование: /partners [дни] [reload], например /partners 30 reload",
+        )
+        return True
+
+    if day_tokens:
         try:
-            days = int(raw)
+            days = int(day_tokens[0])
         except ValueError:
-            send_message(chat_id, "Использование: /partners [дни], например /partners 30")
+            send_message(
+                chat_id,
+                "Использование: /partners [дни] [reload], например /partners 30 reload",
+            )
             return True
         if not 1 <= days <= 365:
             send_message(chat_id, "Период /partners должен быть от 1 до 365 дней.")
@@ -2414,13 +2434,18 @@ def _admin_partners(chat_id: int, arg: str) -> bool:
 
     lines.append("\n💶 Travelpayouts:")
     try:
-        performance = _travelpayouts_stats.fetch_partner_performance(days)
+        performance = _travelpayouts_stats.fetch_partner_performance(
+            days,
+            force=force_refresh,
+        )
     except _travelpayouts_stats.TravelpayoutsStatsNotConfigured:
         lines.append("  API статистики не настроен — локальные клики считаются, брони/доход пока нет.")
     except _travelpayouts_stats.TravelpayoutsStatsError as exc:
         logger.warning("Travelpayouts statistics unavailable: %s", exc)
         lines.append("  Статистика временно недоступна; локальные клики выше сохранены.")
     else:
+        if force_refresh:
+            lines.append("  ♻️ Данные принудительно обновлены.")
         totals = performance["totals"]
         active_bookings = totals["paid"] + totals["processing"]
         lines.extend([
@@ -2438,11 +2463,6 @@ def _admin_partners(chat_id: int, arg: str) -> bool:
                 f"  Агрегат active bookings / affiliate clicks: {ratio:.1f}%"
             )
 
-        service_labels = {
-            "hotel": "🏨 Отели",
-            "esim": "📶 eSIM",
-            "transfer": "🚕 Трансферы",
-        }
         service_rows = []
         for service, values in performance["by_service"].items():
             if not values["bookings"] and not values["paid_profit_eur"]:
@@ -2464,7 +2484,6 @@ def _admin_partners(chat_id: int, arg: str) -> bool:
     ])
     send_message(chat_id, "\n".join(lines))
     return True
-
 
 def _admin_export(chat_id: int, arg: str) -> bool:
     """Export completed leads as a formatted message (last 50)."""
@@ -3838,6 +3857,7 @@ def health() -> Any:
         ),
         "bot_mode": BOT_MODE,
         "mdt_retry": _mdt_retry_health(now),
+        "travelpayouts_stats": _travelpayouts_stats.health_snapshot(now=now),
     })
     # 503 rather than 200-with-a-sad-field: monitoring reads status codes, and
     # a body nobody parses is how the last two outages stayed invisible.
