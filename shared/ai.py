@@ -6,6 +6,7 @@ import logging
 from typing import Any, Optional
 
 from shared.templates import template_selection
+from shared.ai_guardrails import TRAVEL_ASSISTANT_SYSTEM_PROMPT, redact_external_ai_text
 
 logger = logging.getLogger("turbot.shared.ai")
 
@@ -35,23 +36,28 @@ def generate_ai_selection(
         return template_selection(destination, dates, people, budget)
 
     try:
+        safe_destination = redact_external_ai_text(destination)
+        safe_dates = redact_external_ai_text(dates)
+        safe_people = redact_external_ai_text(people)
+        safe_budget = redact_external_ai_text(budget)
         prompt = (
-            "Ты — эксперт по туризму туристического агентства «АПРЕЛЬ тур».\n"
-            "Не предлагай конкретные туры и отели — их подбирает менеджер.\n\n"
             "Клиент хочет:\n"
-            f"- Направление: {destination}\n"
-            f"- Даты: {dates}\n"
-            f"- Количество человек: {people}\n"
-            f"- Бюджет: {budget} рублей\n\n"
+            f"- Направление: {safe_destination}\n"
+            f"- Даты: {safe_dates}\n"
+            f"- Количество человек: {safe_people}\n"
+            f"- Бюджет: {safe_budget} рублей\n\n"
             "Напиши короткое (3-4 предложения), дружелюбное сообщение с:\n"
-            "- Что ожидает в этом направлении\n"
-            "- Почему это отличный выбор\n"
-            "- Что взять с собой\n\n"
-            "Используй эмодзи. Не упоминай цены и конкретные отели."
+            "- Что обычно ожидает турист в этом направлении\n"
+            "- Почему направление может подойти под такой запрос\n"
+            "- Что обычно полезно взять с собой\n\n"
+            "Не называй конкретные отели и не добавляй непроверенные коммерческие факты."
         )
         response = groq_client.chat.completions.create(
             model=groq_model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": TRAVEL_ASSISTANT_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
             max_tokens=300,
             temperature=0.7,
             # Explicit timeout: without it a hung call leaks the background
