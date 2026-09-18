@@ -56,17 +56,74 @@ existing persistent frequency gate. A denied personalization decision remains a
 valid decision; TurBot always remains accessible. SDK initialization or consent
 submission exceptions return failure without blocking TurBot.
 
-The shell currently has **no ad load/show calls and no trusted WebView flow
-bridge**. Do not infer safe state from page load completion, URLs, or arbitrary
-JavaScript. Future integration must establish trusted flow events, invalidate
-pending inventory on navigation/background/consent changes, and recheck all gates
-immediately before display. Mark the frequency timestamp only after an actual
-impression. Never wait for inventory before completing a primary action, retry
-automatically in a loop, or grant a reward on load failure/close alone.
+`AdController` now separates eligibility from LOADING, READY, SHOWING, DISMISSED
+and FAILED. It serializes requests/callbacks, uses generation tickets to reject
+stale callbacks, and rechecks flow, foreground, current configuration, successfully
+applied/stored consent and frequency immediately before display. Loading never
+automatically displays an ad. A primary action must complete independently;
+`showIfReady` returns immediately if inventory is unavailable. There are no retry
+loops. Pending load/ready inventory expires after 30 seconds (checked on requests,
+display attempts and load callbacks, with an explicit expiry hook for a future
+timeout scheduler). Only a confirmed impression writes the persistent frequency timestamp;
+clock rollback/overflow fails closed. The consent gate also rejects a stored
+decision that differs from the decision successfully submitted to Start.io.
 
-Android CI runs policy unit tests and builds the disabled debug APK without an
-App ID. This verifies infrastructure, not live SDK delivery or production consent
-compliance.
+Navigation, back, backgrounding, destruction and privacy-choice changes invalidate
+pending inventory. A showing ad retains its occupied slot until dismissal/failure
+is confirmed, even if cancellation or show throws, preventing a second overlapping ad.
+An uncertain thrown show call quarantines the occupied slot until the adapter confirms
+a terminal event; it cannot be interpreted as proof that no SDK window opened.
+A confirmed impression during cancellation still counts toward the cap. Rewards
+require explicit request and display taps, an impression, and the adapter's verified
+completion callback, once only; invalidation, close and failure cannot grant them.
+
+The shell still has **no ad request/show call sites and no trusted WebView flow
+bridge**. Its controller has an unavailable delivery adapter and permanent UNKNOWN
+flow; even a configured build cannot load/show ads through this shell. The page-start
+and navigation callbacks only invalidate; they never establish eligibility. No
+JavaScript interface is installed. Resume does not restore inventory or safe state.
+
+## Remaining integration and activation work for issue #98
+
+Android-only inspection cannot establish authoritative funnel state in the remote
+WebView. A separate coordinated frontend/native change must define explicit events
+for onboarding, parameter entry, loading, results actually rendered, lead/contact
+submission and completed actions. Specify and review the trust boundary before
+implementation: exact approved HTTPS origins/main frame, authenticated session and
+document identity, navigation generation, ordered events, and rejection of stale,
+replayed, unexpected or subframe messages. Origin checks alone do not prove a
+completed action. Do not accept arbitrary JavaScript claims or derive state from
+URLs/page completion. Until the protocol and event producers are reviewed and tested,
+keep UNKNOWN. SPA transitions must invalidate inventory before entering a protected
+flow, including transitions without page navigation.
+
+No real SDK delivery adapter is included. Future adapters must preserve the controller
+contract: asynchronous/nonblocking load/show, bounded load timeout reported as failure,
+inventory disposal, confirmed dismissal/failure after cancellation, correct SDK
+impression event and verified rewarded completion event (before terminal dismissal).
+Marshal SDK work to Android's UI thread and review SDK callback ordering/threading
+against the pinned version. Do not wire ordinary display/close callbacks as reward
+completion. Add controller call sites only after trustworthy flow integration, and
+connect real gates to `StartIoManager.mayRequest` and impressions to
+`AdFrequencyGate.markShown`. Define the optional reward product and durable redemption
+semantics before exposing a rewarded CTA. Native card rendering, ad labeling, spacing
+and disposal remain unimplemented. Return and Splash ads must remain disabled.
+
+Publisher Portal registration, the real build-supplied App ID and dashboard placement
+configuration are still required. No App ID or seller entries are included here.
+Publish app-ads.txt only from exact dashboard entries. Review jurisdiction-specific
+disclosures/CMP requirements and denied-personalization behavior before enabling any
+SDK data flow; update production privacy text only with confirmed enabled behavior.
+Keep production advertising disabled and issue #98 open throughout these steps.
+
+Android CI runs policy/controller JUnit tests and builds the disabled debug APK
+without an App ID. The controllable fake adapter tests protected/unknown flows,
+missing configuration, granted/denied/unknown and changed consent, offline/load/show
+failure, close/back, rapid/reentrant taps, background/resume, stale callbacks,
+verified reward completion, and frequency boundaries. These are fake-ad infrastructure
+tests, not live SDK, WebView integration, device validation or production consent
+compliance. Real SDK callback ordering, network behavior, physical/emulated device
+behavior, cancellation and reward delivery remain unverified.
 
 Before activation, record device/build and outcomes for: cold/warm start; each
 consent decision and later changes; all critical flows; offline/slow network;
