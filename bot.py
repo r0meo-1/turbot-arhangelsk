@@ -126,9 +126,21 @@ def _env_int(name: str, default: int = 0) -> int:
 BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
 ADMIN_ID          = _env_int("ADMIN_ID", 0)
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL        = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-AI_MODE           = os.getenv("AI_MODE", "groq").lower().strip()
+GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+# External AI is opt-in. If AI_MODE is absent, deterministic templates win.
+AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 AI_CHAT_ENABLED   = os.getenv("AI_CHAT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
+# A second gate prevents an allowlisted beta from transmitting arbitrary text
+# merely because a Groq key happens to exist on the host.
+AI_CHAT_EXTERNAL_PROVIDER_ENABLED = os.getenv(
+    "AI_CHAT_EXTERNAL_PROVIDER_ENABLED", "false"
+).lower().strip() in ("1", "true", "yes")
+# Groq documents that inference content may otherwise be retained for reliability/
+# abuse monitoring. This is a manual assertion about the actual Groq Console org;
+# the application cannot verify the account setting through the chat API.
+GROQ_ZDR_CONFIRMED = os.getenv("GROQ_ZDR_CONFIRMED", "false").lower().strip() in (
+    "1", "true", "yes"
+)
 AI_CHAT_MAX_CHARS = max(100, min(8000, _env_int("AI_CHAT_MAX_CHARS", 2000)))
 AI_CHAT_TIMEOUT_SECONDS = max(3, min(30, _env_int("AI_CHAT_TIMEOUT_SECONDS", 15)))
 PORT                 = _env_int("PORT", 5000)
@@ -496,6 +508,7 @@ ADMIN_HELP = (
     "/mdt [test|reload] — статус MDT CRM\n"
     "/ai <вопрос> — закрытая AI beta (если включена)\n"
     "/ai_stats — агрегированная статистика AI beta\n"
+    "/ai_status — безопасный статус provider gates\n"
     "/help — эта справка\n\n"
     "В уведомлении о заявке есть кнопка «✍️ Ответить клиенту».\n"
     "HTML: <b>жирный</b>, <i>курсив</i>"
@@ -2130,6 +2143,15 @@ def _ai_beta_allowed(chat_id: int) -> bool:
     return AI_CHAT_ENABLED and chat_id in AI_CHAT_BETA_IDS
 
 
+def _ai_external_provider_ready() -> bool:
+    """Fail closed until external free-form transfer and Groq ZDR are explicit."""
+    return (
+        AI_CHAT_EXTERNAL_PROVIDER_ENABLED
+        and GROQ_ZDR_CONFIRMED
+        and groq_client is not None
+    )
+
+
 def _handle_ai_beta_command(chat_id: int, text: str) -> bool:
     """Handle /ai for allowlisted internal testers without altering lead state."""
     command, _, raw_question = text.partition(" ")
@@ -2155,7 +2177,7 @@ def _handle_ai_beta_command(chat_id: int, text: str) -> bool:
     reply = _generate_ai_chat_reply(
         question,
         enabled=True,
-        groq_client=groq_client,
+        groq_client=groq_client if _ai_external_provider_ready() else None,
         groq_model=GROQ_MODEL,
         timeout=float(AI_CHAT_TIMEOUT_SECONDS),
         log=logger,
@@ -2215,6 +2237,23 @@ def _admin_ai_stats(chat_id: int, arg: str) -> bool:
     for outcome, count in metrics.items():
         lines.append(f"• {outcome}: {count}")
     send_message(chat_id, "\n".join(lines))
+    return True
+
+
+def _admin_ai_status(chat_id: int, arg: str) -> bool:
+    # Never print secrets or tester IDs. These booleans are sufficient to
+    # diagnose why the external beta is intentionally failing closed.
+    send_message(
+        chat_id,
+        "🧪 AI beta status\n\n"
+        f"beta_enabled: {AI_CHAT_ENABLED}\n"
+        f"allowlisted_testers: {len(AI_CHAT_BETA_IDS)}\n"
+        f"external_provider_enabled: {AI_CHAT_EXTERNAL_PROVIDER_ENABLED}\n"
+        f"groq_key_configured: {bool(GROQ_API_KEY)}\n"
+        f"groq_zdr_confirmed: {GROQ_ZDR_CONFIRMED}\n"
+        f"external_provider_ready: {_ai_external_provider_ready()}\n"
+        f"model: {GROQ_MODEL}",
+    )
     return True
 
 
@@ -2735,6 +2774,7 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/mdt":          _admin_mdt,
     "/tutu":         _admin_tutu,
     "/ai_stats":     _admin_ai_stats,
+    "/ai_status":    _admin_ai_status,
 }
 
 

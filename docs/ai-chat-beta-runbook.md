@@ -21,21 +21,25 @@ The command is intentionally absent from the public Telegram command menu.
 ```env
 AI_CHAT_ENABLED=false
 AI_CHAT_BETA_IDS=
+AI_CHAT_EXTERNAL_PROVIDER_ENABLED=false
+GROQ_ZDR_CONFIRMED=false
 AI_CHAT_MAX_CHARS=2000
 AI_CHAT_TIMEOUT_SECONDS=15
 GROQ_API_KEY=
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 ```
 
 Recommended rollout order:
 
 1. keep `AI_CHAT_ENABLED=false` in production;
 2. configure the provider credential in the server secret store, never Git;
-3. enable the flag only on an internal/beta deployment;
-4. test first as `ADMIN_ID`;
-5. add individual numeric Telegram IDs to `AI_CHAT_BETA_IDS` only when needed;
-6. inspect `/ai_stats` for fallback and handoff rates;
-7. disable the flag immediately if provider/data-flow review changes or a safety regression appears.
+3. enable `AI_CHAT_ENABLED=true` only on an internal/beta deployment;
+4. test the local/fail-closed path first as `ADMIN_ID`;
+5. enable Zero Data Retention in the actual Groq Console organization and verify it manually;
+6. only then set `GROQ_ZDR_CONFIRMED=true` and `AI_CHAT_EXTERNAL_PROVIDER_ENABLED=true`;
+7. add individual numeric Telegram IDs to `AI_CHAT_BETA_IDS` only when needed;
+8. inspect `/ai_status` and `/ai_stats` for provider readiness, fallback and handoff rates;
+9. disable the external-provider gate immediately if provider/data-flow review changes or a safety regression appears.
 
 ## Data flow implemented in code
 
@@ -75,7 +79,9 @@ The normal lead database remains separate. Running `/ai` does not change the use
 
 ## Provider review still required
 
-The current code can call Groq when `GROQ_API_KEY` is configured. Before any public free-form rollout, the business owner/reviewer must verify the then-current provider terms and actual production data flow, including at minimum:
+The current code can call Groq only when the beta, external-provider and manual ZDR gates are all satisfied. The application cannot query the Groq Console's ZDR setting, so `GROQ_ZDR_CONFIRMED=true` is an operational assertion, not evidence of legal approval.
+
+See `docs/groq-provider-review-2026-09-18.md` for the current provider-fact snapshot and unresolved review items. Before any public free-form rollout, the business owner/reviewer must still verify the then-current provider terms and actual production data flow, including at minimum:
 
 - controller/processor roles and any data-processing agreement;
 - provider retention and logging behavior;
@@ -93,6 +99,9 @@ Record pass/fail without pasting customer text into issues or logs:
 
 - disabled flag makes `/ai` behave as an unknown command;
 - non-allowlisted chat cannot call the model;
+- missing external-provider gate cannot call the model;
+- missing ZDR confirmation cannot call the model;
+- `/ai_status` exposes booleans/model only, never credentials or tester IDs;
 - allowlisted safe travel question returns an identified AI-assistant answer;
 - card/passport/token content never reaches the provider;
 - legal/refund/visa/health/insurance questions hand off;
