@@ -30,4 +30,6 @@ def test_agent_extension_has_no_embedded_secrets():
 def test_agent_extension_points_only_to_protected_agent_endpoint():
     js = (EXT / "sidepanel.js").read_text(encoding="utf-8")
     assert "https://bot.r0meo1.ru/agent-extension/lead" in js
+    assert "https://bot.r0meo1.ru/agent-extension/leads" in js
+    assert "https://bot.r0meo1.ru/agent-extension/status" in js
     assert "/website/lead" not in js
