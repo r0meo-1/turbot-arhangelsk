@@ -838,20 +838,22 @@ def init_db() -> None:
         cur.execute("PRAGMA journal_mode=WAL")
 
 
-def _ai_chat_metric_key(reply: Any) -> str:
+def _ai_chat_metric_key(reply: Any, *, source: str = "beta") -> str:
     """Map an AI reply to a bounded aggregate outcome with no user content."""
     reason = re.sub(r"[^a-z0-9_]+", "_", str(getattr(reply, "reason", "") or "").lower())
     reason = reason.strip("_")[:64] or "none"
+    source_key = re.sub(r"[^a-z0-9_]+", "_", str(source or "beta").lower()).strip("_")[:32] or "beta"
+    prefix = "" if source_key == "beta" else f"{source_key}_"
     if bool(getattr(reply, "handoff_required", False)):
-        return f"handoff_{reason}"
+        return f"{prefix}handoff_{reason}"
     if bool(getattr(reply, "used_external_model", False)):
-        return "external_ok"
-    return f"fallback_{reason}"
+        return f"{prefix}external_ok"
+    return f"{prefix}fallback_{reason}"
 
 
-def record_ai_chat_outcome(reply: Any) -> None:
-    """Increment privacy-minimized beta telemetry; never store prompt/response text."""
-    outcome = _ai_chat_metric_key(reply)
+def record_ai_chat_outcome(reply: Any, *, source: str = "beta") -> None:
+    """Increment privacy-minimized AI telemetry; never store prompt/response text."""
+    outcome = _ai_chat_metric_key(reply, source=source)
     try:
         with _db_cursor(commit=True) as cur:
             cur.execute(
@@ -2371,16 +2373,28 @@ def _latest_lead_assist_context(chat_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def _notify_lead_assist_handoff(chat_id: int, question: str, reason: str) -> None:
+def _notify_lead_assist_handoff(
+    chat_id: int,
+    question: str,
+    reason: str,
+    info: Optional[Dict[str, Any]] = None,
+) -> None:
     """Tell the human owner when the guarded AI refuses or escalates a question."""
     global _last_lead_client_id
     safe_question = redact_external_ai_text(question).strip()[:1200] or "(пустой вопрос)"
     reason_label = (reason or "human_required")[:80]
+    trip_context = _format_lead_assist_context(info or {}).strip()
+    context_block = (
+        f"\n\nПараметры поездки:\n{trip_context}"
+        if trip_context
+        else ""
+    )
     manager_text = (
         "🤖→👩‍💼 Вопрос клиента требует менеджера\n"
         f"Telegram ID: {chat_id}\n"
         f"Причина: {reason_label}\n\n"
-        f"Вопрос: {safe_question}\n\n"
+        f"Вопрос: {safe_question}"
+        f"{context_block}\n\n"
         f"Ответить в Telegram: /send {chat_id}"
     )
     send_lead_owner_vk(manager_text)
@@ -2436,9 +2450,10 @@ def _handle_lead_assist(chat_id: int, question: str) -> bool:
         timeout=float(AI_CHAT_TIMEOUT_SECONDS),
         log=logger,
     )
+    record_ai_chat_outcome(reply, source="lead_assist")
     send_message(chat_id, f"🤖 {reply.text}")
     if reply.handoff_required or reply.reason in {"provider_unavailable", "provider_error"}:
-        _notify_lead_assist_handoff(chat_id, question, reply.reason)
+        _notify_lead_assist_handoff(chat_id, question, reply.reason, info=info)
     return True
 
 
