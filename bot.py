@@ -64,7 +64,7 @@ from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.telegram_webapp import (
-    MiniAppValidationError, validate_init_data, validate_trip_request,
+    MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
 
 load_dotenv()
@@ -647,6 +647,7 @@ def init_db() -> None:
                 budget_scope TEXT,
                 direct_only INTEGER,
                 phone TEXT,
+                source_tag TEXT,
                 updated_at INTEGER NOT NULL
             )
             """
@@ -670,6 +671,7 @@ def init_db() -> None:
                 budget_scope TEXT,
                 direct_only INTEGER,
                 phone TEXT NOT NULL,
+                source_tag TEXT,
                 created_at INTEGER NOT NULL
             )
             """
@@ -696,6 +698,8 @@ def init_db() -> None:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN budget_scope TEXT")
             if "direct_only" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN direct_only INTEGER")
+            if "source_tag" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN source_tag TEXT")
         cur.execute("PRAGMA table_info(sessions)")
         if "review_token" not in {row[1] for row in cur.fetchall()}:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
@@ -970,9 +974,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
             INSERT INTO sessions (
                 chat_id, state, destination, origin, dates, nights, people,
                 kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, review_token, updated_at
+                phone, review_token, source_tag, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
@@ -988,6 +992,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 direct_only=excluded.direct_only,
                 phone=excluded.phone,
                 review_token=excluded.review_token,
+                source_tag=excluded.source_tag,
                 updated_at=excluded.updated_at
             """,
             (
@@ -1006,6 +1011,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 _sqlite_bool(data.get("direct_only")),
                 data.get("phone"),
                 data.get("review_token"),
+                data.get("source_tag"),
                 data.get("updated_at", now),
             ),
         )
@@ -1016,7 +1022,7 @@ def update_session(chat_id: int, **kwargs) -> None:
     allowed = {
         "state", "destination", "origin", "dates", "nights", "people", "kids",
         "kids_ages", "infants", "budget", "budget_scope", "direct_only",
-        "phone", "review_token", "updated_at",
+        "phone", "review_token", "source_tag", "updated_at",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1100,8 +1106,8 @@ def save_lead(
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates, nights,
                 people, kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                phone, source_tag, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -1119,6 +1125,7 @@ def save_lead(
                 info.get("budget_scope"),
                 _sqlite_bool(info.get("direct_only")),
                 phone,
+                info.get("source_tag"),
                 now,
             ),
         )
@@ -2848,11 +2855,19 @@ def _strip_emoji_prefix(text: str, options: Optional[List[str]] = None) -> str:
     return text
 
 
-def handle_start(chat_id: int, first_name: str = "") -> None:
-    """Begin the tour-selection dialog (soft notice or strict consent)."""
+def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> None:
+    """Begin the tour-selection dialog and retain a validated campaign source."""
+    with _lock:
+        previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
+    source_tag = normalise_source_tag(source_tag or previous_source)
+
     if CONSENT_MODE == "strict" and not has_consent(chat_id):
         with _lock:
-            user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+            user_data[chat_id] = {
+                "state": STATE_CONSENT,
+                "source_tag": source_tag or None,
+                "updated_at": int(time.time()),
+            }
         _mark_dirty(chat_id)
         send_message(chat_id, _welcome_text(first_name), parse_mode="HTML")
         send_message(
@@ -2865,7 +2880,11 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
     # Soft mode: welcome + one «Начать» tap (or skip if already started before).
     if CONSENT_MODE == "soft" and not has_consent(chat_id):
         with _lock:
-            user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+            user_data[chat_id] = {
+                "state": STATE_CONSENT,
+                "source_tag": source_tag or None,
+                "updated_at": int(time.time()),
+            }
         _mark_dirty(chat_id)
         send_message(
             chat_id,
@@ -2875,13 +2894,19 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
         )
         return
 
-    _begin_destination(chat_id, first_name)
+    _begin_destination(chat_id, first_name, source_tag=source_tag)
 
 
-def _begin_destination(chat_id: int, first_name: str = "") -> None:
-    """Enter the first data-collection step (destination)."""
+def _begin_destination(chat_id: int, first_name: str = "", source_tag: str = "") -> None:
+    """Enter the first data-collection step while preserving campaign attribution."""
     with _lock:
-        user_data[chat_id] = {"state": STATE_DESTINATION, "updated_at": int(time.time())}
+        previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
+        effective_source = normalise_source_tag(source_tag or previous_source)
+        user_data[chat_id] = {
+            "state": STATE_DESTINATION,
+            "source_tag": effective_source or None,
+            "updated_at": int(time.time()),
+        }
     _mark_dirty(chat_id)
     name = f", {first_name}" if first_name else ""
     send_message(
@@ -2922,7 +2947,7 @@ def _step_consent(chat_id: int, text: str, message: Dict[str, Any], info: Dict[s
     # Soft mode: single «Начать подбор» (records light acknowledgment via consent_at).
     if text in (START_BUTTON_TEXT, CB_START, CB_CONSENT_YES, CONSENT_YES_TEXT):
         set_consent(chat_id)
-        _begin_destination(chat_id, first_name)
+        _begin_destination(chat_id, first_name, source_tag=str(info.get("source_tag") or ""))
         return
 
     if CONSENT_MODE == "strict" and text in (CONSENT_NO_TEXT, CB_CONSENT_NO):
@@ -3564,7 +3589,11 @@ def _format_lead_notify_text(
         f"<i>Личное уведомление администратору</i>\n\n"
         f"От: {who}\n"
         f"ID: <code>{chat_id}</code>\n"
-        f"📍 {_esc(info.get('destination', '?'))}\n"
+        + (
+            f"📊 Источник: <code>{_esc(info['source_tag'])}</code>\n"
+            if info.get("source_tag") else ""
+        )
+        + f"📍 {_esc(info.get('destination', '?'))}\n"
         + (f"🛫 Откуда: {_esc(info['origin'])}\n" if info.get("origin") else "")
         + f"📅 {_esc(info.get('dates', '?'))}\n"
         f"{_trip_details_text(info)}"
@@ -3619,7 +3648,8 @@ def _notify_admin(
                 f"От: {client_name or 'без имени'}"
                 f"{(' @' + username) if username else ''}\n"
                 f"ID: {chat_id}\n"
-                f"📍 {info.get('destination', '?')}\n"
+                + (f"📊 Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
+                + f"📍 {info.get('destination', '?')}\n"
                 f"📅 {info.get('dates', '?')}\n"
                 f"👥 {_party_text(info)}\n"
                 f"💰 {info.get('budget', '?')}₽\n"
@@ -3852,13 +3882,17 @@ def miniapp_submit() -> Response:
         telegram_user = validate_init_data(
             str(body.get("initData") or ""), BOT_TOKEN, max_age=3600
         )
+        trusted_source_tag = str(telegram_user.pop("_source_tag", "") or "")
     except MiniAppValidationError as exc:
         logger.info("Rejected Mini App initData: %s", exc)
         return _miniapp_json({"ok": False, "error": "Telegram authorization failed"}, 401)
 
     try:
         info = _accept_miniapp_trip(
-            int(telegram_user["id"]), telegram_user, body.get("payload")
+            int(telegram_user["id"]),
+            telegram_user,
+            body.get("payload"),
+            trusted_source_tag=trusted_source_tag,
         )
     except MiniAppValidationError as exc:
         return _miniapp_json({"ok": False, "error": str(exc)}, 400)
@@ -4264,10 +4298,19 @@ def _process_callback(data: Dict[str, Any]) -> None:
 
 
 def _accept_miniapp_trip(
-    chat_id: int, from_info: Dict[str, Any], payload: Any
+    chat_id: int,
+    from_info: Dict[str, Any],
+    payload: Any,
+    *,
+    trusted_source_tag: str = "",
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
     info = validate_trip_request(payload)
+    with _lock:
+        previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
+    source_tag = normalise_source_tag(trusted_source_tag or previous_source)
+    if source_tag:
+        info["source_tag"] = source_tag
     first_name = str(from_info.get("first_name") or "").strip()
     username = str(from_info.get("username") or "").strip()
     _touch_user(chat_id, first_name, username)
@@ -4347,7 +4390,21 @@ def _process_update(data: Dict[str, Any]) -> None:
         )
         return
 
-    # Normalise /cmd@botname → /cmd
+    # Telegram deep links arrive as "/start <payload>" (or /start@bot <payload>).
+    # Accept only bounded campaign tags; malformed payloads remain unknown commands.
+    start_match = re.fullmatch(
+        r"/start(?:@[A-Za-z0-9_]+)?(?:\s+([A-Za-z0-9_-]{1,64}))?",
+        text.strip(),
+    )
+    if start_match:
+        handle_start(
+            chat_id,
+            first_name,
+            source_tag=normalise_source_tag(start_match.group(1) or ""),
+        )
+        return
+
+    # Normalise ordinary /cmd@botname → /cmd.
     if text.startswith("/"):
         text = text.split("@", 1)[0]
 
@@ -4369,10 +4426,6 @@ def _process_update(data: Dict[str, Any]) -> None:
             return
 
     # --- User commands ---
-    if text == "/start":
-        handle_start(chat_id, first_name)
-        return
-
     if text == "/help":
         send_message(chat_id, USER_HELP, parse_mode="HTML")
         return
