@@ -151,6 +151,11 @@ def test_vk_completion_survives_mdt_failure(monkeypatch):
     monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
     monkeypatch.setattr(bot, "_confirm_to_user", lambda *args, **kwargs: events.append("client-confirmed"))
     monkeypatch.setattr(bot, "_notify_admin", lambda *args, **kwargs: events.append("manager-notified"))
+    # SYNC_COMPLETION exercises post-completion work inline. Keep this unit
+    # test hermetic: the fallback recommendation must not reach the live VK
+    # API when developer credentials happen to be present in the environment.
+    monkeypatch.setattr(bot, "send_typing", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
 
     def fail_mdt(*args, **kwargs):
         raise RuntimeError("simulated CRM outage")
