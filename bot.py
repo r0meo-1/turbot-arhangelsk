@@ -192,6 +192,14 @@ elif ADMIN_ID:
 else:
     LEAD_NOTIFY_IDS = []
 
+# Canonical lead owner. Every accepted lead is additionally delivered to this
+# VK private dialog; Telegram admin notifications remain an operational copy.
+LEAD_OWNER_NAME = os.getenv("LEAD_OWNER_NAME", "Наталья Ильина").strip() or "Наталья Ильина"
+LEAD_OWNER_PHONE = os.getenv("LEAD_OWNER_PHONE", "+79021932923").strip() or "+79021932923"
+LEAD_OWNER_VK_ID = _env_int("LEAD_OWNER_VK_ID", 112655584)
+VK_ACCESS_TOKEN = os.getenv("VK_ACCESS_TOKEN", "").strip()
+VK_API_VERSION = os.getenv("VK_API_VERSION", "5.199").strip() or "5.199"
+
 # --- How updates reach the bot ----------------------------------------------
 # "webhook" (default): Telegram POSTs to /webhook. Needs an inbound HTTPS path
 #   from Telegram's network to this host.
@@ -3557,7 +3565,8 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
     """1. Send the request summary back to the client."""
     send_message(
         chat_id,
-        "✅ <b>Заявка принята!</b> Менеджер «АПРЕЛЬ тур» свяжется с вами в ближайшее время.\n\n"
+        "✅ <b>Заявка принята!</b> Наталья Ильина, менеджер «АПРЕЛЬ тур», свяжется с вами в ближайшее время.\n"
+        f"☎️ Контакт: {_esc(LEAD_OWNER_PHONE)}\n\n"
         f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
         + (f"🛫 Откуда: {_esc(info['origin'])}\n" if info.get("origin") else "")
         + f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
@@ -3587,7 +3596,7 @@ def _format_lead_notify_text(
         who = f"{who} (@{_esc(username)})"
     return (
         f"🔔 <b>Новая заявка</b> ({_esc(source_label)})\n"
-        f"<i>Личное уведомление администратору</i>\n\n"
+        f"<i>Владелец лида: {_esc(LEAD_OWNER_NAME)} · {_esc(LEAD_OWNER_PHONE)}</i>\n\n"
         f"От: {who}\n"
         f"ID: <code>{chat_id}</code>\n"
         + (
@@ -3612,6 +3621,33 @@ def kb_admin_reply(client_chat_id: int) -> str:
     ]])
 
 
+def send_lead_owner_vk(text: str) -> bool:
+    """Deliver a manager-facing message to Natalya's VK private dialog."""
+    if not VK_ACCESS_TOKEN or LEAD_OWNER_VK_ID <= 0:
+        logger.warning("VK lead-owner delivery is not configured")
+        return False
+    try:
+        response = telegram_session.post(
+            "https://api.vk.com/method/messages.send",
+            data={
+                "access_token": VK_ACCESS_TOKEN,
+                "v": VK_API_VERSION,
+                "peer_id": LEAD_OWNER_VK_ID,
+                "random_id": secrets.randbelow(2**31 - 1) + 1,
+                "message": text,
+            },
+            timeout=HTTP_TIMEOUT,
+        )
+        payload = response.json()
+        if response.status_code == 200 and "error" not in payload:
+            logger.info("Manager message delivered to VK owner %s", LEAD_OWNER_VK_ID)
+            return True
+        logger.error("VK owner delivery failed: %s", str(payload.get("error") or response.text)[:300])
+    except Exception as exc:
+        logger.error("VK owner delivery error: %s", exc)
+    return False
+
+
 def _notify_admin(
     chat_id: int,
     info: Dict[str, Any],
@@ -3619,13 +3655,28 @@ def _notify_admin(
     client_name: Optional[str],
     username: str = "",
 ) -> None:
-    """2. Forward the lead to the bot creator / admins in Telegram."""
+    """2. Deliver the saved lead to Natalya in VK and optional ops copies."""
     global _last_lead_client_id
     recipients = LEAD_NOTIFY_IDS
-    if not recipients:
+
+    owner_text = (
+        f"🔔 Новая заявка (Telegram)\n"
+        f"👩‍💼 Владелец: {LEAD_OWNER_NAME}\n\n"
+        f"Клиент: {client_name or 'без имени'}"
+        + (f" @{username}" if username else "")
+        + f"\nTelegram ID: {chat_id}\n"
+        + (f"Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
+        + f"📍 {info.get('destination', '?')}\n"
+        + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+        + f"📅 {info.get('dates', '?')}\n"
+        + f"👥 {_party_text(info)}\n"
+        + f"💰 {info.get('budget', '?')} ₽\n"
+        + f"📞 Связь клиента: {phone}"
+    )
+    owner_delivered = send_lead_owner_vk(owner_text)
+    if not recipients and not owner_delivered:
         logger.warning(
-            "Lead from chat_id=%s saved but not delivered to Telegram "
-            "(set ADMIN_ID or LEAD_NOTIFY_IDS)",
+            "Lead from chat_id=%s saved but manager delivery is unavailable",
             chat_id,
         )
         return
