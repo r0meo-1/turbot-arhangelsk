@@ -8,6 +8,9 @@ TG_APP_JS = (ROOT / "miniapp" / "app.js").read_text(encoding="utf-8")
 VK_INDEX = (ROOT / "vk-miniapp" / "index.html").read_text(encoding="utf-8")
 VK_APP_JS = (ROOT / "vk-miniapp" / "app.js").read_text(encoding="utf-8")
 VK_PRIVACY = (ROOT / "vk-miniapp" / "privacy.html").read_text(encoding="utf-8")
+VK_CONSENT = (ROOT / "vk-miniapp" / "consent.html").read_text(encoding="utf-8")
+VK_TERMS = (ROOT / "vk-miniapp" / "terms.html").read_text(encoding="utf-8")
+VK_MODERATION = (ROOT / "vk-miniapp" / "moderation.html").read_text(encoding="utf-8")
 
 SITE_PATH = "https://r0meo1.ru/apreltour/"
 WHITE_LABEL_PATH = "https://travel.r0meo1.ru/"
@@ -105,13 +108,19 @@ def test_vk_miniapp_has_no_external_partner_shortcuts():
         assert value not in VK_APP_JS
 
 
-def test_vk_miniapp_uses_same_origin_final_privacy_policy():
-    assert 'href="./privacy.html"' in VK_INDEX
+def test_vk_miniapp_uses_separate_same_origin_legal_documents():
+    assert 'id="consent"' in VK_INDEX
+    assert 'id="terms-accepted"' in VK_INDEX
+    for path in ("privacy.html", "consent.html", "terms.html", "moderation.html"):
+        assert f'href="./{path}"' in VK_INDEX
     assert 'target="_blank"' in VK_INDEX
     assert 'https://bot.r0meo1.ru/privacy' not in VK_INDEX
     assert 'ЧЕРНОВИК' not in VK_PRIVACY
     assert 'Telegram' not in VK_PRIVACY
     assert 'ВКонтакте' in VK_PRIVACY
+    assert 'отдельное согласие' in VK_CONSENT.lower()
+    assert 'паспортные данные' in VK_TERMS
+    assert 'спам' in VK_MODERATION.lower()
 
 
 def test_vk_miniapp_keeps_signed_draft_crm_handoff():
