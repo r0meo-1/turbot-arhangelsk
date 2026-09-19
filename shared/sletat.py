@@ -326,3 +326,134 @@ def search_tours(
     except Exception as exc:
         log.error("Sletat.ru search failed: %s", type(exc).__name__)
         return _tourvisor.SearchResult(error="Слетать.ру временно не ответил")
+
+
+
+def _parse_sletat_tour_id(value: Any) -> tuple[str, str]:
+    raw = str(value or "")
+    parts = raw.split(":", 2)
+    if len(parts) != 3 or parts[0] != "sletat" or not parts[1] or not parts[2]:
+        raise ValueError("invalid Sletat tour id")
+    return parts[1], parts[2]
+
+
+def _int_value(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(str(value).replace(" ", "").replace(",", ".")))
+    except (TypeError, ValueError):
+        return default
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes"}
+
+
+def actualize_tour(
+    settings: SletatSettings,
+    session: requests.Session,
+    offer: Dict[str, Any],
+    *,
+    log: Optional[logging.Logger] = None,
+) -> Dict[str, Any]:
+    """Run Sletat ActualizePrice for one selected search offer.
+
+    The JSON gateway requires the original requestId plus sourceId/offerId from
+    GetTours. We therefore reject offers whose search provenance was lost
+    instead of pretending that search inventory is still current.
+    """
+    log = log or logger
+    base_price = _int_value(offer.get("price")) + _int_value(offer.get("fuel_charge"))
+    fallback = {
+        "status": "unknown",
+        "confirmed": False,
+        "flight_status": "🟡 Перелёт требует актуальной проверки у провайдера",
+        "hotel_status": "🟡 Наличие номера требует актуальной проверки у провайдера",
+        "total_price": base_price,
+        "currency": str(offer.get("currency") or "RUB"),
+        "actualized_at": "",
+    }
+    if not settings.enabled or not settings.login or not settings.password:
+        return fallback
+
+    try:
+        source_id, offer_id = _parse_sletat_tour_id(offer.get("tour_id"))
+        request_id = int(offer.get("provider_search_id") or 0)
+        if request_id <= 0:
+            raise ValueError("missing Sletat request id")
+
+        data = _request(
+            settings,
+            session,
+            "ActualizePrice",
+            {
+                "sourceId": source_id,
+                "offerId": offer_id,
+                "requestId": request_id,
+                "currencyAlias": "RUB",
+                "showcase": 0,
+                "detailed": 1,
+            },
+        )
+        if not isinstance(data, dict):
+            raise RuntimeError("Sletat.ru returned an unexpected actualization response")
+        if data.get("isError"):
+            return {
+                **fallback,
+                "status": "error",
+                "error": str(data.get("errorMessage") or "Ошибка актуализации Слетать.ру"),
+            }
+        if not data.get("isFound"):
+            return {
+                **fallback,
+                "status": "unavailable",
+                "flight_status": "🔴 Тур не найден при актуализации",
+                "hotel_status": "🔴 Тур не найден при актуализации",
+            }
+
+        row = data.get("data") if isinstance(data.get("data"), list) else []
+        price = _int_value(_row(row, 19, 0), base_price)
+        currency = str(_row(row, 21, "") or offer.get("currency") or "RUB")
+        hotel_code = _int_value(_row(row, 13, -1), -1)
+        buy_status = _int_value(data.get("buyOnlineAvailabilityStatus"), 0)
+        tickets_included = _truthy(_row(row, 12, False))
+
+        if hotel_code == 0:
+            hotel_status = "🟢 Места в отеле есть"
+        elif hotel_code == 1:
+            hotel_status = "🔴 Отель в стопе"
+        elif hotel_code == 2:
+            hotel_status = "🟡 Места в отеле под запрос"
+        else:
+            hotel_status = "🟡 Статус мест в отеле требует подтверждения"
+
+        if buy_status == 4:
+            flight_status = "🔴 Тур недоступен: нет перелёта или мест в отеле"
+            status = "unavailable"
+            confirmed = False
+        elif tickets_included:
+            flight_status = "🟢 Перелёт входит в актуализированный пакет"
+            status = "available" if hotel_code != 1 else "unavailable"
+            confirmed = hotel_code != 1
+        else:
+            flight_status = "🟡 Перелёт не входит в пакет или требует отдельной проверки"
+            status = "available" if hotel_code != 1 else "unavailable"
+            confirmed = hotel_code != 1
+
+        return {
+            "status": status,
+            "confirmed": confirmed,
+            "flight_status": flight_status,
+            "hotel_status": hotel_status,
+            "total_price": price or base_price,
+            "currency": currency,
+            "actualized_at": datetime.now().strftime("%H:%M"),
+            "provider": "sletat",
+            "buy_online_status": buy_status,
+            "random_number": data.get("randomNumber"),
+        }
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        log.warning("Sletat.ru actualization HTTP failure: %s", status)
+    except Exception as exc:
+        log.warning("Sletat.ru actualization failed: %s", type(exc).__name__)
+    return fallback
