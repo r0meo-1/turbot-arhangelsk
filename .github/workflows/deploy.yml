@@ -130,6 +130,10 @@ jobs:
             sleep 5
           done
 
+          for legal_path in privacy.html consent.html terms.html moderation.html legal.json; do
+            curl -fsSL --max-time 15 "$vk_base/miniapp/$legal_path" >/dev/null
+          done
+
           vk_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$vk_base/miniapp/draft" \
             -H 'Content-Type: application/json' \
@@ -220,6 +224,7 @@ jobs:
               "budgetMaxRub": 250000,
               "budgetScope": "total",
               "consent": True,
+              "termsAccepted": True,
               "directOnly": False,
           }
           print(json.dumps({"launchParams": launch_params, "payload": payload}, separators=(",", ":")))
