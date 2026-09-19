@@ -74,6 +74,7 @@ from shared.validation import (
 )
 from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
+from shared.log_privacy import correlation_id as _log_correlation
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
 
@@ -805,7 +806,7 @@ def _load_miniapp_snapshot(chat_id: int) -> Optional[Dict[str, Any]]:
     try:
         payload = json.loads(row[0])
     except (TypeError, ValueError):
-        logger.warning("Invalid Mini App snapshot for chat_id=%s", chat_id)
+        logger.warning("Invalid Mini App snapshot for %s", _log_correlation(chat_id, namespace="vk-user"))
         return None
     if not isinstance(payload, dict):
         return None
@@ -984,12 +985,12 @@ def _notify_ops_alert(message: str, *, alert_key: str) -> bool:
             delivered = delivered or resp.status_code == 200
             if resp.status_code != 200:
                 logger.warning(
-                    "VK ops alert failed for Telegram chat %s: HTTP %s",
-                    recipient,
+                    "VK ops alert failed for Telegram manager %s: HTTP %s",
+                    _log_correlation(recipient, namespace="tg-manager"),
                     resp.status_code,
                 )
         except Exception as exc:
-            logger.warning("VK ops alert failed for Telegram chat %s: %s", recipient, exc)
+            logger.warning("VK ops alert failed for Telegram manager %s: %s", _log_correlation(recipient, namespace="tg-manager"), exc)
     return delivered
 
 
@@ -2587,7 +2588,7 @@ def _tour_search_worker(
         _send_tour_results_page(user_id, 0)
         return
 
-    logger.info("VK package tour search returned no offers for %s: %s", user_id, result.error)
+    logger.info("VK package tour search returned no offers for %s: %s", _log_correlation(user_id, namespace="vk-user"), result.error)
     edit_message(
         user_id,
         wait_message_id,
@@ -3433,14 +3434,14 @@ def _notify_admin_telegram(
                 timeout=HTTP_TIMEOUT,
             )
             if resp.status_code == 200:
-                logger.info("VK lead from %s delivered to Telegram chat %s", user_id, recipient)
+                logger.info("VK lead from %s delivered to Telegram manager %s", _log_correlation(user_id, namespace="vk-user"), _log_correlation(recipient, namespace="tg-manager"))
             else:
                 logger.error(
                     "Telegram notify failed for %s→%s: %s",
-                    user_id, recipient, resp.text[:200],
+                    _log_correlation(user_id, namespace="vk-user"), _log_correlation(recipient, namespace="tg-manager"), resp.text[:200],
                 )
         except Exception as exc:
-            logger.error("Telegram notify error for VK lead %s: %s", user_id, exc)
+            logger.error("Telegram notify error for VK lead %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
 
 def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
@@ -3470,7 +3471,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
     )
     owner_result = send_message(LEAD_OWNER_VK_ID, owner_message) if LEAD_OWNER_VK_ID else None
     if owner_result is None:
-        logger.error("VK lead from %s was not delivered to Natalya PM", user_id)
+        logger.error("VK lead from %s was not delivered to owner PM", _log_correlation(user_id, namespace="vk-user"))
 
     if ADMIN_ID and ADMIN_ID != LEAD_OWNER_VK_ID:
         send_message(
@@ -3489,7 +3490,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else ""),
         )
     elif not LEAD_NOTIFY_IDS and owner_result is None:
-        logger.warning("VK lead from %s has no working manager delivery channel", user_id)
+        logger.warning("VK lead from %s has no working manager delivery channel", _log_correlation(user_id, namespace="vk-user"))
 
 
 # When true, MDT + AI run inline (tests). Production defers them off the webhook.
@@ -3605,7 +3606,7 @@ def _post_completion_side_effects(
         if result and TUTU_SHOW_ADMIN:
             _send_tutu_to_admin(user_id, result, client_name)
     except Exception as exc:
-        logger.error("VK post-completion side effects failed for %s: %s", user_id, exc)
+        logger.error("VK post-completion side effects failed for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
 
 def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None:
@@ -3614,7 +3615,7 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     with _lock:
         live = user_data.get(user_id)
         if live is None or live.get("_completing"):
-            logger.info("Concurrent VK completion ignored for user_id=%s", user_id)
+            logger.info("Concurrent VK completion ignored for %s", _log_correlation(user_id, namespace="vk-user"))
             return
         live["_completing"] = True
         info = dict(live)
@@ -3625,7 +3626,7 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     try:
         lead_id = save_lead(user_id, info, phone, first_name=client_name)
     except Exception as exc:
-        logger.error("Failed to save VK lead for %s: %s", user_id, exc)
+        logger.error("Failed to save VK lead for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
     _confirm_to_user(user_id, info, phone)
     _notify_admin(user_id, info, phone, client_name)
