@@ -41,3 +41,18 @@ def test_miniapp_keeps_startapp_destination_prefill():
     assert "tgWebAppStartParam" in APP
     assert "thailand: 'Таиланд'" in APP
     assert "vietnam: 'Вьетнам'" in APP
+
+
+def test_miniapp_save_flow_is_recoverable_on_slow_network():
+    assert "REQUEST_TIMEOUT_MS = 15000" in APP
+    assert "AbortController" in APP
+    assert "navigator.onLine === false" in APP
+    assert "review.setAttribute('aria-busy', 'true')" in APP
+    assert "edit.disabled = true" in APP
+    assert "tg?.BackButton?.hide?.()" in APP
+    assert "tg?.BackButton?.show?.()" in APP
+    assert "Повторить сохранение" in APP
+
+
+def test_miniapp_destination_chips_expose_pressed_state():
+    assert "chip.setAttribute('aria-pressed', String(active))" in APP
