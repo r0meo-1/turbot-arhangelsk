@@ -516,6 +516,47 @@ def test_contact_only_creates_draft_until_confirmed(client, monkeypatch, channel
     assert len(side_effects) == 1
 
 
+def test_repeated_miniapp_save_creates_only_one_completed_lead(client, monkeypatch):
+    chat = 88003
+    payload = {
+        "type": "trip_request", "version": 2,
+        "destination": "Ко Чанг, Таиланд", "departure": "Казань",
+        "date": "2099-10-15", "nights": 10, "adults": 2,
+        "children": 0, "childrenAges": [],
+        "budgetMaxRub": 270000, "budgetScope": "total",
+        "directOnly": True, "consent": True,
+    }
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **kw: None)
+
+    update = {
+        "message": {
+            "chat": {"id": chat},
+            "from": {"id": chat, "first_name": "Test"},
+            "web_app_data": {"data": json.dumps(payload)},
+        }
+    }
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "secret123"}
+
+    first = client.post("/webhook", headers=headers, json=update)
+    second = client.post("/webhook", headers=headers, json=update)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert bot.user_data[chat]["state"] == bot.STATE_CONTACT
+    assert bot.user_data[chat]["destination"] == "Ко Чанг, Таиланд"
+    assert bot.user_data[chat]["origin"] == "Казань"
+    assert bot.count_leads() == 0
+
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    _confirm_draft(client, chat)
+
+    assert bot.count_leads() == 1
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT destination, origin FROM leads WHERE chat_id = ?", (chat,))
+        row = cur.fetchone()
+    assert tuple(row) == ("Ко Чанг, Таиланд", "Казань")
+
+
 @pytest.mark.parametrize("direct_only", [True, False])
 def test_miniapp_details_survive_review_and_manager_handoff(client, monkeypatch, direct_only):
     sent = []
