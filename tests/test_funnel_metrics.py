@@ -76,3 +76,22 @@ def test_funnel_rejects_unbounded_stage_or_outcome(tmp_path):
         assert cur.execute(
             "SELECT COUNT(*) FROM acquisition_funnel_events"
         ).fetchone()[0] == 0
+
+
+def test_funnel_cleanup_removes_only_expired_events(tmp_path):
+    db = _factory(tmp_path / "retention.sqlite")
+    with db(commit=True) as cur:
+        funnel_metrics.init_schema(cur)
+
+    day = 86400
+    funnel_metrics.record(db, "telegram", "old", "lead", "accepted", now=10 * day)
+    funnel_metrics.record(db, "telegram", "fresh", "lead", "accepted", now=400 * day)
+
+    deleted = funnel_metrics.cleanup(db, 365, now=400 * day)
+
+    assert deleted == 1
+    with db() as cur:
+        rows = cur.execute(
+            "SELECT source FROM acquisition_funnel_events ORDER BY id"
+        ).fetchall()
+    assert rows == [("fresh",)]
