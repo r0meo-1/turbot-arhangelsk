@@ -19,6 +19,22 @@ TOUR_SEARCH_MAX_OFFERS=15
 
 Only providers with complete credentials are considered enabled. The first provider that returns real offers wins. An empty or unavailable provider falls through to the next configured source. Results from different providers are not mixed into a synthetic catalogue.
 
+## Sletat
+
+Sletat uses the official JSON gateway at `https://module.sletat.ru/Main.svc`.
+The current production adapter follows the documented flow:
+`GetDepartCities → GetCountries → GetTours → GetLoadState → GetTours(updateResult=1)`,
+with a polling interval of at least 1.5 seconds and the same-server/IP requirement.
+
+When `SLETAT_LOGIN` and `SLETAT_PASSWORD` are present, the production deploy smoke performs a read-only readiness check using `GetDepartCities` and `GetCountries`. It never prints credentials, query strings, or response bodies.
+
+```env
+SLETAT_LOGIN=
+SLETAT_PASSWORD=
+# VK_SLETAT_ENABLED=true
+# SLETAT_BASE_URL=https://module.sletat.ru/Main.svc
+```
+
 ## Travelata
 
 ```env
