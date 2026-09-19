@@ -291,3 +291,61 @@ def test_agent_extension_stores_candidates_and_delivers(client, monkeypatch):
     assert "Кандидаты из Agent Desk" in text
     assert "Hotel One" in text
     assert "219 000 ₽" in text
+
+
+
+def test_agent_extension_lists_and_updates_crm_status(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json={
+            **_payload("agent-crm-0001"),
+            "candidates": [{
+                "title": "Hotel One",
+                "url": "https://operator.example/tour/1",
+                "selection": "10 ночей · AI",
+            }],
+        },
+    )
+    assert create.status_code == 202
+    lead_id = create.get_json()["leadId"]
+
+    listing = client.get(
+        "/agent-extension/leads?limit=10",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+    )
+    assert listing.status_code == 200
+    leads = listing.get_json()["leads"]
+    assert leads[0]["id"] == lead_id
+    assert leads[0]["status"] == "new"
+    assert leads[0]["candidateCount"] == 1
+
+    update = client.post(
+        "/agent-extension/status",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json={"leadId": lead_id, "status": "working", "note": "Ждём ответ клиента"},
+    )
+    assert update.status_code == 200
+    assert update.get_json()["status"] == "working"
+
+    with bot._db_cursor() as cur:
+        cur.execute(
+            "SELECT crm_status, crm_note, crm_updated_at FROM website_leads WHERE id=?",
+            (lead_id,),
+        )
+        status, note, updated_at = cur.fetchone()
+    assert status == "working"
+    assert note == "Ждём ответ клиента"
+    assert updated_at > 0
