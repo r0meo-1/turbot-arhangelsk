@@ -268,3 +268,40 @@ def test_destination_free_hot_tours_still_return_curated_mix():
 
     assert len(offers) == 3
     assert all(offer.hotel for offer in offers)
+
+
+def test_direct_only_is_forwarded_to_tourvisor():
+    seen = {}
+
+    def request(method, path, params=None):
+        seen[path] = dict(params or {})
+        if path == "departures":
+            return [{"id": 1, "name": "Москва"}]
+        if path == "countries":
+            return [{"id": 4, "name": "Вьетнам"}]
+        if path == "tours/search":
+            return {"searchId": 77}
+        if path.endswith("/status"):
+            return {"progress": 100, "status": "completed"}
+        if path == "tours/search/77":
+            return []
+        return []
+
+    tourvisor.search_tours(
+        tourvisor.TourvisorSettings(
+            enabled=True, token="test", poll_interval=0, max_wait=1
+        ),
+        session=None,
+        info={
+            "destination": "Вьетнам",
+            "origin": "Москва",
+            "dates": "15-22 сентября 2030",
+            "people": "2",
+            "direct_only": True,
+        },
+        request_fn=request,
+        sleep_fn=lambda _: None,
+    )
+
+    assert seen["countries"]["onlyDirect"] is True
+    assert seen["tours/search"]["onlyDirect"] is True
