@@ -39,3 +39,7 @@ summary{cursor:pointer;font-size:12px;font-weight:800}
 select,textarea{width:100%;padding:8px;border:1px solid #31415a;border-radius:8px;background:#0d1726;color:#f3f7fc;font:inherit}
 textarea{min-height:48px;resize:vertical}
 .save-status{background:#1b2a3f;color:#dce9f7}
+
+.row-actions{display:flex;gap:10px;align-items:center}
+.followup-label{font-size:10px;color:#8094ad}
+.followup-label input{margin-top:4px}
