@@ -1154,6 +1154,146 @@ def get_hotel_details(hotel_name: str, country: str = "", region: str = "") -> D
     }
 
 
+def actualize_tour_live(
+    settings: TourvisorSettings,
+    session: requests.Session,
+    tour_data: Dict[str, Any],
+    *,
+    log: Optional[logging.Logger] = None,
+    request_fn: Optional[RequestFn] = None,
+) -> Dict[str, Any]:
+    """Actualize one Tourvisor offer using the official tour-flights method.
+
+    The response provides current flight combinations and actual prices from
+    the operator cart. We only confirm flight availability that is explicitly
+    present in the response; hotel availability stays conservative unless a
+    provider response gives us an unambiguous signal.
+    """
+    log = log or logger
+    fallback = actualize_tour(tour_data)
+    if not settings.enabled or not settings.token:
+        return fallback
+
+    tour_id = str(tour_data.get("tour_id") or "").strip()
+    if not tour_id:
+        return fallback
+
+    caller = request_fn or (
+        lambda method, path, params=None: _http_request(
+            settings, session, method, path, params
+        )
+    )
+
+    try:
+        payload = caller(
+            "GET",
+            f"tours/{tour_id}/flights",
+            {"currency": str(tour_data.get("currency") or "RUB")},
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Tourvisor returned an unexpected flights response")
+
+        error = payload.get("error") or {}
+        try:
+            error_code = int(error.get("code") or 0) if isinstance(error, dict) else 0
+        except (TypeError, ValueError):
+            error_code = 0
+        if error_code:
+            reason = str(error.get("reason") or "Tourvisor actualization error")
+            return {
+                **fallback,
+                "status": "error",
+                "error": reason,
+                "provider": "tourvisor",
+            }
+
+        flights = payload.get("flights")
+        if not isinstance(flights, list) or not flights:
+            return {
+                **fallback,
+                "status": "unavailable",
+                "flight_status": "🔴 Tourvisor не вернул доступных вариантов перелёта",
+                "provider": "tourvisor",
+            }
+
+        selected = next(
+            (item for item in flights if isinstance(item, dict) and item.get("isDefault")),
+            next((item for item in flights if isinstance(item, dict)), {}),
+        )
+        segments = []
+        for direction in ("forward", "backward"):
+            value = selected.get(direction)
+            if isinstance(value, list):
+                segments.extend(item for item in value if isinstance(item, dict))
+
+        no_places = any(bool(segment.get("noPlaces")) for segment in segments)
+        on_demand = any(bool(segment.get("onDemand")) for segment in segments)
+
+        price_obj = selected.get("price") if isinstance(selected.get("price"), dict) else {}
+        fuel_obj = (
+            selected.get("fuelCharge")
+            if isinstance(selected.get("fuelCharge"), dict)
+            else {}
+        )
+        try:
+            price = int(float(price_obj.get("value") or 0))
+        except (TypeError, ValueError):
+            price = 0
+        try:
+            fuel = int(float(fuel_obj.get("value") or 0))
+        except (TypeError, ValueError):
+            fuel = 0
+        total_price = price + fuel
+        if total_price <= 0:
+            total_price = int(fallback.get("total_price") or 0)
+
+        currency = str(
+            price_obj.get("currency")
+            or fuel_obj.get("currency")
+            or tour_data.get("currency")
+            or "RUB"
+        )
+
+        if no_places:
+            flight_status = "🔴 На выбранном перелёте нет мест"
+            status = "unavailable"
+            confirmed = False
+        elif on_demand:
+            flight_status = "🟡 Перелёт доступен под запрос"
+            status = "available"
+            confirmed = False
+        elif segments:
+            flight_status = "🟢 Места на выбранном перелёте есть"
+            status = "available"
+            confirmed = True
+        else:
+            flight_status = "🟡 Статус перелёта требует дополнительной проверки"
+            status = "unknown"
+            confirmed = False
+
+        info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+        surcharges = info.get("surcharges") if isinstance(info.get("surcharges"), list) else []
+
+        return {
+            "status": status,
+            "confirmed": confirmed,
+            "flight_status": flight_status,
+            "hotel_status": "🟡 Наличие номера подтверждает менеджер перед оформлением",
+            "total_price": total_price,
+            "currency": currency,
+            "actualized_at": datetime.now().strftime("%H:%M"),
+            "provider": "tourvisor",
+            "flight_on_demand": on_demand,
+            "surcharges": surcharges,
+        }
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        log.warning("Tourvisor actualization HTTP failure: %s", status)
+    except Exception as exc:
+        log.warning("Tourvisor actualization failed: %s", type(exc).__name__)
+    return fallback
+
+
 def actualize_tour(tour_data: Dict[str, Any]) -> Dict[str, Any]:
     """Return a conservative fallback when no live provider actualizer is used.
 
