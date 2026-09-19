@@ -67,6 +67,7 @@ from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
+from shared.runtime_metrics import lead_delivery_snapshot
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -639,6 +640,8 @@ def init_db() -> None:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_preorder_id INTEGER")
                 if "mdt_tourist_id" not in _cols:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_tourist_id INTEGER")
+                if "manager_notified_at" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN manager_notified_at INTEGER")
         # One-time production repair for the single lead that the pre-acknowledgement
         # MDT client falsely marked `synced` after receiving an error JSON. Production
         # diagnostics identified it as lead 35, the only synced row, with zero attempts;
@@ -969,6 +972,30 @@ def _mdt_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
         "latest_failed_seconds": (
             max(0, current - int(latest_failed)) if latest_failed is not None else None
         ),
+    }
+
+
+def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day VK manager-delivery aggregates without customer data."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            cur.execute(
+                "SELECT created_at, manager_notified_at FROM leads WHERE created_at >= ?",
+                (cutoff,),
+            )
+            snapshot = lead_delivery_snapshot(
+                cur.fetchall(), window_seconds=window
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK lead-delivery aggregates: %s", exc)
+        return {"available": False, "window_seconds": window, "channels": {}}
+    return {
+        "available": True,
+        "window_seconds": window,
+        "channels": {"vk": snapshot},
     }
 
 
@@ -3456,7 +3483,7 @@ def _notify_admin_telegram(
             logger.error("Telegram notify error for VK lead %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
 
-def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
+def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> bool:
     """Deliver every VK lead to Natalya's private messages plus optional ops copies."""
     _notify_admin_telegram(user_id, info, phone, client_name)
     selected = _selected_tour_summary(info)
@@ -3503,6 +3530,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
         )
     elif not LEAD_NOTIFY_IDS and owner_result is None:
         logger.warning("VK lead from %s has no working manager delivery channel", _log_correlation(user_id, namespace="vk-user"))
+    return owner_result is not None
 
 
 # When true, MDT + AI run inline (tests). Production defers them off the webhook.
@@ -3641,7 +3669,13 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
         logger.error("Failed to save VK lead for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
     _confirm_to_user(user_id, info, phone)
-    _notify_admin(user_id, info, phone, client_name)
+    if _notify_admin(user_id, info, phone, client_name) and lead_id is not None:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "UPDATE leads SET manager_notified_at=? "
+                "WHERE id=? AND manager_notified_at IS NULL",
+                (int(time.time()), lead_id),
+            )
     with _lock:
         user_data.pop(user_id, None)
     delete_session(user_id)
@@ -4189,6 +4223,7 @@ def health() -> Any:
         "revision": _version.REVISION,
         "uptime_seconds": _version.uptime_seconds(),
         "mdt_delivery": _mdt_delivery_health(),
+        "lead_delivery": _lead_delivery_health(),
         "ai_selection": {
             "mode": AI_MODE,
             "ready": selection_ai_provider.ready,
