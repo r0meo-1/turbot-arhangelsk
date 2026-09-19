@@ -157,6 +157,9 @@ else:
 LEAD_OWNER_NAME = os.getenv("LEAD_OWNER_NAME", "Наталья Ильина").strip() or "Наталья Ильина"
 LEAD_OWNER_PHONE = os.getenv("LEAD_OWNER_PHONE", "+79021932923").strip() or "+79021932923"
 LEAD_OWNER_VK_ID = _env_int("LEAD_OWNER_VK_ID", 112655584)
+MANAGER_TOURVISOR_URL = os.getenv("MANAGER_TOURVISOR_URL", "https://pro.tourvisor.ru/").strip()
+MANAGER_SLETAT_URL = os.getenv("MANAGER_SLETAT_URL", "https://sletat.ru/pro").strip()
+MANAGER_QUIQUO_URL = os.getenv("MANAGER_QUIQUO_URL", "https://qui-quo.ru/").strip()
 
 # MDT CRM (same env vars as Telegram bot)
 MDT_ENABLED    = os.getenv("MDT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
@@ -3325,6 +3328,10 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
         + f"💰 {_budget_summary(info)}\n"
         + f"📞 Связь клиента: {phone}"
         + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else "")
+        + "\n\n🔎 Подбор менеджеру:\n"
+        + f"Tourvisor PRO: {MANAGER_TOURVISOR_URL}\n"
+        + f"Sletat PRO: {MANAGER_SLETAT_URL}\n"
+        + f"Qui-Quo: {MANAGER_QUIQUO_URL}"
     )
     owner_result = send_message(LEAD_OWNER_VK_ID, owner_message) if LEAD_OWNER_VK_ID else None
     if owner_result is None:
