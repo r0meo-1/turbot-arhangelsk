@@ -2449,3 +2449,42 @@ def test_campaign_source_survives_restart_completion_and_manager_handoff(client,
     ]
     assert lead_msgs
     assert "video_pain" in lead_msgs[-1]["text"]
+
+
+
+def test_campaign_source_is_first_touch_during_active_session(client):
+    chat_id = 88114
+
+    _post(client, chat_id, "/start Video_Pain")
+    assert bot.user_data[chat_id]["source_tag"] == "video_pain"
+
+    # A repeated campaign deep-link during the same active lead must not
+    # silently rewrite the original acquisition source.
+    _post(client, chat_id, "/start Video_Dream")
+    assert bot.user_data[chat_id]["source_tag"] == "video_pain"
+
+
+def test_admin_export_includes_campaign_source(monkeypatch):
+    chat_id = 88115
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text)) or _OkResp(),
+    )
+    lead_id = bot.save_lead(
+        chat_id,
+        {
+            "destination": "Вьетнам",
+            "dates": "1-10 февраля 2030",
+            "people": "2",
+            "budget": 270000,
+            "source_tag": "video_vs",
+        },
+        "+79161234567",
+        first_name="Roma",
+    )
+    assert lead_id > 0
+
+    assert bot._admin_export(999, "") is True
+    assert any("src=video_vs" in text for _, text in sent)
