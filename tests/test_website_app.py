@@ -228,3 +228,66 @@ def test_website_owner_notification_retries_until_synced(monkeypatch):
     assert attempts == 2
     assert next_retry_at is None
     assert notified_at is not None
+
+
+
+def test_agent_extension_requires_pairing_token(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    response = client.post(
+        "/agent-extension/lead",
+        headers={"Origin": "chrome-extension://abcdefghijklmnop"},
+        json=_payload("agent-test-0001"),
+    )
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
+
+
+def test_agent_extension_stores_candidates_and_delivers(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    kicked = []
+    monkeypatch.setattr(
+        website_app,
+        "_kick_delivery",
+        lambda lead_id, payload: kicked.append((lead_id, dict(payload))),
+    )
+    payload = _payload("agent-test-0002")
+    payload.update({
+        "active_service": "pro.tourvisor.ru",
+        "candidates": [
+            {
+                "title": "Hotel One",
+                "url": "https://operator.example/tour/1",
+                "selection": "10 ночей · AI · 219 000 ₽",
+            },
+            {
+                "title": "Hotel Two",
+                "url": "https://operator.example/tour/2",
+                "selection": "11 ночей · BB · 205 000 ₽",
+            },
+        ],
+    })
+
+    response = client.post(
+        "/agent-extension/lead",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    body = response.get_json()
+    assert body["ok"] is True
+    assert kicked and kicked[0][0] == body["leadId"]
+    stored_payload = kicked[0][1]
+    assert stored_payload["utm_source"] == "agent_extension"
+    assert stored_payload["utm_medium"] == "browser_sidepanel"
+    assert stored_payload["utm_content"] == "pro.tourvisor.ru"
+    assert len(stored_payload["agent_candidates"]) == 2
+    assert stored_payload["agent_candidates"][0]["title"] == "Hotel One"
+
+    text = website_app._owner_notification_text(body["leadId"], stored_payload)
+    assert "Кандидаты из Agent Desk" in text
+    assert "Hotel One" in text
+    assert "219 000 ₽" in text
