@@ -1834,3 +1834,60 @@ def test_vk_ops_alert_uses_stable_cooldown_key(monkeypatch):
     payload = posts[0][1]["json"]
     assert payload["chat_id"] == 999
     assert "failed=1" in payload["text"]
+
+
+def test_vk_sletat_actualization_updates_selected_price(monkeypatch):
+    sent = []
+    user_id = 963
+    selected = {
+        "hotel": "Selected Hotel",
+        "category": 5,
+        "region": "Пхукет",
+        "date": "2030-09-15",
+        "nights": 7,
+        "meal": "AI",
+        "room": "DBL",
+        "operator": "Operator",
+        "price": 219000,
+        "currency": "RUB",
+        "fuel_charge": 0,
+        "tour_id": "sletat:4:1792097464",
+        "provider": "sletat",
+        "provider_search_id": 321,
+        "picture_url": "",
+        "departure": "Москва",
+    }
+    bot.user_data[user_id] = {
+        "state": bot.STATE_REVIEW,
+        "selected_tour": dict(selected),
+        "_tour_offers": [dict(selected)],
+        "_tour_offers_base": [dict(selected)],
+    }
+    monkeypatch.setattr(
+        bot._tour_providers,
+        "actualize_offer",
+        lambda *args, **kwargs: {
+            "status": "available",
+            "confirmed": True,
+            "flight_status": "🟢 Перелёт входит в актуализированный пакет",
+            "hotel_status": "🟢 Места в отеле есть",
+            "total_price": 225500,
+            "currency": "RUB",
+            "actualized_at": "17:20",
+        },
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda uid, text, **kwargs: sent.append(text),
+    )
+
+    bot._actualize_selected_tour_worker(user_id, selected["tour_id"])
+
+    current = bot.user_data[user_id]["selected_tour"]
+    assert current["price"] == 225500
+    assert current["fuel_charge"] == 0
+    assert current["actualization_confirmed"] is True
+    assert current["actualization_status"] == "available"
+    assert bot.user_data[user_id]["_tour_offers"][0]["price"] == 225500
+    assert any("Актуализированная цена" in text for text in sent)
