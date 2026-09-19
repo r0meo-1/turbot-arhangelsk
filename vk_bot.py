@@ -209,6 +209,7 @@ DATA_OPERATOR_NAME = os.getenv(
     "ТА «АПРЕЛЬ тур»",
 )
 DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
+FUNNEL_ANALYTICS_RETENTION_DAYS = _env_int("FUNNEL_ANALYTICS_RETENTION_DAYS", 365)
 # soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
 # strict: classic «Согласен / Отказаться».
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -1285,17 +1286,25 @@ def _start_timeout_worker() -> None:
 
 
 def _start_retention_worker() -> None:
-    if DATA_RETENTION_DAYS <= 0:
+    if DATA_RETENTION_DAYS <= 0 and FUNNEL_ANALYTICS_RETENTION_DAYS <= 0:
         return
     def _worker():
         while True:
             try:
                 cleanup_expired_data()
+                _funnel_metrics.cleanup(
+                    _db_cursor, FUNNEL_ANALYTICS_RETENTION_DAYS
+                )
             except Exception as exc:
                 logger.error("Error in retention worker: %s", exc)
             time.sleep(6 * 3600)
     threading.Thread(target=_worker, daemon=True, name="vk-data-retention").start()
-    logger.info("Data retention worker started (%s days)", DATA_RETENTION_DAYS)
+    logger.info(
+        "Data retention worker started "
+        "(personal=%s days, funnel_events=%s days)",
+        DATA_RETENTION_DAYS,
+        FUNNEL_ANALYTICS_RETENTION_DAYS,
+    )
 
 
 # ---------------------------------------------------------------------------
