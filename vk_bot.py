@@ -61,7 +61,7 @@ from shared.constants import (
     POPULAR_DESTINATIONS_PLAIN,
 )
 from shared.vk_miniapp import build_open_app_button, create_blueprint
-from shared.telegram_webapp import MiniAppValidationError
+from shared.telegram_webapp import MiniAppValidationError, normalise_source_tag
 from shared import tutu as _tutu
 from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
@@ -523,6 +523,7 @@ def init_db() -> None:
                 budget INTEGER,
                 budget_scope TEXT,
                 source TEXT,
+                source_tag TEXT,
                 vk_ref TEXT,
                 vk_platform TEXT,
                 phone TEXT,
@@ -549,6 +550,7 @@ def init_db() -> None:
                 budget INTEGER,
                 budget_scope TEXT,
                 source TEXT,
+                source_tag TEXT,
                 vk_ref TEXT,
                 vk_platform TEXT,
                 phone TEXT NOT NULL,
@@ -601,7 +603,7 @@ def init_db() -> None:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN selected_tour TEXT")
             if "budget_scope" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN budget_scope TEXT")
-            for _c in ("source", "vk_ref", "vk_platform"):
+            for _c in ("source", "source_tag", "vk_ref", "vk_platform"):
                 if _c not in _cols:
                     cur.execute(f"ALTER TABLE {_t} ADD COLUMN {_c} TEXT")
             if _t == "leads":
@@ -697,9 +699,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                                   dates_are_trip, people,
                                   hotel_query,
                                   kids, kids_ages, infants, budget, budget_scope,
-                                  source, vk_ref, vk_platform, phone,
+                                  source, source_tag, vk_ref, vk_platform, phone,
                                   needs_consultation, selected_tour, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
@@ -709,8 +711,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 kids=excluded.kids, kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
                 budget=excluded.budget, budget_scope=excluded.budget_scope,
-                source=excluded.source, vk_ref=excluded.vk_ref,
-                vk_platform=excluded.vk_platform,
+                source=excluded.source, source_tag=excluded.source_tag,
+                vk_ref=excluded.vk_ref, vk_platform=excluded.vk_platform,
                 phone=excluded.phone,
                 needs_consultation=excluded.needs_consultation,
                 selected_tour=excluded.selected_tour,
@@ -722,7 +724,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
               data.get("people"), data.get("hotel_query"),
               data.get("kids"), _ages_to_db(data.get("kids_ages")),
               data.get("infants"), data.get("budget"),
-              data.get("budget_scope"), data.get("source"),
+              data.get("budget_scope"), data.get("source"), data.get("source_tag"),
               data.get("vk_ref"), data.get("vk_platform"), data.get("phone"),
               int(bool(data.get("needs_consultation"))),
               _tour_to_db(data.get("selected_tour")),
@@ -767,7 +769,7 @@ def delete_session(chat_id: int) -> None:
 _MINIAPP_SNAPSHOT_FIELDS = (
     "destination", "origin", "dates", "nights", "dates_are_trip",
     "hotel_query", "people", "kids", "kids_ages", "infants",
-    "budget", "budget_scope", "source", "vk_ref", "vk_platform",
+    "budget", "budget_scope", "source", "source_tag", "vk_ref", "vk_platform",
     "needs_consultation",
 )
 
@@ -848,10 +850,10 @@ def save_lead(
                 chat_id, first_name, username, destination, origin, dates, nights,
                 dates_are_trip,
                 people, hotel_query, kids, kids_ages, infants, budget, budget_scope,
-                source, vk_ref, vk_platform, phone,
+                source, source_tag, vk_ref, vk_platform, phone,
                 needs_consultation, selected_tour,
                 mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -869,6 +871,7 @@ def save_lead(
                 info.get("budget"),
                 info.get("budget_scope"),
                 info.get("source"),
+                info.get("source_tag"),
                 info.get("vk_ref"),
                 info.get("vk_platform"),
                 phone,
