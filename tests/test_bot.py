@@ -284,6 +284,28 @@ def test_ai_beta_handoff_is_counted_without_storing_question(client, monkeypatch
     assert secret_question not in stored
 
 
+def test_admin_funnel_reports_sources_without_customer_data(client, monkeypatch):
+    sent = []
+    bot.record_funnel_event("telegram", "video_pain", "start", "opened")
+    bot.record_funnel_event("telegram", "video_pain", "lead", "accepted")
+    bot.record_funnel_event("telegram", "video_pain", "manager", "delivered")
+    bot.record_funnel_event("website", "vk:autumn", "lead", "accepted")
+    bot.record_funnel_event("website", "vk:autumn", "manager", "delivered")
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, bot.ADMIN_ID, "/funnel")
+
+    body = "\n".join(text for _, text in sent)
+    assert "📈 Воронка · 30 дней" in body
+    assert "video_pain: старт 1 → лиды 1 → менеджер 1 (100%)" in body
+    assert "vk:autumn: лиды 1 → менеджер 1 (100%)" in body
+    assert "Старты формы сайта считаются отдельно" in body
+
+
 def test_admin_ai_stats_reports_only_aggregate_outcomes(client, monkeypatch):
     sent = []
     bot.record_ai_chat_outcome(

@@ -556,6 +556,7 @@ ADMIN_HELP = (
     "/stats — статистика\n"
     "/restart — сбросить все активные сессии\n"
     "/analytics — общая аналитика (заявки, направления, партнёры)\n"
+    "/funnel — источники → лиды → доставка менеджеру за 30 дней\n"
     "/partners [дни] [reload] — партнёрские переходы, брони и доход\n"
     "/export — экспорт завершённых заявок\n"
     "/followup — напоминания незавершившим\n"
@@ -2596,6 +2597,19 @@ def _admin_stats(chat_id: int, arg: str) -> bool:
     return True
 
 
+def _admin_funnel(chat_id: int, arg: str) -> bool:
+    data = _funnel_health()
+    send_message(
+        chat_id,
+        _funnel_metrics.format_report(
+            data,
+            channels=["telegram", "website"],
+            max_sources=10,
+        ),
+    )
+    return True
+
+
 def _admin_ai_stats(chat_id: int, arg: str) -> bool:
     metrics = ai_chat_metrics_snapshot()
     if not metrics:
@@ -3154,6 +3168,7 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/users":        _admin_users,
     "/stats":        _admin_stats,
     "/analytics":    _admin_analytics,
+    "/funnel":       _admin_funnel,
     "/partners":     _admin_partners,
     "/export":       _admin_export,
     "/restart":      _admin_restart,

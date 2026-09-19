@@ -156,3 +156,77 @@ def cleanup(
             (cutoff,),
         )
         return int(cur.rowcount or 0)
+
+
+
+def format_report(
+    data: Dict[str, Any],
+    *,
+    channels: Optional[list[str]] = None,
+    max_sources: int = 10,
+) -> str:
+    """Render a compact human admin report without exposing customer data."""
+    window_days = max(1, int(data.get("window_seconds") or 0) // 86400)
+    all_channels = data.get("channels") if isinstance(data.get("channels"), dict) else {}
+    selected = channels or sorted(all_channels)
+    lines = [f"📈 Воронка · {window_days} дней"]
+    shown_any = False
+
+    labels = {
+        "telegram": "Telegram",
+        "website": "Сайт",
+        "vk": "VK",
+    }
+    for channel in selected:
+        sources = all_channels.get(channel)
+        if not isinstance(sources, dict) or not sources:
+            continue
+        shown_any = True
+        lines.append(f"\n{labels.get(channel, channel)}:")
+        ordered = sorted(
+            sources.items(),
+            key=lambda item: (
+                -int((item[1].get("summary") or {}).get("leads") or 0),
+                -int((item[1].get("start") or {}).get("opened") or 0),
+                item[0],
+            ),
+        )
+        for source, node in ordered[:max(1, int(max_sources))]:
+            starts = int((node.get("start") or {}).get("opened") or 0)
+            accepted = int((node.get("lead") or {}).get("accepted") or 0)
+            duplicates = int((node.get("lead") or {}).get("duplicate") or 0)
+            delivered = int((node.get("manager") or {}).get("delivered") or 0)
+            failed = int((node.get("manager") or {}).get("failed") or 0)
+            escalated = int((node.get("ai_handoff") or {}).get("escalated") or 0)
+            pct = (node.get("summary") or {}).get("lead_to_manager_pct")
+            pct_text = f"{pct:g}%" if isinstance(pct, (int, float)) else "—"
+
+            if channel == "website":
+                core = (
+                    f"• {source}: лиды {accepted} → менеджер {delivered} "
+                    f"({pct_text})"
+                )
+            else:
+                core = (
+                    f"• {source}: старт {starts} → лиды {accepted} → "
+                    f"менеджер {delivered} ({pct_text})"
+                )
+            extras = []
+            if duplicates:
+                extras.append(f"дубли {duplicates}")
+            if failed:
+                extras.append(f"ошибки доставки {failed}")
+            if escalated:
+                extras.append(f"AI→человек {escalated}")
+            if extras:
+                core += " · " + ", ".join(extras)
+            lines.append(core)
+
+        if len(ordered) > max(1, int(max_sources)):
+            lines.append(f"… ещё источников: {len(ordered) - max(1, int(max_sources))}")
+
+    if not shown_any:
+        lines.append("\nДанных пока нет.")
+    if "website" in selected:
+        lines.append("\nСтарты формы сайта считаются отдельно в Яндекс Метрике.")
+    return "\n".join(lines)

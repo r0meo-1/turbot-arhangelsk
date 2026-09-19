@@ -882,6 +882,27 @@ def test_privacy_command(client):
     assert resp.status_code == 200
 
 
+def test_vk_admin_funnel_command_is_aggregate(client, monkeypatch):
+    sent = []
+    bot.record_funnel_event("vk", "video_vs", "start", "opened")
+    bot.record_funnel_event("vk", "video_vs", "lead", "accepted")
+    bot.record_funnel_event("vk", "video_vs", "manager", "delivered")
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda uid, text, **kwargs: sent.append((uid, text)),
+    )
+
+    response = _post(client, bot.ADMIN_ID, "воронка")
+
+    assert response.status_code == 200
+    assert len(sent) == 1
+    body = sent[0][1]
+    assert "📈 Воронка · 30 дней" in body
+    assert "video_vs: старт 1 → лиды 1 → менеджер 1 (100%)" in body
+    assert "Старты формы сайта" not in body
+
+
 def test_admin_crm_status_is_pii_free(client, monkeypatch):
     monkeypatch.setattr(bot, "MDT_ENABLED", True)
     monkeypatch.setattr(bot, "MDT_MODE", "preorder")
