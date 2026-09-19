@@ -37,22 +37,19 @@
 - MDT credentials;
 - production pairing token.
 
-Для отправки лидов используется отдельный `AGENT_EXTENSION_TOKEN`.
+Для отправки лидов используется отдельный pairing-token Agent Desk.
 
-Создать токен на production server:
+Самый простой способ подключения:
 
-```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
+1. написать боту с Telegram-аккаунта `ADMIN_ID` команду `/agentdesk`;
+2. скопировать показанный pairing-token;
+3. вставить его один раз в секции **Подключение** расширения.
 
-Добавить его в `/opt/turbot/.env`:
+По умолчанию TurBot выводит отдельный HMAC-токен, производный от серверного `BOT_TOKEN`. Сам Telegram bot token браузеру не передаётся и из pairing-token обратно не восстанавливается.
 
-```env
-AGENT_EXTENSION_TOKEN=<generated secret>
-```
+При необходимости администратор сервера может переопределить токен переменной `AGENT_EXTENSION_TOKEN`.
 
-После рестарта TurBot вставить тот же токен один раз в секции **Подключение** расширения.
-Он хранится только в `chrome.storage.local`.
+Pairing-token хранится только в `chrome.storage.local`.
 
 ## Установка в Microsoft Edge
 
