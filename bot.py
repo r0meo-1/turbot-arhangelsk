@@ -440,6 +440,7 @@ USER_HELP = (
     "<b>Команды</b>\n"
     "/start — начать подбор\n"
     "/cancel — отменить заявку\n"
+    "/ask вопрос — спросить ИИ-помощника по текущей/последней заявке\n"
     "/privacy — обработка персональных данных\n"
     "/delete — удалить мои данные\n"
     "/help — эта справка\n\n"
@@ -515,6 +516,7 @@ BOT_COMMANDS = [
     {"command": "start", "description": "🌴 Начать подбор тура"},
     {"command": "help", "description": "ℹ️ Справка и контакты"},
     {"command": "cancel", "description": "❌ Отменить заявку"},
+    {"command": "ask", "description": "🤖 Вопрос ИИ по поездке"},
     {"command": "privacy", "description": "🔒 Персональные данные"},
     {"command": "delete", "description": "🗑 Удалить мои данные"},
 ]
