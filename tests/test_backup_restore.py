@@ -82,3 +82,14 @@ def test_backup_and_restore_drill_are_isolated_and_do_not_print_row_values(tmp_p
     # The drill must never mutate or replace the live files.
     with sqlite3.connect(app_dir / "bot_state.sqlite") as connection:
         assert connection.execute("SELECT value FROM leads").fetchone()[0] == secret
+
+
+def test_production_deploy_exposes_only_restricted_backup_drill_marker():
+    deployer = (ROOT / "deploy" / "turbot-deploy.sh").read_text(encoding="utf-8")
+    workflow = (ROOT / ".github" / "workflows" / "deploy-bundle.yml").read_text(encoding="utf-8")
+    marker = "TURBOT_BACKUP_DRILL_V1"
+    assert marker in deployer
+    assert marker in workflow
+    assert "Unexpected backup drill marker payload" in deployer
+    assert "ensure_backup_and_restore_drill" in deployer
+    assert "Verify production backup and isolated restore drill" in workflow
