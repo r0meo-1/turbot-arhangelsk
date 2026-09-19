@@ -67,7 +67,7 @@ from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
-from shared.runtime_metrics import lead_delivery_snapshot
+from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -693,6 +693,21 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ops_metric_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ops_metric_events_created_at "
+            "ON ops_metric_events(created_at)"
+        )
         cur.execute("PRAGMA journal_mode=WAL")
         cur.fetchone()
 
@@ -997,6 +1012,37 @@ def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
         "window_seconds": window,
         "channels": {"vk": snapshot},
     }
+
+
+def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
+    safe = tuple(str(value or "unknown")[:40] for value in (category, subject, outcome))
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (*safe, int(time.time())),
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist VK operational counter: %s", exc)
+
+
+def _ops_event_health(now: Optional[float] = None) -> Dict[str, Any]:
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT category || ':' || subject, outcome, COUNT(*) "
+                "FROM ops_metric_events WHERE created_at >= ? "
+                "GROUP BY category, subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK operational counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
 
 
 def _notify_ops_alert(message: str, *, alert_key: str) -> bool:
@@ -2566,6 +2612,9 @@ def _tour_search_worker(
         origin_snapshot["origin"] = origin
         provider_result, provider_name = _tour_providers.search_tours(
             _tour_provider_settings(), http_session, origin_snapshot, log=logger,
+            on_outcome=lambda provider, outcome: _record_ops_metric(
+                "provider", provider, outcome
+            ),
         )
         results.append(provider_result)
         if provider_name:
@@ -3665,7 +3714,9 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     lead_id: Optional[int] = None
     try:
         lead_id = save_lead(user_id, info, phone, first_name=client_name)
+        _record_ops_metric("lead", "vk", "accepted")
     except Exception as exc:
+        _record_ops_metric("lead", "vk", "save_failure")
         logger.error("Failed to save VK lead for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
     _confirm_to_user(user_id, info, phone)
@@ -4224,6 +4275,7 @@ def health() -> Any:
         "uptime_seconds": _version.uptime_seconds(),
         "mdt_delivery": _mdt_delivery_health(),
         "lead_delivery": _lead_delivery_health(),
+        "ops_events": _ops_event_health(),
         "ai_selection": {
             "mode": AI_MODE,
             "ready": selection_ai_provider.ready,
