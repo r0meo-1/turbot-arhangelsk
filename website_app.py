@@ -10,7 +10,9 @@ idempotency, validation, and the same protected MDT credentials as the bot.
 
 from __future__ import annotations
 
+import csv
 import html
+import io
 import json
 import logging
 import os
@@ -18,6 +20,7 @@ import re
 import secrets
 import threading
 import time
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Response, jsonify, request
@@ -82,6 +85,7 @@ def _init_schema() -> None:
                 owner_notified_at INTEGER,
                 crm_status TEXT NOT NULL DEFAULT 'new',
                 crm_note TEXT NOT NULL DEFAULT '',
+                crm_followup_on TEXT NOT NULL DEFAULT '',
                 crm_updated_at INTEGER
             )
             """
@@ -95,6 +99,7 @@ def _init_schema() -> None:
             "owner_notified_at": "INTEGER",
             "crm_status": "TEXT NOT NULL DEFAULT 'new'",
             "crm_note": "TEXT NOT NULL DEFAULT ''",
+            "crm_followup_on": "TEXT NOT NULL DEFAULT ''",
             "crm_updated_at": "INTEGER",
         }
         for name, ddl in migrations.items():
@@ -145,6 +150,18 @@ def _agent_json_response(body: Dict[str, Any], status: int = 200) -> Response:
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Max-Age"] = "600"
     response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _agent_csv_response(content: str, filename: str) -> Response:
+    response = Response("\ufeff" + content, content_type="text/csv; charset=utf-8")
+    origin = _agent_origin()
+    if _agent_extension_origin_allowed():
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Expose-Headers"] = "Content-Disposition"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
     return response
 
 
@@ -623,8 +640,8 @@ if "agent_extension_leads" not in app.view_functions:
             cur.execute(
                 """
                 SELECT id, name, phone, destination, origin, dates, people, budget,
-                       created_at, owner_status, crm_status, crm_note, crm_updated_at,
-                       mdt_payload
+                       created_at, owner_status, crm_status, crm_note, crm_followup_on,
+                       crm_updated_at, mdt_payload
                 FROM website_leads
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?
@@ -637,7 +654,7 @@ if "agent_extension_leads" not in app.view_functions:
         for row in rows:
             candidates = []
             try:
-                stored = json.loads(row[13] or "{}")
+                stored = json.loads(row[14] or "{}")
                 candidates = stored.get("agent_candidates") or []
             except (TypeError, ValueError, json.JSONDecodeError):
                 candidates = []
@@ -654,10 +671,65 @@ if "agent_extension_leads" not in app.view_functions:
                 "ownerStatus": str(row[9] or ""),
                 "status": str(row[10] or "new"),
                 "note": str(row[11] or ""),
-                "updatedAt": int(row[12] or 0),
+                "followUpOn": str(row[12] or ""),
+                "updatedAt": int(row[13] or 0),
                 "candidateCount": len(candidates) if isinstance(candidates, list) else 0,
             })
         return _agent_json_response({"ok": True, "leads": leads})
+
+
+if "agent_extension_export" not in app.view_functions:
+
+    @app.route("/agent-extension/export.csv", methods=["GET", "OPTIONS"])
+    def agent_extension_export() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+
+        with _bot._db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, phone, destination, origin, dates, people, budget,
+                       crm_status, crm_note, crm_followup_on, created_at, crm_updated_at
+                FROM website_leads
+                ORDER BY created_at DESC, id DESC
+                """
+            )
+            rows = cur.fetchall()
+
+        stream = io.StringIO(newline="")
+        writer = csv.writer(stream)
+        writer.writerow([
+            "ID", "Имя", "Телефон", "Направление", "Вылет", "Даты", "Туристы",
+            "Бюджет", "Статус", "Заметка", "Следующий контакт", "Создано", "Обновлено",
+        ])
+        for row in rows:
+            writer.writerow([
+                int(row[0]),
+                str(row[1] or ""),
+                str(row[2] or ""),
+                str(row[3] or ""),
+                str(row[4] or ""),
+                str(row[5] or ""),
+                str(row[6] or ""),
+                int(row[7] or 0),
+                str(row[8] or "new"),
+                str(row[9] or ""),
+                str(row[10] or ""),
+                int(row[11] or 0),
+                int(row[12] or 0),
+            ])
+
+        stamp = time.strftime("%Y-%m-%d")
+        return _agent_csv_response(
+            stream.getvalue(),
+            f"turbot-leads-{stamp}.csv",
+        )
 
 
 if "agent_extension_status" not in app.view_functions:
@@ -691,15 +763,24 @@ if "agent_extension_status" not in app.view_functions:
         except ValueError:
             return _agent_json_response({"ok": False, "error": "note_too_long"}, 400)
 
+        follow_up_on = str(raw.get("followUpOn") or "").strip()
+        if follow_up_on:
+            try:
+                date.fromisoformat(follow_up_on)
+            except ValueError:
+                return _agent_json_response(
+                    {"ok": False, "error": "invalid_followup_date"}, 400
+                )
+
         now = int(time.time())
         with _bot._db_cursor(commit=True) as cur:
             cur.execute(
                 """
                 UPDATE website_leads
-                SET crm_status=?, crm_note=?, crm_updated_at=?
+                SET crm_status=?, crm_note=?, crm_followup_on=?, crm_updated_at=?
                 WHERE id=?
                 """,
-                (status, note, now, lead_id),
+                (status, note, follow_up_on, now, lead_id),
             )
             changed = int(cur.rowcount or 0)
         if not changed:
@@ -708,6 +789,7 @@ if "agent_extension_status" not in app.view_functions:
             "ok": True,
             "leadId": lead_id,
             "status": status,
+            "followUpOn": follow_up_on,
             "updatedAt": now,
         })
 
