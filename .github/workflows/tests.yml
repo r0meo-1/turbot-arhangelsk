@@ -17,6 +17,11 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Install SQLite CLI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y sqlite3
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

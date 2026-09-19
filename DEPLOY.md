@@ -290,7 +290,25 @@ Send `/start` to the bot in Telegram — you should see a consent prompt.
 | Stop bot            | `sudo systemctl stop turbot`           |
 | Update from repo    | `cd /opt/turbot && bash scripts/deploy.sh` |
 | Dry-run an update   | `cd /opt/turbot && bash scripts/deploy.sh --check` |
-| Backup database     | `cp /opt/turbot/bot_state.sqlite /backup/` |
+| Backup databases    | `sudo /opt/turbot/scripts/backup.sh`       |
+| Verify restore      | `sudo /opt/turbot/scripts/restore-drill.sh` |
+
+### Backup and restore safety
+
+Production backups use SQLite's online `.backup` command and fail if the
+`sqlite3` CLI is unavailable. Each copy is checked with
+`PRAGMA integrity_check`; a live database is never backed up with plain
+`cp`.
+
+The deployer installs `/etc/cron.d/turbot-backup` for 03:00 daily and runs
+one backup plus an isolated restore drill on deployment. The drill validates
+that the newest copy is no older than 24 hours, restores it only under a
+temporary directory, checks schema/table counts without printing row values,
+and never overwrites the live database.
+
+For the real incident procedure, permissions, RPO/RTO targets and the current
+off-host-storage compliance blocker, see
+[`docs/backup-restore.md`](docs/backup-restore.md).
 
 ---
 

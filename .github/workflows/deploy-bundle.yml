@@ -66,6 +66,14 @@ jobs:
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
 
+      - name: Verify production backup and isolated restore drill
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          printf 'TURBOT_BACKUP_DRILL_V1\n' |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              root@${{ secrets.DEPLOY_HOST }} true
+
       - name: Verify deployed legal content and base headers
         shell: bash
         run: |
