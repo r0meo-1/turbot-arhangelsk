@@ -73,7 +73,8 @@ def test_draft_api_and_static():
         assert client.get('/vk/miniapp/' + path).status_code == 200
     legal = client.get('/vk/miniapp/legal.json')
     assert legal.status_code == 200
-    assert legal.json['operatorName']
+    assert legal.json['operatorName'] == 'ИП Замятина Мария Андреевна, ОГРНИП 311293232600026'
+    assert legal.json['operatorName'] != 'ТА «АПРЕЛЬ тур»'
     assert legal.json['projectUrl'] == 'https://r0meo1.ru/apreltour/'
     privacy = client.get('/vk/miniapp/privacy.html').get_data(as_text=True)
     assert 'ЧЕРНОВИК' not in privacy
@@ -127,3 +128,28 @@ def test_save_failure_does_not_report_success():
     app.register_blueprint(create_blueprint(fail, lambda: (SECRET, '123', 999)))
     response = app.test_client().post('/vk/miniapp/draft', json={'launchParams': signed(), 'payload': payload()})
     assert response.status_code == 500 and response.json['ok'] is False
+
+
+def test_legal_config_uses_verified_fallback_and_allows_override(monkeypatch):
+    monkeypatch.delenv("DATA_OPERATOR_NAME", raising=False)
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *_: None, lambda: (SECRET, "123", 999)))
+    client = app.test_client()
+    legal = client.get("/vk/miniapp/legal.json")
+    assert legal.status_code == 200
+    assert legal.json["operatorName"] == (
+        "ИП Замятина Мария Андреевна, ОГРНИП 311293232600026"
+    )
+
+    monkeypatch.setenv("DATA_OPERATOR_NAME", "ИП Проверенный Оператор")
+    overridden = client.get("/vk/miniapp/legal.json")
+    assert overridden.json["operatorName"] == "ИП Проверенный Оператор"
+
+
+def test_vk_blueprint_security_headers():
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *_: None, lambda: (SECRET, "123", 999)))
+    response = app.test_client().get("/vk/miniapp/legal.json")
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert response.headers["Referrer-Policy"] == "no-referrer"
+    assert response.headers["Cache-Control"] == "no-store"

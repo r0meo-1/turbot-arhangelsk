@@ -9,6 +9,11 @@ from urllib.parse import parse_qsl, urlencode
 
 from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from shared.telegram_webapp import MiniAppValidationError, validate_trip_request
+from shared.legal_identity import (
+    LEGAL_OPERATOR_DISPLAY,
+    LEGAL_PRIVACY_CONTACT,
+    LEGAL_PROJECT_URL,
+)
 from shared import travelpayouts_booking as _travelpayouts_booking
 
 
@@ -140,15 +145,15 @@ def create_blueprint(save_draft, settings):
     @bp.get("/vk/miniapp/legal.json")
     def legal_config():
         return jsonify(
-            operatorName=os.getenv("DATA_OPERATOR_NAME", "ТА «АПРЕЛЬ тур»").strip() or "ТА «АПРЕЛЬ тур»",
+            operatorName=os.getenv("DATA_OPERATOR_NAME", LEGAL_OPERATOR_DISPLAY).strip() or LEGAL_OPERATOR_DISPLAY,
             privacyContact=os.getenv(
                 "DATA_OPERATOR_CONTACT",
-                "Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584",
-            ).strip() or "Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584",
+                LEGAL_PRIVACY_CONTACT,
+            ).strip() or LEGAL_PRIVACY_CONTACT,
             projectUrl=os.getenv(
                 "PUBLIC_PROJECT_URL",
-                "https://r0meo1.ru/apreltour/",
-            ).strip() or "https://r0meo1.ru/apreltour/",
+                LEGAL_PROJECT_URL,
+            ).strip() or LEGAL_PROJECT_URL,
         )
 
     @bp.get("/vk/miniapp/<name>")

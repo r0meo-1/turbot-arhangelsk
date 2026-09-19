@@ -3953,6 +3953,18 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MB — Telegram updates are well under this
 
 
+@app.after_request
+def _global_security_headers(response: Response) -> Response:
+    """Apply conservative browser headers without overriding stricter blueprints."""
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    )
+    return response
+
+
 def _miniapp_json(body: Dict[str, Any], status: int = 200) -> Response:
     """JSON response with narrowly scoped CORS for the GitHub Pages Mini App."""
     response = jsonify(body)
