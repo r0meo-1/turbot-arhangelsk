@@ -106,6 +106,9 @@ def search_tours(
         if result.search_id is not None:
             last_search_id = result.search_id
         if result.offers:
+            for offer in result.offers:
+                offer.provider = name
+                offer.provider_search_id = result.search_id
             return result, name
         if result.error:
             errors.append(f"{name}: {result.error}")
@@ -119,3 +122,23 @@ def search_tours(
         error="; ".join(errors) or "Подходящих туров пока не найдено",
         search_id=last_search_id,
     ), ""
+
+
+
+def actualize_offer(
+    settings: ProviderSettings,
+    session: requests.Session,
+    offer: dict,
+    *,
+    log: Optional[logging.Logger] = None,
+) -> dict:
+    """Actualize one selected offer with its originating provider.
+
+    Unsupported providers deliberately fall back to an unconfirmed result.
+    Search inventory must never be presented as live availability by inference.
+    """
+    log = log or logger
+    provider = str(offer.get("provider") or "").strip().lower()
+    if provider == "sletat":
+        return _sletat.actualize_tour(settings.sletat, session, offer, log=log)
+    return _tourvisor.actualize_tour(offer)
