@@ -92,7 +92,7 @@ def test_miniapp_persists_review_without_lead_or_messages(monkeypatch):
     from shared.vk_miniapp import validate_vk_trip
     raw = dict(type="trip_request", version=2, destination="Египет", departure="Архангельск",
                date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
-               children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True, termsAccepted=True, termsAccepted=True)
+               children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True, termsAccepted=True)
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: pytest.fail("draft must not send messages"))
     bot._save_miniapp_draft(42, validate_vk_trip(raw))
     saved = bot.get_session(42)
@@ -118,7 +118,7 @@ def test_miniapp_attribution_survives_session_and_lead():
 
     raw = dict(type="trip_request", version=2, destination="Таиланд", departure="Архангельск",
                date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
-               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True, termsAccepted=True)
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True)
     info = validate_vk_trip(raw)
     info.update(vk_ref="community_messages", vk_platform="desktop_web")
 
@@ -142,7 +142,7 @@ def test_miniapp_draft_ignores_stale_memory_after_persistent_cancel():
 
     raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
                date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
-               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True, termsAccepted=True)
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True)
     stale = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_DESTINATION)
     bot.user_data[44] = stale
     bot.delete_session(44)
@@ -160,7 +160,7 @@ def test_miniapp_draft_replaces_durable_active_chat_session():
 
     raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
                date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
-               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True, termsAccepted=True)
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True)
     active = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_DESTINATION)
     bot.set_session(45, active)
     bot.user_data.pop(45, None)
@@ -177,7 +177,7 @@ def test_miniapp_draft_blocks_only_while_completion_is_in_progress():
 
     raw = dict(type="trip_request", version=2, destination="Шри-Ланка", departure="Архангельск",
                date=(date.today() + timedelta(days=30)).isoformat(), nights=10, adults=2,
-               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True, termsAccepted=True)
+               children=0, childrenAges=[], budgetMaxRub=270000, consent=True, termsAccepted=True)
     active = dict(validate_vk_trip(dict(raw, destination="Египет")), state=bot.STATE_REVIEW,
                   _completing=True)
     bot.user_data[46] = active
