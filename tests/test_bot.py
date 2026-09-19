@@ -2583,3 +2583,145 @@ def test_global_security_headers_on_health_and_privacy(client):
         assert "default-src 'self'" in csp
         assert "object-src 'none'" in csp
         assert "frame-ancestors" not in csp
+
+
+def test_lead_assist_uses_recent_saved_trip_context_without_contact_pii(monkeypatch):
+    chat_id = 99101
+    sent = []
+    captured = {}
+
+    bot.save_lead(
+        chat_id,
+        {
+            "destination": "Таиланд",
+            "origin": "Москва",
+            "dates": "2027-01-19",
+            "nights": 10,
+            "people": "2",
+            "budget": 270000,
+            "budget_scope": "total",
+            "direct_only": True,
+        },
+        "+79991234567",
+        first_name="Private Name",
+        username="private_user",
+    )
+
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    monkeypatch.setattr(
+        bot,
+        "selection_ai_provider",
+        SimpleNamespace(ready=True, client=object(), model="gemma-test"),
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text, kwargs)) or _OkResp(),
+    )
+
+    def fake_reply(question, **kwargs):
+        captured["question"] = question
+        captured.update(kwargs)
+        return SimpleNamespace(
+            text="ИИ-помощник: Возьмите лёгкую одежду и зарядку.",
+            handoff_required=False,
+            reason="",
+        )
+
+    monkeypatch.setattr(bot, "_generate_ai_chat_reply", fake_reply)
+
+    assert bot._handle_lead_assist(chat_id, "Что взять с собой?") is True
+    assert captured["question"] == "Что взять с собой?"
+    context = captured["verified_context"]
+    assert "Направление: Таиланд" in context
+    assert "Город вылета: Москва" in context
+    assert "Бюджет: 270000 ₽ на всю поездку" in context
+    assert "+79991234567" not in context
+    assert "Private Name" not in context
+    assert "private_user" not in context
+    assert sent[-1][1].startswith("🤖 ИИ-помощник:")
+
+
+def test_lead_assist_handoff_notifies_manager_with_redacted_question(monkeypatch):
+    chat_id = 99102
+    bot.user_data[chat_id] = {
+        "state": bot.STATE_DESTINATION,
+        "destination": "Таиланд",
+        "people": "2",
+        "budget": 250000,
+    }
+
+    sent = []
+    owner = []
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    monkeypatch.setattr(
+        bot,
+        "selection_ai_provider",
+        SimpleNamespace(ready=True, client=object(), model="gemma-test"),
+    )
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text, kwargs)) or _OkResp(),
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_lead_owner_vk",
+        lambda text: owner.append(text) or True,
+    )
+    monkeypatch.setattr(
+        bot,
+        "_generate_ai_chat_reply",
+        lambda *args, **kwargs: SimpleNamespace(
+            text="По этому вопросу нужен менеджер.",
+            handoff_required=True,
+            reason="verified_source_or_human_required",
+        ),
+    )
+
+    assert bot._handle_lead_assist(
+        chat_id,
+        "Напишите ответ на test@example.com по визе",
+    ) is True
+
+    manager_messages = [text for cid, text, _ in sent if cid == 999]
+    assert manager_messages
+    assert "test@example.com" not in manager_messages[-1]
+    assert "[email-redacted]" in manager_messages[-1]
+    assert f"/send {chat_id}" in manager_messages[-1]
+    assert owner and "test@example.com" not in owner[-1]
+
+
+def test_ask_command_invokes_lead_assist_without_advancing_dialog(client, monkeypatch):
+    chat_id = 99103
+    bot.user_data[chat_id] = {
+        "state": bot.STATE_DESTINATION,
+        "destination": "Таиланд",
+        "updated_at": int(time.time()),
+    }
+    called = []
+    monkeypatch.setattr(
+        bot,
+        "_handle_lead_assist",
+        lambda cid, question: called.append((cid, question)) or True,
+    )
+
+    response = _post(client, chat_id, "/ask Какой район спокойнее?")
+
+    assert response.status_code == 200
+    assert called == [(chat_id, "Какой район спокойнее?")]
+    assert bot.user_data[chat_id]["state"] == bot.STATE_DESTINATION
+
+
+def test_health_exposes_lead_assist_flag_without_provider_secret(client, monkeypatch):
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ai_selection"]["lead_assist_enabled"] is True
+    raw = response.get_data(as_text=True)
+    assert "REGCLOUD_API_KEY" not in raw
+    assert "REGCLOUD_BASE_URL" not in raw
