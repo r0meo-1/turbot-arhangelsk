@@ -42,7 +42,7 @@ _RATE_WINDOW_SECONDS = max(60, int(os.getenv("WEBSITE_LEAD_RATE_WINDOW_SECONDS",
 _WORKER_ENABLED = os.getenv("WEBSITE_LEAD_WORKER_ENABLED", "true").lower().strip() in {
     "1", "true", "yes", "on"
 }
-_AGENT_EXTENSION_TOKEN = os.getenv("AGENT_EXTENSION_TOKEN", "").strip()
+_AGENT_EXTENSION_TOKEN = _bot.agent_extension_token()
 
 _rate_lock = threading.Lock()
 _rate_hits: Dict[str, List[float]] = {}
