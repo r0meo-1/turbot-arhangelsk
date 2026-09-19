@@ -2130,7 +2130,11 @@ def _funnel_health(now: Optional[float] = None) -> Dict[str, Any]:
 
 def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
     """Persist one bounded operational event without customer data."""
-    safe = tuple(str(value or "unknown")[:40] for value in (category, subject, outcome))
+    safe = (
+        str(category or "unknown")[:40],
+        str(subject or "unknown")[:40],
+        str(outcome or "unknown")[:64],
+    )
     try:
         with _db_cursor(commit=True) as cur:
             cur.execute(
