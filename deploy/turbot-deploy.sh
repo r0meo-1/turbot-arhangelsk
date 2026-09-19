@@ -118,7 +118,11 @@ PY
   systemctl daemon-reload
   systemctl restart turbot
   systemctl restart vk-turbot
-  cp "$repo/deploy/turbot-deploy.sh" /usr/local/sbin/turbot-deploy
+  source_deployer="$(readlink -f "$repo/deploy/turbot-deploy.sh")"
+  installed_deployer="$(readlink -f /usr/local/sbin/turbot-deploy 2>/dev/null || true)"
+  if [[ "$source_deployer" != "$installed_deployer" ]]; then
+    cp "$repo/deploy/turbot-deploy.sh" /usr/local/sbin/turbot-deploy
+  fi
   chmod 755 /usr/local/sbin/turbot-deploy
 
   for _ in {1..12}; do
