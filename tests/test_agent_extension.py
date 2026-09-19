@@ -33,4 +33,6 @@ def test_agent_extension_points_only_to_protected_agent_endpoint():
     assert "https://bot.r0meo1.ru/agent-extension/lead" in js
     assert "https://bot.r0meo1.ru/agent-extension/leads" in js
     assert "https://bot.r0meo1.ru/agent-extension/status" in js
+    assert "https://bot.r0meo1.ru/agent-extension/export.csv" in js
+    assert "followUpOn" in js
     assert "/website/lead" not in js
