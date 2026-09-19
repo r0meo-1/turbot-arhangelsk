@@ -260,16 +260,7 @@ if TOURVISOR_ENABLED and not TOURVISOR_TOKEN:
 
 
 def _tourvisor_jwt_expired(token: str) -> bool:
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return False
-        payload_raw = parts[1] + "=" * (-len(parts[1]) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode("utf-8"))
-        exp = payload.get("exp")
-        return isinstance(exp, (int, float)) and float(exp) <= time.time()
-    except Exception:
-        return False
+    return _tourvisor.jwt_expired(token)
 
 
 if TOURVISOR_ENABLED and _tourvisor_jwt_expired(TOURVISOR_TOKEN):
@@ -343,6 +334,33 @@ def _tour_provider_settings() -> "_tour_providers.ProviderSettings":
 
 
 TOUR_SEARCH_ENABLED = _tour_provider_settings().enabled
+
+
+def _tour_search_health() -> Dict[str, Any]:
+    providers = _tour_provider_settings()
+    tv = _tourvisor.jwt_status(TOURVISOR_TOKEN)
+    return {
+        "enabled": providers.enabled,
+        "enabled_providers": providers.enabled_names(),
+        "provider_order": list(TOUR_PROVIDER_ORDER),
+        "tourvisor": {
+            "configured": bool(TOURVISOR_TOKEN),
+            "enabled": bool(TOURVISOR_ENABLED),
+            "token_status": tv["status"],
+            "expires_in_seconds": tv["expires_in_seconds"],
+        },
+        "travelata": {
+            "configured": bool(TRAVELATA_USERNAME and TRAVELATA_PASSWORD),
+            "enabled": bool(TRAVELATA_ENABLED),
+        },
+        "sletat": {
+            "configured": bool(
+                getattr(providers.sletat, "login", "")
+                and getattr(providers.sletat, "password", "")
+            ),
+            "enabled": bool(getattr(providers.sletat, "enabled", False)),
+        },
+    }
 
 
 def _tutu_settings() -> "_tutu.TutuSettings":
@@ -4340,6 +4358,7 @@ def health() -> Any:
         "lead_delivery": _lead_delivery_health(),
         "ops_events": _ops_event_health(),
         "acquisition_funnel": _funnel_health(),
+        "tour_search": _tour_search_health(),
         "ai_selection": {
             "mode": AI_MODE,
             "ready": selection_ai_provider.ready,

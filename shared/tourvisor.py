@@ -7,6 +7,8 @@ never prevent the existing lead from reaching the manager.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import re
 import time
@@ -21,6 +23,37 @@ from shared.dates import parse_russian_dates
 
 logger = logging.getLogger("turbot.shared.tourvisor")
 RequestFn = Callable[[str, str, Optional[Dict[str, Any]]], Any]
+
+
+def jwt_status(token: str, *, now: Optional[float] = None) -> Dict[str, Any]:
+    """Inspect a Tourvisor JWT without verifying or exposing its contents.
+
+    This is only an operational expiry check. Signature validation remains the
+    upstream API's responsibility. The returned data is safe for health logs.
+    """
+    raw = str(token or "").strip()
+    if not raw:
+        return {"status": "absent", "expires_in_seconds": None}
+    parts = raw.split(".")
+    if len(parts) != 3:
+        return {"status": "not_jwt", "expires_in_seconds": None}
+    try:
+        payload_raw = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode("utf-8"))
+    except Exception:
+        return {"status": "unreadable", "expires_in_seconds": None}
+    exp = payload.get("exp")
+    if not isinstance(exp, (int, float)):
+        return {"status": "no_exp", "expires_in_seconds": None}
+    remaining = int(float(exp) - (time.time() if now is None else float(now)))
+    return {
+        "status": "expired" if remaining <= 0 else "valid",
+        "expires_in_seconds": max(0, remaining),
+    }
+
+
+def jwt_expired(token: str, *, now: Optional[float] = None) -> bool:
+    return jwt_status(token, now=now)["status"] == "expired"
 
 
 @dataclass
@@ -288,6 +321,8 @@ def search_tours(
     log = log or logger
     if not settings.enabled or not settings.token:
         return SearchResult(error="Поиск туров сейчас выключен")
+    if jwt_expired(settings.token):
+        return SearchResult(error="Tourvisor JWT истёк; требуется новый токен из личного кабинета")
     if info.get("needs_consultation"):
         return SearchResult(error="Для направления нужна консультация менеджера")
 

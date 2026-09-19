@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 from shared import sletat
@@ -479,3 +481,33 @@ def test_sletat_actualize_refuses_offer_without_search_provenance():
     assert actual["confirmed"] is False
     assert actual["status"] == "unknown"
     assert not any(call[0].endswith("/ActualizePrice") for call in session.calls)
+
+
+
+def test_router_skips_expired_tourvisor_without_calling_it(monkeypatch):
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": 1}).encode()
+    ).decode().rstrip("=")
+    expired = f"header.{payload}.signature"
+    called = []
+
+    monkeypatch.setattr(
+        tour_providers._tourvisor,
+        "search_tours",
+        lambda *args, **kwargs: called.append(True) or tourvisor.SearchResult(),
+    )
+    settings = tour_providers.ProviderSettings(
+        order=("tourvisor",),
+        tourvisor=tourvisor.TourvisorSettings(enabled=True, token=expired),
+    )
+
+    result, provider = tour_providers.search_tours(
+        settings,
+        FakeSession(),
+        _info(),
+    )
+
+    assert settings.enabled_names() == []
+    assert called == []
+    assert provider == ""
+    assert "не настроен" in result.error.lower()

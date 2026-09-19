@@ -169,15 +169,12 @@ PY
 
 inspect_tourvisor() {
   PYTHONPATH="$repo" "$venv/python" - "$env_file" <<'PY'
-import base64
-import json
 import sys
-import time
 from urllib.parse import urlparse
 
 import requests
 from dotenv import dotenv_values
-from shared.tourvisor import _find_named_id
+from shared.tourvisor import _find_named_id, jwt_status
 
 values = dotenv_values(sys.argv[1])
 token = str(values.get('TOURVISOR_TOKEN') or '').strip()
@@ -189,22 +186,8 @@ base_url = str(
 ).strip().rstrip('/')
 host = urlparse(base_url).hostname or 'unknown'
 
-jwt_exp_status = 'absent'
-if token:
-    try:
-        parts = token.split('.')
-        if len(parts) == 3:
-            payload_raw = parts[1] + '=' * (-len(parts[1]) % 4)
-            payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode('utf-8'))
-            exp = payload.get('exp')
-            if isinstance(exp, (int, float)):
-                jwt_exp_status = 'expired' if float(exp) <= time.time() else 'valid'
-            else:
-                jwt_exp_status = 'not_set'
-        else:
-            jwt_exp_status = 'not_jwt'
-    except Exception:
-        jwt_exp_status = 'unreadable'
+token_state = jwt_status(token)
+jwt_exp_status = token_state['status']
 
 print(
     'Tourvisor config: '
@@ -214,6 +197,9 @@ print(
     f'endpoint_host={host}'
 )
 if not token:
+    raise SystemExit(0)
+if jwt_exp_status == 'expired':
+    print('Tourvisor API: probe=skipped reason=expired_jwt')
     raise SystemExit(0)
 
 headers = {

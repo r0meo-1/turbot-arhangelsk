@@ -317,6 +317,12 @@ def test_health_endpoint(client):
     assert data["mdt_delivery"]["total"] == 0
     assert data["acquisition_funnel"]["available"] is True
     assert "channels" in data["acquisition_funnel"]
+    assert data["tour_search"]["enabled"] is bot.TOUR_SEARCH_ENABLED
+    assert "enabled_providers" in data["tour_search"]
+    assert "provider_order" in data["tour_search"]
+    assert data["tour_search"]["tourvisor"]["configured"] is bool(bot.TOURVISOR_TOKEN)
+    assert "token_status" in data["tour_search"]["tourvisor"]
+    assert "TOURVISOR_TOKEN" not in resp.get_data(as_text=True)
     assert data["ai_selection"]["mode"] == bot.AI_MODE
     assert data["ai_selection"]["ready"] is bot.selection_ai_provider.ready
     assert data["ai_selection"]["model"] == (bot.selection_ai_provider.model or None)
