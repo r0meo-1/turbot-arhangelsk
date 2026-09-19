@@ -72,9 +72,25 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded")
 
+            overflow = page.evaluate(
+                """() => [...document.querySelectorAll('body *')]
+                  .map((el) => {
+                    const rect = el.getBoundingClientRect();
+                    return {
+                      tag: el.tagName,
+                      id: el.id || '',
+                      cls: String(el.className || ''),
+                      left: Math.round(rect.left * 10) / 10,
+                      right: Math.round(rect.right * 10) / 10,
+                      width: Math.round(rect.width * 10) / 10
+                    };
+                  })
+                  .filter((item) => item.left < -0.5 || item.right > window.innerWidth + 0.5)
+                  .slice(0, 12)"""
+            )
             assert page.evaluate(
                 "document.documentElement.scrollWidth <= window.innerWidth"
-            )
+            ), overflow
             shell_box = page.locator(".shell").bounding_box()
             assert shell_box is not None
             assert shell_box["x"] >= 0
