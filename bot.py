@@ -2708,7 +2708,9 @@ def _admin_ai_stats(chat_id: int, arg: str) -> bool:
         return True
 
     total = sum(metrics.values())
-    lines = [f"🧪 AI · всего: {total} запросов"]
+    # Preserve the original first line for operators/scripts that already
+    # recognize it; the recent privacy-safe breakdown is appended below.
+    lines = [f"🧪 AI beta: {total} запросов"]
     for outcome, count in metrics.items():
         lines.append(f"• {outcome}: {count}")
 
