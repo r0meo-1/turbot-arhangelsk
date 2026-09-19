@@ -73,7 +73,11 @@ class ProviderSettings:
                 ):
                     enabled.append(name)
             elif name == "tourvisor":
-                if self.tourvisor.enabled and self.tourvisor.token:
+                if (
+                    self.tourvisor.enabled
+                    and self.tourvisor.token
+                    and not _tourvisor.jwt_expired(self.tourvisor.token)
+                ):
                     enabled.append(name)
         return list(dict.fromkeys(enabled))
 
