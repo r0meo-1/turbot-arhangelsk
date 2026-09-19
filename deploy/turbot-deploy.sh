@@ -8,12 +8,148 @@ venv="$repo/venv/bin"
 
 cd "$repo"
 
+deploy_bundle() {
+  local target_sha bundle stage old_manifest backup
+  IFS= read -r target_sha || {
+    echo "Missing bundle commit SHA" >&2
+    return 1
+  }
+  if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Invalid bundle commit SHA" >&2
+    return 1
+  fi
+
+  bundle="$(mktemp)"
+  stage="$(mktemp -d)"
+  backup="$(mktemp)"
+  trap 'rm -f "$bundle" "$backup"; rm -rf "$stage"' RETURN
+
+  cat > "$bundle"
+  tar -tzf "$bundle" >/dev/null
+  tar -xzf "$bundle" -C "$stage"
+  if [[ ! -f "$stage/.deploy-manifest" ]]; then
+    echo "Deploy bundle manifest missing" >&2
+    return 1
+  fi
+
+  "$venv/python" - "$stage/.deploy-manifest" <<'PY'
+from pathlib import Path
+import sys
+
+manifest = Path(sys.argv[1])
+for raw in manifest.read_text(encoding="utf-8").splitlines():
+    path = Path(raw)
+    if not raw or path.is_absolute() or ".." in path.parts:
+        raise SystemExit(f"Unsafe deploy path: {raw!r}")
+PY
+
+  old_manifest="$(mktemp)"
+  if [[ -f "$repo/.deploy-manifest" ]]; then
+    cp "$repo/.deploy-manifest" "$old_manifest"
+  else
+    git -C "$repo" ls-files > "$old_manifest"
+  fi
+
+  tar -czf "$backup" -C "$repo" --ignore-failed-read -T "$old_manifest" 2>/dev/null || true
+
+  "$venv/python" - "$repo" "$old_manifest" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+root = Path(sys.argv[1]).resolve()
+manifest = Path(sys.argv[2])
+protected = {".env", ".deploy-manifest", ".deployed-commit"}
+for raw in manifest.read_text(encoding="utf-8").splitlines():
+    if not raw or raw in protected:
+        continue
+    rel = Path(raw)
+    if rel.is_absolute() or ".." in rel.parts:
+        continue
+    path = root / rel
+    try:
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
+PY
+
+  cp -a "$stage/." "$repo/"
+  printf '%s\n' "$target_sha" > "$repo/.deployed-commit"
+  chown -R turbot:turbot "$repo"
+  chown root:root "$repo/deploy/turbot-deploy.sh" 2>/dev/null || true
+  chmod 755 "$repo/deploy/turbot-deploy.sh" 2>/dev/null || true
+
+  rollback_bundle() {
+    echo "Bundle deployment failed; restoring previous files" >&2
+    "$venv/python" - "$repo" "$repo/.deploy-manifest" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+root = Path(sys.argv[1]).resolve()
+manifest = Path(sys.argv[2])
+if manifest.exists():
+    for raw in manifest.read_text(encoding="utf-8").splitlines():
+        if not raw:
+            continue
+        rel = Path(raw)
+        if rel.is_absolute() or ".." in rel.parts:
+            continue
+        path = root / rel
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink(missing_ok=True)
+            elif path.is_dir():
+                shutil.rmtree(path)
+        except FileNotFoundError:
+            pass
+PY
+    tar -xzf "$backup" -C "$repo" 2>/dev/null || true
+    systemctl restart turbot 2>/dev/null || true
+    systemctl restart vk-turbot 2>/dev/null || true
+  }
+  trap rollback_bundle ERR
+
+  "$venv/pip" install --requirement "$repo/requirements.txt"
+  cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
+  systemctl daemon-reload
+  systemctl restart turbot
+  systemctl restart vk-turbot
+  cp "$repo/deploy/turbot-deploy.sh" /usr/local/sbin/turbot-deploy
+  chmod 755 /usr/local/sbin/turbot-deploy
+
+  for _ in {1..12}; do
+    if curl --fail --silent --max-time 5 http://127.0.0.1:8000/health >/dev/null \
+      && curl --fail --silent --max-time 5 http://127.0.0.1:5100/vk/health >/dev/null; then
+      chmod +x "$repo/deploy/verify-vk-miniapp.sh"
+      "$repo/deploy/verify-vk-miniapp.sh"
+      trap - ERR
+      rm -f "$old_manifest"
+      echo "TurBot bundle deployed: $target_sha"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "TurBot bundle did not become healthy" >&2
+  return 1
+}
+
+
 apply_stdin_config() {
   local marker payload
 
   # Normal deploy connections have empty stdin.
   if ! IFS= read -r marker; then
     return 0
+  fi
+
+  if [[ "$marker" == "TURBOT_DEPLOY_BUNDLE_V1" ]]; then
+    deploy_bundle
+    exit $?
   fi
 
   if [[ "$marker" == "TURBOT_VK_CALLBACK_APP_PAYLOAD_V1" ]]; then
@@ -211,6 +347,7 @@ PY
     if curl --fail --silent --max-time 3 http://127.0.0.1:8000/health >/dev/null \
       && curl --fail --silent --max-time 3 http://127.0.0.1:5100/vk/health >/dev/null; then
       echo "TurBot and VK Mini App services healthy"
+      CONFIG_APPLIED=1
       return 0
     fi
     sleep 1
@@ -225,7 +362,12 @@ PY
   return 1
 }
 
+CONFIG_APPLIED=0
 apply_stdin_config
+if [[ "$CONFIG_APPLIED" == "1" ]]; then
+  exit 0
+fi
+
 previous=$(git rev-parse HEAD)
 git fetch --depth=1 origin "$branch"
 target=$(git rev-parse "origin/$branch")
