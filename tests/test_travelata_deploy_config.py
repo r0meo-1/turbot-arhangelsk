@@ -4,6 +4,7 @@ import subprocess
 
 DEPLOY_SCRIPT = Path("deploy/turbot-deploy.sh")
 WORKFLOW = Path(".github/workflows/deploy.yml")
+CONFIG_SENDER = Path("deploy/send-production-config.sh")
 
 
 def test_deploy_shell_syntax_is_valid():
@@ -55,18 +56,16 @@ def test_v4_can_install_optional_travelpayouts_token_without_erasing_existing_va
     assert "Travelpayouts deploy token not supplied; existing server value preserved" in source
 
 
-def test_deploy_workflow_uses_v5_with_required_travelpayouts_secret():
+def test_deploy_workflow_delegates_production_config_to_sender():
     source = WORKFLOW.read_text(encoding="utf-8")
+    assert "DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}" in source
     assert "TRAVELATA_USERNAME: ${{ secrets.TRAVELATA_USERNAME }}" in source
     assert "TRAVELATA_PASSWORD: ${{ secrets.TRAVELATA_PASSWORD }}" in source
     assert "TRAVELPAYOUTS_API_TOKEN: ${{ secrets.TRAVELPAYOUTS_API_TOKEN }}" in source
-    assert "TURBOT_DEPLOY_CONFIG_V5" in source
-    assert "Travelata GitHub secrets must be configured as a complete pair" in source
-    assert 'if [[ -z "$TRAVELPAYOUTS_API_TOKEN" ]]; then' in source
-    assert "TRAVELPAYOUTS_API_TOKEN GitHub secret is required for Booking.com search" in source
-    assert "travelata_user_b64" in source
-    assert "travelata_password_b64" in source
-    assert "travelpayouts_token_b64" in source
+    assert "SLETAT_LOGIN: ${{ secrets.SLETAT_LOGIN }}" in source
+    assert "SLETAT_PASSWORD: ${{ secrets.SLETAT_PASSWORD }}" in source
+    assert "deploy/send-production-config.sh" in source
+    assert "TURBOT_DEPLOY_CONFIG_V5" not in source
 
 
 def test_deploy_workflow_smokes_live_booking_partner_link():
@@ -92,11 +91,11 @@ def test_v5_can_install_optional_sletat_pair_without_erasing_existing_values():
     assert "Sletat deploy credentials not supplied; existing server values preserved" in source
 
 
-def test_deploy_workflow_accepts_optional_sletat_secret_pair():
-    source = WORKFLOW.read_text(encoding="utf-8")
-    assert "SLETAT_LOGIN: ${{ secrets.SLETAT_LOGIN }}" in source
-    assert "SLETAT_PASSWORD: ${{ secrets.SLETAT_PASSWORD }}" in source
-    assert "Sletat GitHub secrets must be configured as a complete pair" in source
-    assert "sletat_login_b64" in source
-    assert "sletat_password_b64" in source
+def test_config_sender_contains_bootstrap_safe_v4_v5_selection():
+    source = CONFIG_SENDER.read_text(encoding="utf-8")
+    assert "TURBOT_DEPLOY_CONFIG_V1" in source
+    assert "TURBOT_DEPLOY_CONFIG_V4" in source
     assert "TURBOT_DEPLOY_CONFIG_V5" in source
+    assert 'if [[ -n "$SLETAT_LOGIN" && -n "$SLETAT_PASSWORD" ]]; then' in source
+    assert "Sletat credentials must be configured as a complete pair" in source
+    assert "Travelata credentials must be configured as a complete pair" in source
