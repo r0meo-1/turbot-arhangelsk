@@ -143,6 +143,7 @@
       budgetMaxRub: Number($('budget').value),
       budgetScope: 'total',
       consent: $('consent').checked,
+      termsAccepted: $('terms-accepted').checked,
       directOnly: $('direct').checked,
       source: 'vk_mini_app'
     };
