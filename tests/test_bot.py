@@ -2401,3 +2401,51 @@ def test_p0_miniapp_preferences_survive_session_reload_and_lead_save(client, mon
     assert lead["budget"] == 600000
     assert lead["budget_scope"] == "total"
     assert lead["direct_only"] == 1
+
+
+def test_campaign_source_survives_restart_completion_and_manager_handoff(client, monkeypatch):
+    chat_id = 88113
+    sent = []
+
+    def capture(chat_id_value, text, parse_mode=None, reply_markup=None):
+        sent.append({
+            "chat_id": chat_id_value,
+            "text": text,
+            "parse_mode": parse_mode,
+        })
+        return _OkResp()
+
+    monkeypatch.setattr(bot, "send_message", capture)
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+
+    _post(client, chat_id, "/start Video_Pain")
+    assert bot.user_data[chat_id]["source_tag"] == "video_pain"
+    _callback(client, chat_id, bot.CB_CONSENT_YES)
+    assert bot.user_data[chat_id]["state"] == bot.STATE_DESTINATION
+    assert bot.user_data[chat_id]["source_tag"] == "video_pain"
+
+    # Simulate a process restart: attribution must survive SQLite persistence.
+    bot.set_session(chat_id, bot.user_data[chat_id])
+    bot.user_data.pop(chat_id, None)
+    restored = bot.get_session(chat_id)
+    assert restored is not None
+    assert restored["source_tag"] == "video_pain"
+    bot.user_data[chat_id] = restored
+
+    for text in ["Турция", "Москва", "1-7 августа 2030", "2", "Без детей", "70000"]:
+        _post(client, chat_id, text)
+    _post(client, chat_id, "+79161234567")
+    _confirm_draft(client, chat_id)
+
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT source_tag FROM leads WHERE chat_id = ?", (chat_id,))
+        row = cur.fetchone()
+    assert row is not None
+    assert row[0] == "video_pain"
+
+    lead_msgs = [
+        item for item in sent
+        if item["chat_id"] == 999 and "Новая заявка" in item["text"]
+    ]
+    assert lead_msgs
+    assert "video_pain" in lead_msgs[-1]["text"]
