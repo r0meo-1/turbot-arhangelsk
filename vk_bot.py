@@ -211,6 +211,7 @@ DATA_OPERATOR_NAME = os.getenv(
 )
 DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
 FUNNEL_ANALYTICS_RETENTION_DAYS = _env_int("FUNNEL_ANALYTICS_RETENTION_DAYS", 365)
+OPS_METRICS_RETENTION_DAYS = _env_int("OPS_METRICS_RETENTION_DAYS", 90)
 # soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
 # strict: classic «Согласен / Отказаться».
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -1068,7 +1069,11 @@ def _funnel_health(now: Optional[float] = None) -> Dict[str, Any]:
 
 
 def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
-    safe = tuple(str(value or "unknown")[:40] for value in (category, subject, outcome))
+    safe = (
+        str(category or "unknown")[:40],
+        str(subject or "unknown")[:40],
+        str(outcome or "unknown")[:64],
+    )
     try:
         with _db_cursor(commit=True) as cur:
             cur.execute(
@@ -1078,6 +1083,57 @@ def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
             )
     except sqlite3.Error as exc:
         logger.warning("Could not persist VK operational counter: %s", exc)
+
+
+def cleanup_ops_metric_events(now: Optional[float] = None) -> int:
+    """Delete stale anonymous operational events."""
+    if OPS_METRICS_RETENTION_DAYS <= 0:
+        return 0
+    current = int(time.time() if now is None else now)
+    cutoff = current - OPS_METRICS_RETENTION_DAYS * 86400
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute("DELETE FROM ops_metric_events WHERE created_at < ?", (cutoff,))
+            return int(cur.rowcount or 0)
+    except sqlite3.Error as exc:
+        logger.warning("Could not clean VK operational counters: %s", exc)
+        return 0
+
+
+def _provider_runtime_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day package-tour provider outcomes without request payloads."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT subject, outcome, COUNT(*) "
+                "FROM ops_metric_events "
+                "WHERE category = 'provider' AND created_at >= ? "
+                "GROUP BY subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK provider counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
+
+
+def _format_provider_runtime_report(snapshot: Optional[Dict[str, Any]] = None) -> str:
+    data = snapshot or _provider_runtime_health()
+    subjects = data.get("subjects") or {}
+    if not data.get("available"):
+        return "📊 30 дней: метрики провайдеров недоступны"
+    if not subjects:
+        return "📊 30 дней: вызовов провайдеров пока нет"
+    lines = ["📊 Провайдеры · 30 дней"]
+    for provider, outcomes in sorted(subjects.items()):
+        total = sum(int(value) for value in outcomes.values())
+        lines.append(f"• {provider}: {total}")
+        for outcome, count in sorted(outcomes.items()):
+            lines.append(f"  - {outcome}: {count}")
+    return "\n".join(lines)
 
 
 def _ops_event_health(now: Optional[float] = None) -> Dict[str, Any]:
@@ -1306,7 +1362,11 @@ def _start_timeout_worker() -> None:
 
 
 def _start_retention_worker() -> None:
-    if DATA_RETENTION_DAYS <= 0 and FUNNEL_ANALYTICS_RETENTION_DAYS <= 0:
+    if (
+        DATA_RETENTION_DAYS <= 0
+        and FUNNEL_ANALYTICS_RETENTION_DAYS <= 0
+        and OPS_METRICS_RETENTION_DAYS <= 0
+    ):
         return
     def _worker():
         while True:
@@ -1315,15 +1375,17 @@ def _start_retention_worker() -> None:
                 _funnel_metrics.cleanup(
                     _db_cursor, FUNNEL_ANALYTICS_RETENTION_DAYS
                 )
+                cleanup_ops_metric_events()
             except Exception as exc:
                 logger.error("Error in retention worker: %s", exc)
             time.sleep(6 * 3600)
     threading.Thread(target=_worker, daemon=True, name="vk-data-retention").start()
     logger.info(
         "Data retention worker started "
-        "(personal=%s days, funnel_events=%s days)",
+        "(personal=%s days, funnel_events=%s days, ops_events=%s days)",
         DATA_RETENTION_DAYS,
         FUNNEL_ANALYTICS_RETENTION_DAYS,
+        OPS_METRICS_RETENTION_DAYS,
     )
 
 
@@ -4073,7 +4135,12 @@ def _process_message(message: Dict[str, Any]) -> None:
             )
             return
         if text_lower in ("провайдеры", "providers"):
-            send_message(user_id, _provider_status.format_report())
+            send_message(
+                user_id,
+                _provider_status.format_report()
+                + "\n\n"
+                + _format_provider_runtime_report(),
+            )
             return
         if command == "help":
             send_message(user_id, USER_HELP)
@@ -4361,6 +4428,7 @@ def health() -> Any:
         "mdt_delivery": _mdt_delivery_health(),
         "lead_delivery": _lead_delivery_health(),
         "ops_events": _ops_event_health(),
+        "provider_runtime": _provider_runtime_health(),
         "acquisition_funnel": _funnel_health(),
         "tour_search": _tour_search_health(),
         "ai_selection": {
