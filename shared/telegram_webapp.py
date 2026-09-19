@@ -20,12 +20,14 @@ class MiniAppValidationError(ValueError):
     """Raised when Telegram identity or the submitted trip payload is invalid."""
 
 
-def validate_init_data(init_data: str, bot_token: str, *, max_age: int = 3600) -> Dict[str, Any]:
-    """Validate Telegram WebApp initData and return the decoded user object.
+def validate_init_data_context(
+    init_data: str, bot_token: str, *, max_age: int = 3600
+) -> Dict[str, Any]:
+    """Validate Telegram WebApp initData and return signed launch context.
 
-    Implements Telegram's bot-token HMAC validation flow. ``max_age`` limits
-    replay of an otherwise valid signed payload; set it to 0 to disable the age
-    check in deterministic tests only.
+    The returned start_param comes from the same HMAC-protected payload as
+    the Telegram user. Callers may use it for bounded campaign attribution
+    without trusting initDataUnsafe or arbitrary browser JSON.
     """
     if not isinstance(init_data, str) or not init_data or len(init_data) > 8192:
         raise MiniAppValidationError("initData is missing or too large")
@@ -64,8 +66,19 @@ def validate_init_data(init_data: str, bot_token: str, *, max_age: int = 3600) -
     if user_id <= 0:
         raise MiniAppValidationError("user id is invalid")
     user["id"] = user_id
-    return user
 
+    start_param = pairs.get("start_param", "")
+    if not isinstance(start_param, str) or len(start_param) > 512:
+        raise MiniAppValidationError("start_param is invalid")
+
+    return {"user": user, "start_param": start_param.strip()}
+
+
+def validate_init_data(
+    init_data: str, bot_token: str, *, max_age: int = 3600
+) -> Dict[str, Any]:
+    """Validate Telegram WebApp initData and return the decoded user object."""
+    return validate_init_data_context(init_data, bot_token, max_age=max_age)["user"]
 
 def _clean_text(payload: Dict[str, Any], key: str, *, max_len: int = 100) -> str:
     value = payload.get(key)
