@@ -74,3 +74,6 @@ dl { display: grid; grid-template-columns: 1fr 1.5fr; gap: 14px; line-height: 1.
 dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
 #chat { display: block; text-align: center; text-decoration: none; }
 .field-card { min-width: 0; } input { min-width: 0; }
+
+.legal-links { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 12px; margin:2px 8px 0; font-size:12px; }
+.legal-links a { color:var(--muted); text-underline-offset:3px; }
