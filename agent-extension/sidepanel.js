@@ -1,4 +1,6 @@
 const API = "https://bot.r0meo1.ru/agent-extension/lead";
+const LEADS_API = "https://bot.r0meo1.ru/agent-extension/leads";
+const STATUS_API = "https://bot.r0meo1.ru/agent-extension/status";
 const fieldIds = ["name","phone","destination","origin","dates","people","budget","consent"];
 
 const $ = (id) => document.getElementById(id);
@@ -20,6 +22,9 @@ async function load() {
   }
   $("token").value = state.agentToken || "";
   renderCandidates(state.candidates || []);
+  if (state.agentToken) {
+    loadLeads().catch(() => {});
+  }
 }
 
 async function saveDraft() {
@@ -140,10 +145,119 @@ async function sendLead() {
       candidates: []
     });
     renderCandidates([]);
+    await loadLeads().catch(() => {});
   } catch (error) {
     setStatus("Не отправлено: " + (error.message || "ошибка"));
   } finally {
     $("send").disabled = false;
+  }
+}
+
+const STATUS_LABELS = {
+  new: "Новая",
+  working: "В работе",
+  waiting: "Ждём клиента",
+  won: "Продано",
+  lost: "Потеряно"
+};
+
+function formatRub(value) {
+  return new Intl.NumberFormat("ru-RU").format(Number(value || 0)) + " ₽";
+}
+
+function renderLeads(leads) {
+  const box = $("leads");
+  box.textContent = "";
+  $("leadsEmpty").hidden = Boolean(leads.length);
+
+  leads.forEach((lead) => {
+    const card = document.createElement("article");
+    card.className = "lead-card";
+
+    const head = document.createElement("div");
+    head.className = "lead-head";
+    const name = document.createElement("strong");
+    name.textContent = "#" + lead.id + " · " + (lead.name || "Клиент");
+    const created = document.createElement("small");
+    created.textContent = lead.createdAt
+      ? new Date(lead.createdAt * 1000).toLocaleString("ru-RU")
+      : "";
+    head.append(name, created);
+
+    const meta = document.createElement("div");
+    meta.className = "lead-meta";
+    meta.textContent = [
+      lead.phone,
+      lead.destination,
+      lead.origin ? "из " + lead.origin : "",
+      lead.dates,
+      lead.budget ? formatRub(lead.budget) : "",
+      lead.candidateCount ? "вариантов: " + lead.candidateCount : ""
+    ].filter(Boolean).join(" · ");
+
+    const controls = document.createElement("div");
+    controls.className = "lead-controls";
+    const select = document.createElement("select");
+    Object.entries(STATUS_LABELS).forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = value === lead.status;
+      select.append(option);
+    });
+    const note = document.createElement("textarea");
+    note.placeholder = "Заметка менеджера";
+    note.value = lead.note || "";
+    const save = document.createElement("button");
+    save.className = "save-status";
+    save.textContent = "Сохранить статус";
+    save.addEventListener("click", () => updateLeadStatus(lead.id, select.value, note.value, save));
+    controls.append(select, note, save);
+
+    card.append(head, meta, controls);
+    box.append(card);
+  });
+}
+
+async function loadLeads() {
+  const state = await chrome.storage.local.get({ agentToken: "" });
+  if (!state.agentToken) {
+    renderLeads([]);
+    return;
+  }
+  const response = await fetch(LEADS_API + "?limit=30", {
+    headers: { "Authorization": "Bearer " + state.agentToken }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || ("HTTP " + response.status));
+  }
+  renderLeads(data.leads || []);
+}
+
+async function updateLeadStatus(leadId, status, note, button) {
+  const state = await chrome.storage.local.get({ agentToken: "" });
+  if (!state.agentToken) return setStatus("Сначала сохрани Agent token.");
+  button.disabled = true;
+  try {
+    const response = await fetch(STATUS_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + state.agentToken
+      },
+      body: JSON.stringify({ leadId, status, note })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || ("HTTP " + response.status));
+    }
+    setStatus("Статус заявки #" + leadId + " сохранён.", true);
+    await loadLeads();
+  } catch (error) {
+    setStatus("Статус не сохранён: " + (error.message || "ошибка"));
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -159,6 +273,10 @@ $("clearCandidates").addEventListener("click", async () => {
 $("saveToken").addEventListener("click", async () => {
   await chrome.storage.local.set({ agentToken: $("token").value.trim() });
   setStatus("Токен сохранён локально.", true);
+  await loadLeads().catch((error) => setStatus("CRM: " + error.message));
+});
+$("refreshLeads").addEventListener("click", () => {
+  loadLeads().catch((error) => setStatus("CRM: " + error.message));
 });
 $("send").addEventListener("click", sendLead);
 
