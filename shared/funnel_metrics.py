@@ -136,3 +136,23 @@ def snapshot(
         "events": total_events,
         "channels": channels,
     }
+
+
+def cleanup(
+    db_cursor_factory: Callable[..., Any],
+    retention_days: int,
+    *,
+    now: Optional[int] = None,
+) -> int:
+    """Delete anonymous funnel events older than the configured lifetime."""
+    days = int(retention_days or 0)
+    if days <= 0:
+        return 0
+    current = int(time.time()) if now is None else int(now)
+    cutoff = current - days * 86400
+    with db_cursor_factory(commit=True) as cur:
+        cur.execute(
+            "DELETE FROM acquisition_funnel_events WHERE created_at < ?",
+            (cutoff,),
+        )
+        return int(cur.rowcount or 0)
