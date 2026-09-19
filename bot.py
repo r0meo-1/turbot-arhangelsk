@@ -3963,6 +3963,16 @@ def _global_security_headers(response: Response) -> Response:
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
     )
+    response.headers.setdefault(
+        "Strict-Transport-Security",
+        "max-age=31536000",
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy-Report-Only",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; connect-src 'self'; object-src 'none'; "
+        "base-uri 'self'; form-action 'self'",
+    )
     return response
 
 
