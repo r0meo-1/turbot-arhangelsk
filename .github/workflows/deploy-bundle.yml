@@ -1,0 +1,103 @@
+name: Deploy TurBot Bundle
+
+on:
+  workflow_run:
+    workflows: ["Deploy TurBot"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turbot-bundle-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Resolve target revision
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            sha="${{ github.event.workflow_run.head_sha }}"
+          else
+            sha="${{ github.sha }}"
+          fi
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          fetch-depth: 1
+
+      - name: Build tracked-file bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git ls-files > .deploy-manifest
+          test -s .deploy-manifest
+          tar -czf /tmp/turbot-bundle.tar.gz -T .deploy-manifest .deploy-manifest
+          test -s /tmp/turbot-bundle.tar.gz
+
+      - name: Load restricted deploy key
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Deploy verified bundle
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            printf 'TURBOT_DEPLOY_BUNDLE_V1\n%s\n' '${{ steps.target.outputs.sha }}'
+            cat /tmp/turbot-bundle.tar.gz
+          } |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              root@${{ secrets.DEPLOY_HOST }} true
+
+      - name: Verify Agent Desk production routes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base="https://bot.r0meo1.ru"
+
+          for attempt in {1..12}; do
+            if curl -fsSL --max-time 15 "$base/health" >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 12 ]]; then
+              echo "TurBot public health check failed" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          for path in agent-extension/leads agent-extension/export.csv; do
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$base/$path")"
+            if [[ "$status" != "401" ]]; then
+              echo "$path returned HTTP $status without auth; expected 401" >&2
+              exit 1
+            fi
+          done
+
+          status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -X POST "$base/agent-extension/status" \
+            -H 'Content-Type: application/json' \
+            --data '{}')"
+          if [[ "$status" != "401" ]]; then
+            echo "agent-extension/status returned HTTP $status without auth; expected 401" >&2
+            exit 1
+          fi
+
+          echo "Agent Desk production routes are deployed and fail closed without auth"
