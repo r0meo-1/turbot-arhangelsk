@@ -6,7 +6,7 @@ This file records **configuration state only**. Never put real passwords, JWTs, 
 
 ## Tourvisor
 
-Status: **PRO account exists; Search API access requested; JWT not yet issued/configured.**
+Status: **PRO account exists; a JWT is configured in production but is expired as of 2026-09-19. Search API reactivation/new token is pending.**
 
 Production model:
 - Search API v1, server-side only.
@@ -31,6 +31,12 @@ Production model:
 
 Do not enable production search until Sletat confirms the licence binding and credentials.
 
+Deployment is prepared for secret-only activation:
+- add production GitHub Secrets `SLETAT_LOGIN` and `SLETAT_PASSWORD`;
+- run the existing **Deploy TurBot** workflow manually or deploy `main`;
+- deploy config V5 writes the pair into protected server `.env`, enables `VK_SLETAT_ENABLED=true`, and puts Sletat first in provider order;
+- empty secrets preserve any existing production values; a partial pair fails closed.
+
 ## Qui-Quo
 
 Status: **CRM/API integration request sent on 2026-09-19; no API credential found in Gmail.**
@@ -50,7 +56,7 @@ If Qui-Quo provides API access later, implement it as a manager/CRM integration 
 Recommended package-tour search order after credentials are available:
 
 ```
-TOUR_PROVIDER_ORDER=sletat,tourvisor,travelata
+TOUR_PROVIDER_ORDER=sletat,travelata,tourvisor
 ```
 
 Providers without valid credentials are skipped. Every accepted lead is persisted before provider search, so an external search outage must never lose a lead.
