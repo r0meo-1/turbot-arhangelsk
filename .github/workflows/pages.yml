@@ -50,14 +50,17 @@ jobs:
           for attempt in {1..12}; do
             home="$(curl -fsSL --max-time 15 "$root/" || true)"
             canonical="$(curl -fsSL --max-time 15 "$root/apreltour/" || true)"
-            landing="$(curl -fsSL --max-time 15 "$root/turbot/" || true)"
-            privacy="$(curl -fsSL --max-time 15 "$root/turbot/privacy.html" || true)"
+            privacy="$(curl -fsSL --max-time 15 "$root/apreltour/privacy.html" || true)"
+            robots="$(curl -fsSL --max-time 15 "$root/robots.txt" || true)"
+            sitemap="$(curl -fsSL --max-time 15 "$root/sitemap.xml" || true)"
 
             if grep -q 'TurBot × АПРЕЛЬ тур' <<<"$home" &&
                grep -q 'Наталья Ильина' <<<"$canonical" &&
                grep -q 'data-turbot-link' <<<"$canonical" &&
-               grep -q 'Наталья Ильина' <<<"$landing" &&
-               grep -q 'Политика обработки персональных данных' <<<"$privacy"; then
+               grep -q 'rel="canonical"' <<<"$canonical" &&
+               grep -q 'Политика обработки персональных данных' <<<"$privacy" &&
+               grep -q 'Sitemap: https://r0meo1.ru/sitemap.xml' <<<"$robots" &&
+               grep -q 'https://r0meo1.ru/apreltour/' <<<"$sitemap"; then
               echo "TurBot Pages smoke: ok"
               break
             fi
