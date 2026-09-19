@@ -193,6 +193,84 @@ apply_stdin_config() {
     return 0
   fi
 
+  if [[ "$marker" == "TURBOT_AI_LEAD_ASSIST_CONFIG_V1" ]]; then
+    local desired
+    if ! IFS= read -r desired; then
+      echo "Missing AI lead assist desired state" >&2
+      return 1
+    fi
+    if IFS= read -r _unexpected; then
+      echo "Unexpected AI lead assist payload" >&2
+      return 1
+    fi
+    if [[ "$desired" != "true" && "$desired" != "false" ]]; then
+      echo "AI lead assist desired state must be true or false" >&2
+      return 1
+    fi
+
+    "$venv/python" - "$desired" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+desired = sys.argv[1]
+env_path = Path("/opt/turbot/.env")
+if not env_path.exists():
+    raise SystemExit("Server .env not found")
+
+key = "AI_LEAD_ASSIST_ENABLED"
+src = env_path.read_text(encoding="utf-8").splitlines()
+out = []
+written = False
+for line in src:
+    if line.startswith(key + "="):
+        if not written:
+            out.append(f"{key}={desired}")
+            written = True
+        continue
+    out.append(line)
+if not written:
+    out.append(f"{key}={desired}")
+
+tmp = env_path.with_name(".env.tmp")
+tmp.write_text("\n".join(out) + "\n", encoding="utf-8")
+os.chmod(tmp, 0o600)
+os.replace(tmp, env_path)
+PY
+
+    chown turbot:turbot /opt/turbot/.env
+    chmod 600 /opt/turbot/.env
+    systemctl restart turbot
+
+    for _ in {1..12}; do
+      if "$venv/python" - "$desired" <<'PY'
+import sys
+
+import requests
+
+desired = sys.argv[1] == "true"
+response = requests.get("http://127.0.0.1:8000/health", timeout=3)
+response.raise_for_status()
+ai = response.json().get("ai_selection") or {}
+if bool(ai.get("lead_assist_enabled")) != desired:
+    raise SystemExit(1)
+if desired and not bool(ai.get("ready")):
+    raise SystemExit(1)
+PY
+      then
+        echo "Telegram AI lead assist configured: $desired"
+        CONFIG_APPLIED=1
+        return 0
+      fi
+      sleep 1
+    done
+
+    echo "Telegram AI lead assist health verification failed" >&2
+    systemctl status turbot --no-pager -l || true
+    journalctl -u turbot -n 80 --no-pager || true
+    return 1
+  fi
+
   if [[ "$marker" == "TURBOT_VK_CALLBACK_APP_PAYLOAD_V1" ]]; then
     # This marker performs one narrowly scoped VK API mutation. It accepts no
     # payload data and uses only the protected production .env on the server.
