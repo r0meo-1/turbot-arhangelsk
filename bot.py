@@ -159,6 +159,25 @@ DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
 
+def agent_extension_token() -> str:
+    """Return the Agent Desk pairing token without storing a new server secret.
+
+    An explicit AGENT_EXTENSION_TOKEN may override it. Otherwise derive a
+    dedicated token from BOT_TOKEN with HMAC so the browser credential cannot
+    be reversed into the Telegram bot token.
+    """
+    explicit = os.getenv("AGENT_EXTENSION_TOKEN", "").strip()
+    if explicit:
+        return explicit
+    if not BOT_TOKEN:
+        return ""
+    return hmac.new(
+        BOT_TOKEN.encode("utf-8"),
+        b"turbot-agent-desk-v1",
+        "sha256",
+    ).hexdigest()
+
+
 def _parse_chat_ids(raw: str, *, env_name: str = "LEAD_NOTIFY_IDS") -> List[int]:
     """Parse comma-separated Telegram chat IDs; skip empty/invalid parts."""
     ids: List[int] = []
@@ -517,6 +536,7 @@ ADMIN_HELP = (
     "/export — экспорт завершённых заявок\n"
     "/followup — напоминания незавершившим\n"
     "/mdt [test|reload] — статус MDT CRM\n"
+    "/agentdesk — токен подключения TurBot Agent Desk\n"
     "/ai <вопрос> — закрытая AI beta (если включена)\n"
     "/ai_stats — агрегированная статистика AI beta\n"
     "/ai_status — безопасный статус provider gates\n"
@@ -2425,6 +2445,26 @@ def _admin_send(chat_id: int, arg: str) -> bool:
     return True
 
 
+def _admin_agentdesk(chat_id: int, arg: str) -> bool:
+    token = agent_extension_token()
+    if not token:
+        send_message(
+            chat_id,
+            "Agent Desk сейчас недоступен: BOT_TOKEN не настроен.",
+        )
+        return True
+    send_message(
+        chat_id,
+        "🧩 <b>TurBot Agent Desk</b>\n\n"
+        "Вставьте этот pairing-token в раздел «Подключение» расширения:\n\n"
+        f"<code>{html.escape(token)}</code>\n\n"
+        "Токен предназначен только для внутреннего Agent Desk. "
+        "Не публикуйте его и не отправляйте клиентам.",
+        parse_mode="HTML",
+    )
+    return True
+
+
 def _admin_mdt(chat_id: int, arg: str) -> bool:
     """`/mdt` — show MDT CRM integration status; `/mdt test` — test connectivity."""
     if not MDT_ENABLED:
@@ -2835,6 +2875,7 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/broadcast":    _admin_broadcast,
     "/followup":     _admin_followup,
     "/mdt":          _admin_mdt,
+    "/agentdesk":    _admin_agentdesk,
     "/tutu":         _admin_tutu,
     "/ai_stats":     _admin_ai_stats,
     "/ai_status":    _admin_ai_status,
