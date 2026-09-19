@@ -178,3 +178,53 @@ def test_website_delivery_uses_website_source_and_marks_synced(monkeypatch):
     assert status == "synced"
     assert attempts == 1
     assert synced_at > 0
+
+
+def test_website_owner_notification_retries_until_synced(monkeypatch):
+    payload, error = website_app._validate_payload(_payload("website-owner-0001"))
+    assert error is None
+    assert payload is not None
+    lead_id, duplicate = website_app._store_lead(payload)
+    assert duplicate is False
+
+    outcomes = iter([False, True])
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "send_lead_owner_vk",
+        lambda text: sent.append(text) or next(outcomes),
+    )
+
+    assert website_app._deliver_owner_notification(lead_id) is False
+    with bot._db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT owner_status, owner_attempts, owner_next_retry_at, owner_notified_at
+            FROM website_leads WHERE id=?
+            """,
+            (lead_id,),
+        )
+        status, attempts, next_retry_at, notified_at = cur.fetchone()
+    assert status == "pending"
+    assert attempts == 1
+    assert next_retry_at is not None
+    assert notified_at is None
+    assert sent and "Новая заявка с сайта" in sent[0]
+    assert "Tourvisor PRO:" in sent[0]
+    assert "Sletat PRO:" in sent[0]
+    assert "Qui-Quo:" in sent[0]
+
+    assert website_app._deliver_owner_notification(lead_id) is True
+    with bot._db_cursor() as cur:
+        cur.execute(
+            """
+            SELECT owner_status, owner_attempts, owner_next_retry_at, owner_notified_at
+            FROM website_leads WHERE id=?
+            """,
+            (lead_id,),
+        )
+        status, attempts, next_retry_at, notified_at = cur.fetchone()
+    assert status == "synced"
+    assert attempts == 2
+    assert next_retry_at is None
+    assert notified_at is not None
