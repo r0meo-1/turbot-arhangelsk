@@ -9,6 +9,7 @@ import pytest
 from shared.telegram_webapp import (
     MiniAppValidationError,
     validate_init_data,
+    validate_init_data_context,
     validate_trip_request,
 )
 
@@ -16,12 +17,14 @@ from shared.telegram_webapp import (
 BOT_TOKEN = "123456789:test_bot_token_for_unit_tests"
 
 
-def _signed_init_data(*, user_id=12345, auth_date=None, token=BOT_TOKEN):
+def _signed_init_data(*, user_id=12345, auth_date=None, token=BOT_TOKEN, start_param=None):
     fields = {
         "auth_date": str(auth_date or int(time.time())),
         "query_id": "AAHdF6IQAAAAAN0XohDhrOrc",
         "user": json.dumps({"id": user_id, "first_name": "Roma", "username": "tester"}, separators=(",", ":")),
     }
+    if start_param is not None:
+        fields["start_param"] = start_param
     check = "\n".join(f"{key}={fields[key]}" for key in sorted(fields))
     secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
@@ -51,6 +54,15 @@ def test_validate_init_data_accepts_telegram_signature():
     user = validate_init_data(_signed_init_data(), BOT_TOKEN)
     assert user["id"] == 12345
     assert user["username"] == "tester"
+
+
+def test_validate_init_data_context_returns_signed_start_param():
+    context = validate_init_data_context(
+        _signed_init_data(start_param="video_pain"),
+        BOT_TOKEN,
+    )
+    assert context["user"]["id"] == 12345
+    assert context["start_param"] == "video_pain"
 
 
 def test_validate_init_data_rejects_tampering():
