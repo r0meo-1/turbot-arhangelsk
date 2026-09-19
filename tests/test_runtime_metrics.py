@@ -1,4 +1,4 @@
-from shared.runtime_metrics import lead_delivery_snapshot
+from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 
 
 def test_lead_delivery_snapshot_reports_counts_and_percentiles():
@@ -20,3 +20,14 @@ def test_lead_delivery_snapshot_does_not_echo_timestamp_values():
     snapshot = lead_delivery_snapshot([(marker, marker + 3)], window_seconds=86400)
     assert str(marker) not in repr(snapshot)
     assert snapshot["latency_seconds"]["p50"] == 3
+
+
+def test_event_counter_snapshot_contains_only_grouped_dimensions():
+    snapshot = event_counter_snapshot(
+        [("tourvisor", "success", 4), ("tourvisor", "timeout", 1)],
+        window_seconds=3600,
+    )
+    assert snapshot == {
+        "window_seconds": 3600,
+        "subjects": {"tourvisor": {"success": 4, "timeout": 1}},
+    }

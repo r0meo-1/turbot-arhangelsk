@@ -66,7 +66,7 @@ from shared import mdt as mdt_shared
 from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
-from shared.runtime_metrics import lead_delivery_snapshot
+from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
@@ -786,6 +786,21 @@ def init_db() -> None:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)"
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ops_metric_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ops_metric_events_created_at "
+            "ON ops_metric_events(created_at)"
         )
         # Anonymous partner-click analytics. Deliberately no chat_id, username,
         # phone, Telegram payload, or affiliate URL is stored here.
@@ -2032,6 +2047,38 @@ def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
         logger.warning("Health could not read lead-delivery aggregates: %s", exc)
         return {"available": False, "window_seconds": window, "channels": {}}
     return {"available": True, "window_seconds": window, "channels": channels}
+
+
+def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
+    """Persist one bounded operational event without customer data."""
+    safe = tuple(str(value or "unknown")[:40] for value in (category, subject, outcome))
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (*safe, int(time.time())),
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist operational counter: %s", exc)
+
+
+def _ops_event_health(now: Optional[float] = None) -> Dict[str, Any]:
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT category || ':' || subject, outcome, COUNT(*) "
+                "FROM ops_metric_events WHERE created_at >= ? "
+                "GROUP BY category, subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read operational counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
 
 
 def _alert_stale_mdt_retry_queue(now: Optional[float] = None) -> bool:
@@ -4072,7 +4119,9 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     # Persist lead before side-effects so export/analytics work even if notify fails.
     try:
         lead_id = save_lead(chat_id, info, phone, first_name=first_name, username=username)
+        _record_ops_metric("lead", "telegram", "accepted")
     except Exception as exc:
+        _record_ops_metric("lead", "telegram", "save_failure")
         logger.error("Failed to save lead for %s: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
         _alert_admin_error("Failed to save lead", exc)
         with _lock:
@@ -4437,6 +4486,7 @@ def health() -> Any:
         "bot_mode": BOT_MODE,
         "mdt_retry": _mdt_retry_health(now),
         "lead_delivery": _lead_delivery_health(now),
+        "ops_events": _ops_event_health(now),
         "travelpayouts_stats": _travelpayouts_stats.health_snapshot(now=now),
         "ai_selection": {
             "mode": AI_MODE,

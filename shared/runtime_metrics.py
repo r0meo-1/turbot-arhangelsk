@@ -42,3 +42,15 @@ def lead_delivery_snapshot(
             "p99": _percentile(latencies, 0.99),
         },
     }
+
+
+def event_counter_snapshot(
+    rows: Iterable[Tuple[str, str, int]], *, window_seconds: int
+) -> Dict[str, Any]:
+    """Convert grouped subject/outcome counts into a bounded safe payload."""
+    subjects: Dict[str, Dict[str, int]] = {}
+    for subject, outcome, count in rows:
+        safe_subject = str(subject or "unknown")[:40]
+        safe_outcome = str(outcome or "unknown")[:40]
+        subjects.setdefault(safe_subject, {})[safe_outcome] = int(count or 0)
+    return {"window_seconds": int(window_seconds), "subjects": subjects}

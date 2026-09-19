@@ -658,7 +658,7 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
                     serialized,
                 ),
             )
-            return int(cur.lastrowid), False
+            lead_id = int(cur.lastrowid)
         except Exception as exc:
             # sqlite3.IntegrityError is deliberately not imported just for this
             # branch.  Verify the unique request key before treating the error
@@ -666,8 +666,17 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
             cur.execute("SELECT id FROM website_leads WHERE request_key=?", (request_key,))
             row = cur.fetchone()
             if row:
-                return int(row[0]), True
-            raise exc
+                lead_id = int(row[0])
+                duplicate = True
+            else:
+                _bot._record_ops_metric("lead", "website", "save_failure")
+                raise exc
+        else:
+            duplicate = False
+    _bot._record_ops_metric(
+        "lead", "website", "duplicate" if duplicate else "accepted"
+    )
+    return lead_id, duplicate
 
 
 if "agent_extension_leads" not in app.view_functions:
@@ -925,6 +934,7 @@ if "website_lead" not in app.view_functions:
 
         payload, error = _validate_payload(request.get_json(silent=True))
         if error:
+            _bot._record_ops_metric("lead", "website", "validation_reject")
             return _json_response({"ok": False, "error": error}, 400)
         assert payload is not None
 
