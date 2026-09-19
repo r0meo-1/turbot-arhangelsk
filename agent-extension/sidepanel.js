@@ -284,9 +284,16 @@ async function exportLeads() {
       throw new Error(data.error || ("HTTP " + response.status));
     }
     const text = await response.text();
-    const url = "data:text/csv;charset=utf-8," + encodeURIComponent(text);
-    await chrome.tabs.create({ url });
-    setStatus("CSV открыт в новой вкладке.", true);
+    const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "turbot-leads-" + new Date().toISOString().slice(0, 10) + ".csv";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    setStatus("CSV выгружен.", true);
   } catch (error) {
     setStatus("CSV не выгружен: " + (error.message || "ошибка"));
   }
