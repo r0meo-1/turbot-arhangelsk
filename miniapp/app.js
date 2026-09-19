@@ -19,6 +19,8 @@
   const save = document.getElementById('save');
   const status = document.getElementById('status');
   let pendingPayload = null;
+  let isSaving = false;
+  const REQUEST_TIMEOUT_MS = 15000;
 
   const DESTINATIONS = Object.freeze([
     'Таиланд', 'Пхукет, Таиланд', 'Паттайя, Таиланд',
@@ -88,6 +90,27 @@
     return `${year}-${month}-${day}`;
   };
 
+  const fetchJsonWithTimeout = async (url, options, timeoutMessage) => {
+    if (navigator.onLine === false) {
+      throw new Error('Нет подключения к интернету. Проверьте сеть и повторите.');
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      const result = await response.json().catch(() => ({}));
+      return { response, result };
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error(timeoutMessage);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   const setBudget = () => {
     budgetOutput.textContent = formatRub(budget.value);
   };
@@ -122,7 +145,9 @@
 
   const markDestinationChip = (value) => {
     document.querySelectorAll('.chip').forEach((chip) => {
-      chip.classList.toggle('active', chip.dataset.destination === value);
+      const active = chip.dataset.destination === value;
+      chip.classList.toggle('active', active);
+      chip.setAttribute('aria-pressed', String(active));
     });
   };
 
@@ -213,11 +238,14 @@
 
   const showReview = (payload) => {
     pendingPayload = payload;
+    isSaving = false;
     renderSummary(payload);
     form.hidden = true;
     review.hidden = false;
+    review.setAttribute('aria-busy', 'false');
     status.textContent = '';
     save.disabled = false;
+    edit.disabled = false;
     save.textContent = 'Сохранить и продолжить';
     tg?.BackButton?.show?.();
     reviewTitle.focus({ preventScroll: true });
@@ -225,6 +253,7 @@
   };
 
   const showForm = () => {
+    if (isSaving) return;
     review.hidden = true;
     form.hidden = false;
     status.textContent = '';
@@ -234,6 +263,7 @@
   };
 
   document.querySelectorAll('.chip').forEach((chip) => {
+    chip.setAttribute('aria-pressed', 'false');
     chip.addEventListener('click', () => {
       destination.value = chip.dataset.destination;
       markDestinationChip(chip.dataset.destination);
@@ -248,12 +278,15 @@
   tg?.BackButton?.onClick?.(showForm);
 
   const submitViaBackend = async (payload) => {
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initData: tg.initData, payload })
-    });
-    const result = await response.json().catch(() => ({}));
+    const { response, result } = await fetchJsonWithTimeout(
+      API_URL,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: tg.initData, payload })
+      },
+      'TurBot отвечает слишком долго. Проверьте связь и повторите.'
+    );
     if (!response.ok || result.ok !== true) {
       throw new Error(result.error || 'Не удалось передать заявку в TurBot.');
     }
@@ -281,7 +314,11 @@
 
   save.addEventListener('click', async () => {
     if (!pendingPayload || save.disabled) return;
+    isSaving = true;
     save.disabled = true;
+    edit.disabled = true;
+    review.setAttribute('aria-busy', 'true');
+    tg?.BackButton?.hide?.();
     save.textContent = 'Сохраняем…';
     status.textContent = 'Передаём параметры в TurBot…';
 
@@ -304,13 +341,20 @@
 
       console.info('TurBot Mini App payload', pendingPayload);
       status.textContent = 'Предпросмотр: откройте приложение из Telegram для сохранения заявки.';
+      isSaving = false;
+      review.setAttribute('aria-busy', 'false');
       save.disabled = false;
+      edit.disabled = false;
       save.textContent = 'Сохранить и продолжить';
     } catch (error) {
       console.error('TurBot Mini App submit failed', error);
       status.textContent = error instanceof Error ? error.message : 'Не удалось передать заявку.';
       tg?.HapticFeedback?.notificationOccurred('error');
+      isSaving = false;
+      review.setAttribute('aria-busy', 'false');
       save.disabled = false;
+      edit.disabled = false;
+      tg?.BackButton?.show?.();
       save.textContent = 'Повторить сохранение';
     }
   });
