@@ -44,7 +44,7 @@ def test_reject_auth(raw):
         validate_launch_params(raw, SECRET, '123', 999)
 
 
-@pytest.mark.parametrize('change', [dict(consent=False), dict(nights=4.5), dict(childrenAges=[True, 14]),
+@pytest.mark.parametrize('change', [dict(consent=False), dict(termsAccepted=False), dict(nights=4.5), dict(childrenAges=[True, 14]),
     dict(childrenAges=[18, 2]), dict(childrenAges=[2]), dict(adults=True), dict(budgetMaxRub=999),
     dict(date='2000-01-01'), dict(destination='  ')])
 def test_reject_trip(change):
