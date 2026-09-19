@@ -23,7 +23,8 @@ def test_agent_extension_has_no_embedded_secrets():
     assert "TOURVISOR_TOKEN" not in source
     assert "SLETAT_PASSWORD" not in source
     assert "MDT_API_KEY" not in source
-    assert "AGENT_EXTENSION_TOKEN=<" in source
+    assert "AGENT_EXTENSION_TOKEN=<" not in source
+    assert "/agentdesk" in source
     assert "Authorization" in source
 
 
