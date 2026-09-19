@@ -51,6 +51,6 @@ def event_counter_snapshot(
     subjects: Dict[str, Dict[str, int]] = {}
     for subject, outcome, count in rows:
         safe_subject = str(subject or "unknown")[:40]
-        safe_outcome = str(outcome or "unknown")[:40]
+        safe_outcome = str(outcome or "unknown")[:64]
         subjects.setdefault(safe_subject, {})[safe_outcome] = int(count or 0)
     return {"window_seconds": int(window_seconds), "subjects": subjects}

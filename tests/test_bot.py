@@ -48,6 +48,7 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM leads")
         cur.execute("DELETE FROM partner_clicks")
         cur.execute("DELETE FROM ai_chat_metrics")
+        cur.execute("DELETE FROM ops_metric_events")
         cur.execute("DELETE FROM acquisition_funnel_events")
     bot._seen_update_ids.clear()
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
@@ -2768,13 +2769,13 @@ def test_ask_command_invokes_lead_assist_without_advancing_dialog(client, monkey
     monkeypatch.setattr(
         bot,
         "_handle_lead_assist",
-        lambda cid, question: called.append((cid, question)) or True,
+        lambda cid, question, **kwargs: called.append((cid, question, kwargs)) or True,
     )
 
     response = _post(client, chat_id, "/ask Какой район спокойнее?")
 
     assert response.status_code == 200
-    assert called == [(chat_id, "Какой район спокойнее?")]
+    assert called == [(chat_id, "Какой район спокойнее?", {"entrypoint": "ask"})]
     assert bot.user_data[chat_id]["state"] == bot.STATE_DESTINATION
 
 
@@ -2819,14 +2820,14 @@ def test_ai_quick_action_callback_works_after_session_cleanup(client, monkeypatc
     monkeypatch.setattr(
         bot,
         "_handle_lead_assist",
-        lambda cid, question: called.append((cid, question)) or True,
+        lambda cid, question, **kwargs: called.append((cid, question, kwargs)) or True,
     )
 
     response = _callback(client, chat_id, f"{bot.CB_AI_LEAD_PREFIX}packing")
 
     assert response.status_code == 200
     assert called == [
-        (chat_id, bot.AI_LEAD_QUICK_QUESTIONS["packing"]),
+        (chat_id, bot.AI_LEAD_QUICK_QUESTIONS["packing"], {"entrypoint": "quick"}),
     ]
     assert chat_id not in bot.user_data
 
@@ -2838,7 +2839,7 @@ def test_ai_quick_action_callback_rejects_unlisted_prompt_key(client, monkeypatc
     monkeypatch.setattr(
         bot,
         "_handle_lead_assist",
-        lambda cid, question: called.append((cid, question)) or True,
+        lambda cid, question, **kwargs: called.append((cid, question, kwargs)) or True,
     )
     monkeypatch.setattr(
         bot,
@@ -2856,6 +2857,102 @@ def test_ai_quick_action_callback_rejects_unlisted_prompt_key(client, monkeypatc
     assert called == []
     assert sent
     assert "устарела" in sent[-1][1]
+
+
+def test_ai_runtime_metrics_are_30_day_aggregate_only(monkeypatch):
+    now = int(time.time())
+    secret_question = "Мой телефон +79991234567 и email roman@example.com"
+    monkeypatch.setattr(bot.time, "time", lambda: now)
+
+    bot.record_ai_chat_outcome(
+        SimpleNamespace(
+            used_external_model=True,
+            handoff_required=False,
+            reason="",
+        ),
+        source="lead_quick",
+    )
+    bot.record_ai_chat_outcome(
+        SimpleNamespace(
+            used_external_model=False,
+            handoff_required=True,
+            reason="verified_source_or_human_required",
+        ),
+        source="lead_ask",
+    )
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("ai", "lead_prefix", "external_ok", now - 31 * 86400),
+        )
+
+    snapshot = bot._ai_runtime_health(now)
+
+    assert snapshot["available"] is True
+    assert snapshot["window_seconds"] == 30 * 86400
+    assert snapshot["subjects"] == {
+        "lead_ask": {"handoff_verified_source_or_human_required": 1},
+        "lead_quick": {"external_ok": 1},
+    }
+    raw = json.dumps(snapshot, ensure_ascii=False)
+    assert secret_question not in raw
+    assert "+79991234567" not in raw
+    assert "roman@example.com" not in raw
+
+    with bot._db_cursor() as cur:
+        columns = {
+            row["name"]
+            for row in cur.execute("PRAGMA table_info(ops_metric_events)").fetchall()
+        }
+    assert columns == {"id", "category", "subject", "outcome", "created_at"}
+    assert "chat_id" not in columns
+    assert "prompt" not in columns
+    assert "response" not in columns
+
+
+def test_ai_runtime_metrics_retention_deletes_old_events(monkeypatch):
+    now = int(time.time())
+    monkeypatch.setattr(bot, "OPS_METRICS_RETENTION_DAYS", 90)
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('ai', 'lead_quick', 'external_ok', ?)",
+            (now - 91 * 86400,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('ai', 'lead_quick', 'external_ok', ?)",
+            (now - 10 * 86400,),
+        )
+
+    assert bot.cleanup_ops_metric_events(now) == 1
+    with bot._db_cursor() as cur:
+        remaining = cur.execute(
+            "SELECT COUNT(*) FROM ops_metric_events"
+        ).fetchone()[0]
+    assert remaining == 1
+
+
+def test_health_exposes_privacy_safe_ai_runtime_counts(client):
+    now = int(time.time())
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('ai', 'lead_quick', 'external_ok', ?)",
+            (now,),
+        )
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ai_runtime"]["available"] is True
+    assert data["ai_runtime"]["subjects"]["lead_quick"]["external_ok"] == 1
+    raw = response.get_data(as_text=True)
+    assert "chat_id" not in raw
+    assert "prompt" not in raw
+    assert "response_text" not in raw
 
 
 def test_health_exposes_lead_assist_flag_without_provider_secret(client, monkeypatch):

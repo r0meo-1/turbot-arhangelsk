@@ -350,6 +350,9 @@ DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
 # 0 disables event cleanup.
 PARTNER_ANALYTICS_RETENTION_DAYS = _env_int("PARTNER_ANALYTICS_RETENTION_DAYS", 365)
 FUNNEL_ANALYTICS_RETENTION_DAYS = _env_int("FUNNEL_ANALYTICS_RETENTION_DAYS", 365)
+# Operational counters never contain customer text/IDs, but they are event rows
+# and still need bounded storage. Public health uses a 30-day window.
+OPS_METRICS_RETENTION_DAYS = _env_int("OPS_METRICS_RETENTION_DAYS", 90)
 # soft (default): no hard «Согласен» gate — short notice + flexible contact.
 # strict: classic consent buttons before any questions (old behaviour).
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -850,22 +853,39 @@ def init_db() -> None:
         cur.execute("PRAGMA journal_mode=WAL")
 
 
+def _safe_ai_metric_label(value: Any, *, default: str, limit: int) -> str:
+    return (
+        re.sub(r"[^a-z0-9_]+", "_", str(value or default).lower()).strip("_")[:limit]
+        or default
+    )
+
+
+def _ai_chat_outcome_label(reply: Any) -> str:
+    """Return one coarse AI outcome without prompt, response or customer data."""
+    reason = _safe_ai_metric_label(
+        getattr(reply, "reason", "") or "none",
+        default="none",
+        limit=64,
+    )
+    if bool(getattr(reply, "handoff_required", False)):
+        return f"handoff_{reason}"
+    if bool(getattr(reply, "used_external_model", False)):
+        return "external_ok"
+    return f"fallback_{reason}"
+
+
 def _ai_chat_metric_key(reply: Any, *, source: str = "beta") -> str:
     """Map an AI reply to a bounded aggregate outcome with no user content."""
-    reason = re.sub(r"[^a-z0-9_]+", "_", str(getattr(reply, "reason", "") or "").lower())
-    reason = reason.strip("_")[:64] or "none"
-    source_key = re.sub(r"[^a-z0-9_]+", "_", str(source or "beta").lower()).strip("_")[:32] or "beta"
-    prefix = "" if source_key == "beta" else f"{source_key}_"
-    if bool(getattr(reply, "handoff_required", False)):
-        return f"{prefix}handoff_{reason}"
-    if bool(getattr(reply, "used_external_model", False)):
-        return f"{prefix}external_ok"
-    return f"{prefix}fallback_{reason}"
+    source_key = _safe_ai_metric_label(source, default="beta", limit=32)
+    outcome = _ai_chat_outcome_label(reply)
+    return outcome if source_key == "beta" else f"{source_key}_{outcome}"
 
 
 def record_ai_chat_outcome(reply: Any, *, source: str = "beta") -> None:
     """Increment privacy-minimized AI telemetry; never store prompt/response text."""
-    outcome = _ai_chat_metric_key(reply, source=source)
+    source_key = _safe_ai_metric_label(source, default="beta", limit=32)
+    outcome_label = _ai_chat_outcome_label(reply)
+    outcome = outcome_label if source_key == "beta" else f"{source_key}_{outcome_label}"
     try:
         with _db_cursor(commit=True) as cur:
             cur.execute(
@@ -881,6 +901,7 @@ def record_ai_chat_outcome(reply: Any, *, source: str = "beta") -> None:
     except sqlite3.Error as exc:
         # Metrics are observational only and must never break a chat response.
         logger.warning("Could not store AI beta metric: %s", exc)
+    _record_ops_metric("ai", source_key, outcome_label)
 
 
 def ai_chat_metrics_snapshot() -> Dict[str, int]:
@@ -1483,6 +1504,7 @@ def _start_retention_worker() -> None:
         DATA_RETENTION_DAYS <= 0
         and PARTNER_ANALYTICS_RETENTION_DAYS <= 0
         and FUNNEL_ANALYTICS_RETENTION_DAYS <= 0
+        and OPS_METRICS_RETENTION_DAYS <= 0
     ):
         logger.info("Data retention cleanup is disabled")
         return
@@ -1495,6 +1517,7 @@ def _start_retention_worker() -> None:
                 _funnel_metrics.cleanup(
                     _db_cursor, FUNNEL_ANALYTICS_RETENTION_DAYS
                 )
+                cleanup_ops_metric_events()
             except Exception as exc:
                 logger.error("Error in retention worker: %s", exc)
             time.sleep(6 * 3600)  # re-check four times a day
@@ -1502,10 +1525,11 @@ def _start_retention_worker() -> None:
     threading.Thread(target=_worker, daemon=True, name="data-retention").start()
     logger.info(
         "Data retention worker started "
-        "(personal=%s days, partner_events=%s days, funnel_events=%s days)",
+        "(personal=%s days, partner_events=%s days, funnel_events=%s days, ops_events=%s days)",
         DATA_RETENTION_DAYS,
         PARTNER_ANALYTICS_RETENTION_DAYS,
         FUNNEL_ANALYTICS_RETENTION_DAYS,
+        OPS_METRICS_RETENTION_DAYS,
     )
 
 # ---------------------------------------------------------------------------
@@ -2106,7 +2130,11 @@ def _funnel_health(now: Optional[float] = None) -> Dict[str, Any]:
 
 def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
     """Persist one bounded operational event without customer data."""
-    safe = tuple(str(value or "unknown")[:40] for value in (category, subject, outcome))
+    safe = (
+        str(category or "unknown")[:40],
+        str(subject or "unknown")[:40],
+        str(outcome or "unknown")[:64],
+    )
     try:
         with _db_cursor(commit=True) as cur:
             cur.execute(
@@ -2116,6 +2144,41 @@ def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
             )
     except sqlite3.Error as exc:
         logger.warning("Could not persist operational counter: %s", exc)
+
+
+def cleanup_ops_metric_events(now: Optional[float] = None) -> int:
+    """Delete old anonymous operational events; return deleted row count."""
+    if OPS_METRICS_RETENTION_DAYS <= 0:
+        return 0
+    current = int(time.time() if now is None else now)
+    cutoff = current - OPS_METRICS_RETENTION_DAYS * 86400
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute("DELETE FROM ops_metric_events WHERE created_at < ?", (cutoff,))
+            return int(cur.rowcount or 0)
+    except sqlite3.Error as exc:
+        logger.warning("Could not clean operational counters: %s", exc)
+        return 0
+
+
+def _ai_runtime_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day AI outcomes by fixed entrypoint without customer content."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT subject, outcome, COUNT(*) "
+                "FROM ops_metric_events "
+                "WHERE category = 'ai' AND created_at >= ? "
+                "GROUP BY subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read AI runtime counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
 
 
 def _ops_event_health(now: Optional[float] = None) -> Dict[str, Any]:
@@ -2475,8 +2538,13 @@ def _notify_lead_assist_handoff(
         send_message(recipient, manager_text, reply_markup=reply_kb)
 
 
-def _handle_lead_assist(chat_id: int, question: str) -> bool:
-    """Answer an explicit /ask or ИИ: question without mutating funnel state."""
+def _handle_lead_assist(
+    chat_id: int,
+    question: str,
+    *,
+    entrypoint: str = "generic",
+) -> bool:
+    """Answer a lead-assist question without mutating funnel state."""
     if not AI_LEAD_ASSIST_ENABLED:
         send_message(
             chat_id,
@@ -2520,7 +2588,9 @@ def _handle_lead_assist(chat_id: int, question: str) -> bool:
         timeout=float(AI_CHAT_TIMEOUT_SECONDS),
         log=logger,
     )
-    record_ai_chat_outcome(reply, source="lead_assist")
+    entrypoint_key = _safe_ai_metric_label(entrypoint, default="generic", limit=16)
+    metric_source = "lead_assist" if entrypoint_key == "generic" else f"lead_{entrypoint_key}"
+    record_ai_chat_outcome(reply, source=metric_source)
     send_message(chat_id, f"🤖 {reply.text}")
     if reply.handoff_required or reply.reason in {"provider_unavailable", "provider_error"}:
         _notify_lead_assist_handoff(chat_id, question, reply.reason, info=info)
@@ -2636,13 +2706,27 @@ def _admin_providers(chat_id: int, arg: str) -> bool:
 
 def _admin_ai_stats(chat_id: int, arg: str) -> bool:
     metrics = ai_chat_metrics_snapshot()
-    if not metrics:
-        send_message(chat_id, "🧪 AI beta: статистики пока нет.")
+    runtime = _ai_runtime_health()
+    if not metrics and not runtime.get("subjects"):
+        send_message(chat_id, "🧪 AI: статистики пока нет.")
         return True
+
     total = sum(metrics.values())
+    # Preserve the original first line for operators/scripts that already
+    # recognize it; the recent privacy-safe breakdown is appended below.
     lines = [f"🧪 AI beta: {total} запросов"]
     for outcome, count in metrics.items():
         lines.append(f"• {outcome}: {count}")
+
+    subjects = runtime.get("subjects") or {}
+    if subjects:
+        lines.append("")
+        lines.append("📊 Последние 30 дней:")
+        for source, outcomes in sorted(subjects.items()):
+            source_total = sum(int(v) for v in outcomes.values())
+            lines.append(f"• {source}: {source_total}")
+            for outcome, count in sorted(outcomes.items()):
+                lines.append(f"  - {outcome}: {count}")
     send_message(chat_id, "\n".join(lines))
     return True
 
@@ -4610,6 +4694,7 @@ def health() -> Any:
         "mdt_retry": _mdt_retry_health(now),
         "lead_delivery": _lead_delivery_health(now),
         "ops_events": _ops_event_health(now),
+        "ai_runtime": _ai_runtime_health(now),
         "acquisition_funnel": _funnel_health(now),
         "travelpayouts_stats": _travelpayouts_stats.health_snapshot(now=now),
         "ai_selection": {
@@ -4703,7 +4788,7 @@ def _process_callback(data: Dict[str, Any]) -> None:
         if not question:
             send_message(chat_id, "Эта кнопка устарела. Напишите /ask ваш вопрос.")
             return
-        _handle_lead_assist(chat_id, question)
+        _handle_lead_assist(chat_id, question, entrypoint="quick")
         return
 
     # Navigation callbacks work from any dialog state.
@@ -4923,10 +5008,14 @@ def _process_update(data: Dict[str, Any]) -> None:
     # Explicit customer lead-assist surface. It does not hijack ordinary
     # manager/client messages: only /ask or an "ИИ:" prefix invokes the model.
     if text == "/ask" or text.startswith("/ask "):
-        _handle_lead_assist(chat_id, text[4:].strip())
+        _handle_lead_assist(chat_id, text[4:].strip(), entrypoint="ask")
         return
     if text.casefold().startswith("ии:"):
-        _handle_lead_assist(chat_id, text.split(":", 1)[1].strip())
+        _handle_lead_assist(
+            chat_id,
+            text.split(":", 1)[1].strip(),
+            entrypoint="prefix",
+        )
         return
 
     # --- Admin: pending reply to client, then admin commands ---
