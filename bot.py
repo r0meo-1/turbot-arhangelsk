@@ -61,6 +61,7 @@ from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared.ai_provider import build_selection_provider
 from shared.ai_chat import generate_ai_chat_reply as _generate_ai_chat_reply
+from shared.ai_guardrails import redact_external_ai_text
 from shared import mdt as mdt_shared
 from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
@@ -148,6 +149,19 @@ GROQ_ZDR_CONFIRMED = os.getenv("GROQ_ZDR_CONFIRMED", "false").lower().strip() in
 )
 AI_CHAT_MAX_CHARS = max(100, min(8000, _env_int("AI_CHAT_MAX_CHARS", 2000)))
 AI_CHAT_TIMEOUT_SECONDS = max(3, min(30, _env_int("AI_CHAT_TIMEOUT_SECONDS", 15)))
+# Customer-facing lead assistant is deliberately narrower than the closed /ai
+# beta: it is invoked explicitly with /ask or "ИИ:", uses only non-PII trip
+# fields as context, and inherits the same deterministic safety guardrails.
+AI_LEAD_ASSIST_ENABLED = os.getenv(
+    "AI_LEAD_ASSIST_ENABLED",
+    "true" if AI_MODE == "regcloud" else "false",
+).lower().strip() in ("1", "true", "yes")
+AI_LEAD_ASSIST_MAX_CHARS = max(
+    100, min(2000, _env_int("AI_LEAD_ASSIST_MAX_CHARS", 800))
+)
+AI_LEAD_ASSIST_WINDOW_HOURS = max(
+    1, min(24 * 365, _env_int("AI_LEAD_ASSIST_WINDOW_HOURS", 24 * 30))
+)
 PORT                 = _env_int("PORT", 5000)
 STATE_FILE           = os.getenv("STATE_FILE", "bot_state.json")
 DATABASE_PATH        = os.getenv("DATABASE_PATH", "bot_state.sqlite")
@@ -2233,6 +2247,117 @@ def generate_ai_selection(destination: str, dates: str, people: str, budget: str
     )
 
 
+def _format_lead_assist_context(info: Dict[str, Any]) -> str:
+    """Build a non-PII trip context for the lead assistant."""
+    lines: List[str] = []
+    fields = (
+        ("Направление", info.get("destination")),
+        ("Город вылета", info.get("origin")),
+        ("Даты", info.get("dates")),
+        ("Ночей", info.get("nights")),
+        ("Туристов", info.get("people")),
+    )
+    for label, value in fields:
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+    budget = info.get("budget")
+    if budget not in (None, ""):
+        scope = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
+        lines.append(f"Бюджет: {budget} ₽ {scope}")
+    if info.get("direct_only"):
+        lines.append("Перелёт: предпочитается прямой")
+    return "\n".join(lines)
+
+
+def _latest_lead_assist_context(chat_id: int) -> Optional[Dict[str, Any]]:
+    """Return recent structured lead data without contact/name fields."""
+    cutoff = int(time.time()) - AI_LEAD_ASSIST_WINDOW_HOURS * 3600
+    with _db_cursor() as cur:
+        row = cur.execute(
+            """
+            SELECT destination, origin, dates, nights, people, kids, infants,
+                   budget, budget_scope, direct_only, created_at
+            FROM leads
+            WHERE chat_id = ? AND created_at >= ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (chat_id, cutoff),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _notify_lead_assist_handoff(chat_id: int, question: str, reason: str) -> None:
+    """Tell the human owner when the guarded AI refuses or escalates a question."""
+    global _last_lead_client_id
+    safe_question = redact_external_ai_text(question).strip()[:1200] or "(пустой вопрос)"
+    reason_label = (reason or "human_required")[:80]
+    manager_text = (
+        "🤖→👩‍💼 Вопрос клиента требует менеджера\n"
+        f"Telegram ID: {chat_id}\n"
+        f"Причина: {reason_label}\n\n"
+        f"Вопрос: {safe_question}\n\n"
+        f"Ответить в Telegram: /send {chat_id}"
+    )
+    send_lead_owner_vk(manager_text)
+    with _lock:
+        _last_lead_client_id = chat_id
+    reply_kb = kb_admin_reply(chat_id)
+    for recipient in LEAD_NOTIFY_IDS:
+        send_message(recipient, manager_text, reply_markup=reply_kb)
+
+
+def _handle_lead_assist(chat_id: int, question: str) -> bool:
+    """Answer an explicit /ask or ИИ: question without mutating funnel state."""
+    if not AI_LEAD_ASSIST_ENABLED:
+        send_message(
+            chat_id,
+            "ИИ-помощник сейчас отключён. По заявке ответит менеджер «АПРЕЛЬ тур».",
+        )
+        return True
+
+    question = str(question or "").strip()
+    if not question:
+        send_message(
+            chat_id,
+            "🤖 Напишите вопрос после команды /ask. Например:\n"
+            "/ask Что взять с собой в Таиланд?",
+        )
+        return True
+    if len(question) > AI_LEAD_ASSIST_MAX_CHARS:
+        send_message(
+            chat_id,
+            f"🤖 Вопрос слишком длинный. Максимум {AI_LEAD_ASSIST_MAX_CHARS} символов.",
+        )
+        return True
+
+    with _lock:
+        current = dict(user_data.get(chat_id) or {})
+    info = current or _latest_lead_assist_context(chat_id)
+    if not info:
+        send_message(
+            chat_id,
+            "Сначала заполните параметры поездки через /start, "
+            "тогда ИИ сможет отвечать с учётом вашей заявки.",
+        )
+        return True
+
+    send_typing(chat_id)
+    reply = _generate_ai_chat_reply(
+        question,
+        enabled=True,
+        groq_client=selection_ai_provider.client if selection_ai_provider.ready else None,
+        groq_model=selection_ai_provider.model,
+        verified_context=_format_lead_assist_context(info),
+        timeout=float(AI_CHAT_TIMEOUT_SECONDS),
+        log=logger,
+    )
+    send_message(chat_id, f"🤖 {reply.text}")
+    if reply.handoff_required:
+        _notify_lead_assist_handoff(chat_id, question, reply.reason)
+    return True
+
+
 def _ai_beta_allowed(chat_id: int) -> bool:
     """Closed beta gate. No public route exists even when this is enabled."""
     return AI_CHAT_ENABLED and chat_id in AI_CHAT_BETA_IDS
@@ -3631,7 +3756,13 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: до {_esc(info.get('budget', '?'))} ₽ на человека\n"
         f"📞 Связь: {_esc(phone)}\n\n"
-        "Спасибо, что выбрали нас 🌺",
+        "Спасибо, что выбрали нас 🌺"
+        + (
+            "\n\n🤖 Есть вопрос по поездке? Напишите: "
+            "<code>/ask ваш вопрос</code>"
+            if AI_LEAD_ASSIST_ENABLED
+            else ""
+        ),
         reply_markup=hide_keyboard(),
         parse_mode="HTML",
     )
@@ -4263,6 +4394,7 @@ def health() -> Any:
             "mode": AI_MODE,
             "ready": selection_ai_provider.ready,
             "model": selection_ai_provider.model or None,
+            "lead_assist_enabled": AI_LEAD_ASSIST_ENABLED,
         },
     })
     # 503 rather than 200-with-a-sad-field: monitoring reads status codes, and
@@ -4552,6 +4684,15 @@ def _process_update(data: Dict[str, Any]) -> None:
     # users get the ordinary unknown-command behavior below, so no beta surface
     # is advertised publicly.
     if (text == "/ai" or text.startswith("/ai ")) and _handle_ai_beta_command(chat_id, text):
+        return
+
+    # Explicit customer lead-assist surface. It does not hijack ordinary
+    # manager/client messages: only /ask or an "ИИ:" prefix invokes the model.
+    if text == "/ask" or text.startswith("/ask "):
+        _handle_lead_assist(chat_id, text[4:].strip())
+        return
+    if text.casefold().startswith("ии:"):
+        _handle_lead_assist(chat_id, text.split(":", 1)[1].strip())
         return
 
     # --- Admin: pending reply to client, then admin commands ---
