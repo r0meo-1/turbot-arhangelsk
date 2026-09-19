@@ -335,17 +335,93 @@ def test_agent_extension_lists_and_updates_crm_status(client, monkeypatch):
             "Origin": "chrome-extension://abcdefghijklmnop",
             "Authorization": "Bearer agent-secret",
         },
-        json={"leadId": lead_id, "status": "working", "note": "Ждём ответ клиента"},
+        json={
+            "leadId": lead_id,
+            "status": "working",
+            "note": "Ждём ответ клиента",
+            "followUpOn": "2026-09-21",
+        },
     )
     assert update.status_code == 200
     assert update.get_json()["status"] == "working"
+    assert update.get_json()["followUpOn"] == "2026-09-21"
 
     with bot._db_cursor() as cur:
         cur.execute(
-            "SELECT crm_status, crm_note, crm_updated_at FROM website_leads WHERE id=?",
+            """
+            SELECT crm_status, crm_note, crm_followup_on, crm_updated_at
+            FROM website_leads WHERE id=?
+            """,
             (lead_id,),
         )
-        status, note, updated_at = cur.fetchone()
+        status, note, follow_up_on, updated_at = cur.fetchone()
     assert status == "working"
     assert note == "Ждём ответ клиента"
+    assert follow_up_on == "2026-09-21"
     assert updated_at > 0
+
+    listing2 = client.get(
+        "/agent-extension/leads?limit=10",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+    )
+    assert listing2.status_code == 200
+    assert listing2.get_json()["leads"][0]["followUpOn"] == "2026-09-21"
+
+
+
+def test_agent_extension_rejects_invalid_followup_date(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    response = client.post(
+        "/agent-extension/status",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json={
+            "leadId": 1,
+            "status": "working",
+            "note": "",
+            "followUpOn": "2026-99-77",
+        },
+    )
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "invalid_followup_date"
+
+
+def test_agent_extension_csv_export_is_authorized_and_contains_lead(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json=_payload("agent-csv-0001"),
+    )
+    assert create.status_code == 202
+
+    denied = client.get(
+        "/agent-extension/export.csv",
+        headers={"Origin": "chrome-extension://abcdefghijklmnop"},
+    )
+    assert denied.status_code == 401
+
+    response = client.get(
+        "/agent-extension/export.csv",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["Content-Type"].startswith("text/csv")
+    assert "attachment;" in response.headers["Content-Disposition"]
+    text = response.get_data(as_text=True)
+    assert "Роман" in text
+    assert "+79161234567" in text
+    assert "Турция" in text
