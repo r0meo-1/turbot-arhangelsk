@@ -42,6 +42,7 @@ jobs:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
       - name: Trigger restricted server deploy
         env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           VK_MINI_APP_ID: ${{ secrets.VK_MINI_APP_ID }}
           VK_MINI_APP_SECRET: ${{ secrets.VK_MINI_APP_SECRET }}
           MDT_API_KEY: ${{ secrets.MDT_API_KEY }}
@@ -52,62 +53,8 @@ jobs:
           SLETAT_PASSWORD: ${{ secrets.SLETAT_PASSWORD }}
         run: |
           set -Eeuo pipefail
-
-          test -n "$VK_MINI_APP_ID"
-          test -n "$VK_MINI_APP_SECRET"
-          test -n "$MDT_API_KEY"
-          if [[ -z "$TRAVELPAYOUTS_API_TOKEN" ]]; then
-            echo "TRAVELPAYOUTS_API_TOKEN GitHub secret is required for Booking.com search" >&2
-            exit 1
-          fi
-
-          # Provider credentials are optional until partner access is approved,
-          # but partial pairs are never accepted.
-          if [[ -n "$TRAVELATA_USERNAME" || -n "$TRAVELATA_PASSWORD" ]]; then
-            if [[ -z "$TRAVELATA_USERNAME" || -z "$TRAVELATA_PASSWORD" ]]; then
-              echo "Travelata GitHub secrets must be configured as a complete pair" >&2
-              exit 1
-            fi
-          fi
-          if [[ -n "$SLETAT_LOGIN" || -n "$SLETAT_PASSWORD" ]]; then
-            if [[ -z "$SLETAT_LOGIN" || -z "$SLETAT_PASSWORD" ]]; then
-              echo "Sletat GitHub secrets must be configured as a complete pair" >&2
-              exit 1
-            fi
-          fi
-
-          app_id_b64="$(printf '%s' "$VK_MINI_APP_ID" | base64 -w0)"
-          secret_b64="$(printf '%s' "$VK_MINI_APP_SECRET" | base64 -w0)"
-          mdt_key_b64="$(printf '%s' "$MDT_API_KEY" | base64 -w0)"
-          travelata_user_b64="$(printf '%s' "$TRAVELATA_USERNAME" | base64 -w0)"
-          travelata_password_b64="$(printf '%s' "$TRAVELATA_PASSWORD" | base64 -w0)"
-          travelpayouts_token_b64="$(printf '%s' "$TRAVELPAYOUTS_API_TOKEN" | base64 -w0)"
-          sletat_login_b64="$(printf '%s' "$SLETAT_LOGIN" | base64 -w0)"
-          sletat_password_b64="$(printf '%s' "$SLETAT_PASSWORD" | base64 -w0)"
-
-          # First connection uses the legacy config payload understood by older
-          # root-owned deploy entrypoints. Code/content is deployed separately
-          # by Deploy TurBot Bundle after this configuration workflow succeeds.
-          printf 'TURBOT_DEPLOY_CONFIG_V1\n%s\n%s\n' \
-            "$app_id_b64" \
-            "$secret_b64" |
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-              root@${{ secrets.DEPLOY_HOST }} true
-
-          # Second connection runs the freshly installed entrypoint. V5 keeps
-          # protected MDT/Travelata/Travelpayouts configuration and can install
-          # an optional Sletat credential pair without ever printing secrets.
-          printf 'TURBOT_DEPLOY_CONFIG_V5\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
-            "$app_id_b64" \
-            "$secret_b64" \
-            "$mdt_key_b64" \
-            "$travelata_user_b64" \
-            "$travelata_password_b64" \
-            "$travelpayouts_token_b64" \
-            "$sletat_login_b64" \
-            "$sletat_password_b64" |
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-              root@${{ secrets.DEPLOY_HOST }} true
+          chmod +x deploy/send-production-config.sh
+          deploy/send-production-config.sh
 
       - name: Verify public Mini App production routes
         shell: bash
