@@ -23,7 +23,7 @@ def generate_ai_selection(
     timeout: float = 20.0,
     log: Optional[logging.Logger] = None,
 ) -> str:
-    """Generate a tour blurb via Groq or fall back to templates."""
+    """Generate a tour blurb via an approved provider or fall back to templates."""
     log = log or logger
     mode = (ai_mode or "template").lower().strip()
 
@@ -31,12 +31,12 @@ def generate_ai_selection(
         log.info("Template selection generated for '%s'", destination)
         return template_selection(destination, dates, people, budget)
 
-    if mode != "groq":
+    if mode not in {"groq", "regcloud"}:
         log.warning("Unknown AI mode '%s' — using template fallback", mode)
         return template_selection(destination, dates, people, budget)
 
     if not groq_client:
-        log.warning("Groq client unavailable — using template fallback")
+        log.warning("%s AI client unavailable — using template fallback", mode)
         return template_selection(destination, dates, people, budget)
 
     try:
@@ -71,7 +71,7 @@ def generate_ai_selection(
         ai_text = str(response.choices[0].message.content or "").strip()
         if not ai_text:
             raise ValueError("empty AI response")
-        log.info("AI selection generated for '%s'", destination)
+        log.info("%s AI selection generated for '%s'", mode, destination)
         # Not «подборка туров»: the bot has no hotels, transfers or packages —
         # Tutu returns flights only. Promising a tour and delivering a
         # paragraph about the destination is the kind of overclaim a client

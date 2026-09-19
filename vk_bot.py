@@ -76,6 +76,7 @@ from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
 from shared.log_privacy import correlation_id as _log_correlation
 from shared.ai import generate_ai_selection as _shared_generate_ai
+from shared.ai_provider import build_selection_provider
 from shared import mdt as mdt_shared
 
 load_dotenv()
@@ -118,6 +119,9 @@ VK_API_BASE          = "https://api.vk.com/method/"
 
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+REGCLOUD_API_KEY  = os.getenv("REGCLOUD_API_KEY", "")
+REGCLOUD_BASE_URL = os.getenv("REGCLOUD_BASE_URL", "")
+REGCLOUD_MODEL    = os.getenv("REGCLOUD_MODEL", "")
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 PORT              = _env_int("VK_PORT", _env_int("PORT", 5100))
 DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", os.getenv("DATABASE_PATH", "vk_bot_state.sqlite"))
@@ -448,6 +452,14 @@ HINT_START = "Чтобы подобрать тур, напишите «Нача�
 # ---------------------------------------------------------------------------
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY and Groq else None
+selection_ai_provider = build_selection_provider(
+    AI_MODE,
+    groq_api_key=GROQ_API_KEY,
+    groq_model=GROQ_MODEL,
+    regcloud_api_key=REGCLOUD_API_KEY,
+    regcloud_base_url=REGCLOUD_BASE_URL,
+    regcloud_model=REGCLOUD_MODEL,
+)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP session
@@ -1649,8 +1661,8 @@ def generate_ai_selection(destination: str, dates: str, people: str, budget: str
         people,
         budget,
         ai_mode=AI_MODE,
-        groq_client=groq_client,
-        groq_model=GROQ_MODEL,
+        groq_client=selection_ai_provider.client,
+        groq_model=selection_ai_provider.model,
         log=logger,
     )
 
