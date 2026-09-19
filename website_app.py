@@ -327,6 +327,10 @@ def _notify_managers(lead_id: int, payload: Dict[str, Any]) -> None:
         f"Людей: {payload['people']}\n"
         f"Бюджет: {int(payload['budget'])} ₽"
         + (f"\nUTM: {utm}" if utm else "")
+        + "\n\n🔎 Подбор менеджеру:\n"
+        + f"Tourvisor PRO: {_bot.MANAGER_TOURVISOR_URL}\n"
+        + f"Sletat PRO: {_bot.MANAGER_SLETAT_URL}\n"
+        + f"Qui-Quo: {_bot.MANAGER_QUIQUO_URL}"
     )
     try:
         _bot.send_lead_owner_vk(owner_text)
