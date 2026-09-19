@@ -154,7 +154,7 @@ AI_CHAT_TIMEOUT_SECONDS = max(3, min(30, _env_int("AI_CHAT_TIMEOUT_SECONDS", 15)
 # fields as context, and inherits the same deterministic safety guardrails.
 AI_LEAD_ASSIST_ENABLED = os.getenv(
     "AI_LEAD_ASSIST_ENABLED",
-    "true" if AI_MODE == "regcloud" else "false",
+    "false",
 ).lower().strip() in ("1", "true", "yes")
 AI_LEAD_ASSIST_MAX_CHARS = max(
     100, min(2000, _env_int("AI_LEAD_ASSIST_MAX_CHARS", 800))
@@ -2358,49 +2358,6 @@ def _handle_lead_assist(chat_id: int, question: str) -> bool:
     if reply.handoff_required or reply.reason in {"provider_unavailable", "provider_error"}:
         _notify_lead_assist_handoff(chat_id, question, reply.reason)
     return True
-
-
-_SIMPLE_POST_LEAD_ACKS = {
-    "спасибо", "спасибо!", "благодарю", "ок", "окей", "понял", "поняла",
-    "хорошо", "договорились", "👍", "🙏",
-}
-_LEAD_CHANGE_NEEDLES = (
-    "измен", "поменя", "перенес", "перенёс", "добав", "убрать", "убери",
-    "другие даты", "другой бюджет", "другой отель", "другой город",
-    "нас будет", "вместо", "позвон", "свяж", "менеджер", "оператор",
-)
-
-
-def _handle_post_lead_message(chat_id: int, text: str) -> bool:
-    """Naturally help a recent completed lead without hijacking an active funnel."""
-    if not AI_LEAD_ASSIST_ENABLED:
-        return False
-    if not _latest_lead_assist_context(chat_id):
-        return False
-
-    normalized = str(text or "").strip().casefold()
-    if normalized in _SIMPLE_POST_LEAD_ACKS:
-        send_message(
-            chat_id,
-            "Пожалуйста 🌴 Заявка уже у менеджера. "
-            "Если появится вопрос по поездке, просто напишите его сюда.",
-        )
-        return True
-
-    if any(needle in normalized for needle in _LEAD_CHANGE_NEEDLES):
-        _notify_lead_assist_handoff(
-            chat_id,
-            text,
-            "customer_requested_manager_or_lead_change",
-        )
-        send_message(
-            chat_id,
-            "Передал это менеджеру. Изменения по заявке лучше подтвердить человеком, "
-            "чтобы ничего не потерялось.",
-        )
-        return True
-
-    return _handle_lead_assist(chat_id, text)
 
 
 def _ai_beta_allowed(chat_id: int) -> bool:
@@ -4797,10 +4754,8 @@ def _process_update(data: Dict[str, Any]) -> None:
     if chat_id in user_data:
         handle_dialog(chat_id, text, message)
     else:
-        # After a completed lead, ordinary safe travel questions can be answered
-        # naturally. Change requests and risky topics are handed to a human.
-        if _handle_post_lead_message(chat_id, text):
-            return
+        # Ordinary post-lead messages remain human-owned. External AI is only
+        # invoked through the explicit /ask or "ИИ:" surfaces above.
         send_message(chat_id, HINT_START)
 
 
