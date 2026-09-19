@@ -30,3 +30,12 @@ button{cursor:pointer;border:0;border-radius:9px;padding:9px 10px;font-weight:75
 .status.ok{color:#77e3a1}.status.bad{color:#ff9d9d}
 summary{cursor:pointer;font-size:12px;font-weight:800}
 @media(max-width:330px){.grid{grid-template-columns:1fr}}
+
+.lead-card{margin:8px 0;padding:10px;border:1px solid #2a3a52;border-radius:10px;background:#0d1726}
+.lead-head{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.lead-head strong{font-size:12px}.lead-head small{color:#6f86a1;font-size:10px}
+.lead-meta{margin:5px 0 8px;color:#aebdd0;font-size:11px;line-height:1.4}
+.lead-controls{display:grid;grid-template-columns:1fr;gap:6px}
+select,textarea{width:100%;padding:8px;border:1px solid #31415a;border-radius:8px;background:#0d1726;color:#f3f7fc;font:inherit}
+textarea{min-height:48px;resize:vertical}
+.save-status{background:#1b2a3f;color:#dce9f7}
