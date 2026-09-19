@@ -290,7 +290,8 @@ Send `/start` to the bot in Telegram — you should see a consent prompt.
 | Stop bot            | `sudo systemctl stop turbot`           |
 | Update from repo    | `cd /opt/turbot && bash scripts/deploy.sh` |
 | Dry-run an update   | `cd /opt/turbot && bash scripts/deploy.sh --check` |
-| Backup databases    | `sudo /opt/turbot/scripts/backup.sh`       |\n| Verify restore      | `sudo /opt/turbot/scripts/restore-drill.sh` |
+| Backup databases    | `sudo /opt/turbot/scripts/backup.sh`       |
+| Verify restore      | `sudo /opt/turbot/scripts/restore-drill.sh` |
 
 ### Backup and restore safety
 
