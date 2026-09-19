@@ -36,6 +36,10 @@ Credentials belong only in the server environment. Do not commit them.
 
 The existing Tourvisor adapter remains available as a fallback. An expired Tourvisor JWT disables that provider instead of exposing a search button that cannot work.
 
+Tourvisor's current Search API documentation says the JWT is obtained in the travel-agent personal account; no public refresh endpoint is documented. Rotate an expired token in Tourvisor PRO, update `TOURVISOR_TOKEN` in the protected server environment, and restart/redeploy the VK service. `/vk/health` exposes only the safe operational state (`configured`, `enabled`, `token_status`, expiry seconds), never the token itself.
+
+The deploy smoke probe also skips upstream HTTP calls when the JWT is already known to be expired, avoiding a misleading 403 while still reporting `reason=expired_jwt`.
+
 ## Safety rules
 
 - Production search never substitutes the curated demo hotel catalogue for failed or empty upstream results.
