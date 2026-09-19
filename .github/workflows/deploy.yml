@@ -130,9 +130,45 @@ jobs:
             sleep 5
           done
 
-          for legal_path in privacy.html consent.html terms.html moderation.html legal.json; do
+          for legal_path in privacy.html consent.html terms.html moderation.html; do
             curl -fsSL --max-time 15 "$vk_base/miniapp/$legal_path" >/dev/null
           done
+
+          legal_json="$(mktemp)"
+          tg_privacy="$(mktemp)"
+          cleanup_legal_smoke() {
+            rm -f "$legal_json" "$tg_privacy"
+          }
+          trap cleanup_legal_smoke EXIT
+
+          curl -fsSL --max-time 15 "$vk_base/miniapp/legal.json" -o "$legal_json"
+          python - "$legal_json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              data = json.load(fh)
+          operator = str(data.get("operatorName") or "").strip()
+          if not operator:
+              raise SystemExit("VK legal operator is blank")
+          if operator == 'ТА «АПРЕЛЬ тур»':
+              raise SystemExit("VK legal operator is still the generic brand fallback")
+          if "[указать" in operator or "ЧЕРНОВИК" in operator:
+              raise SystemExit("VK legal operator contains a placeholder")
+          PY
+
+          curl -fsSL --max-time 15 "https://bot.r0meo1.ru/privacy" -o "$tg_privacy"
+          python - "$tg_privacy" <<'PY'
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              text = fh.read()
+          if "ИП Замятина Мария Андреевна" not in text:
+              raise SystemExit("Telegram privacy page has no verified operator")
+          for forbidden in ("ЧЕРНОВИК / ШАБЛОН", "[указать"):
+              if forbidden in text:
+                  raise SystemExit("Telegram privacy page still contains draft placeholders")
+          PY
 
           vk_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$vk_base/miniapp/draft" \
