@@ -1,0 +1,39 @@
+name: Bootstrap TurBot Deployer
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/bootstrap-deployer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turbot-bootstrap-deployer
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Load restricted deploy key
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Run legacy fetch path once
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            root@${{ secrets.DEPLOY_HOST }} true
+
+      - name: Verify production health
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL --max-time 15 https://bot.r0meo1.ru/health >/dev/null
+          echo "Legacy bootstrap completed; production health is ok"
