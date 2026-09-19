@@ -305,3 +305,19 @@ def test_direct_only_is_forwarded_to_tourvisor():
 
     assert seen["countries"]["onlyDirect"] is True
     assert seen["tours/search"]["onlyDirect"] is True
+
+
+
+def test_actualize_fallback_never_fabricates_availability():
+    actual = tourvisor.actualize_tour({
+        "price": 180000,
+        "fuel_charge": 5000,
+        "currency": "RUB",
+    })
+
+    assert actual["confirmed"] is False
+    assert actual["status"] == "unknown"
+    assert actual["total_price"] == 185000
+    assert "требует актуальной проверки" in actual["flight_status"]
+    assert "требует актуальной проверки" in actual["hotel_status"]
+    assert "есть" not in actual["flight_status"].lower()
