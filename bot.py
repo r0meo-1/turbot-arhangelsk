@@ -66,6 +66,7 @@ from shared import mdt as mdt_shared
 from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
+from shared.runtime_metrics import lead_delivery_snapshot
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
@@ -775,6 +776,8 @@ def init_db() -> None:
             cur.execute("ALTER TABLE leads ADD COLUMN mdt_synced_at INTEGER")
         if "mdt_payload" not in _lead_cols:
             cur.execute("ALTER TABLE leads ADD COLUMN mdt_payload TEXT")
+        if "manager_notified_at" not in _lead_cols:
+            cur.execute("ALTER TABLE leads ADD COLUMN manager_notified_at INTEGER")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)"
         )
@@ -1997,6 +2000,38 @@ def _mdt_retry_health(now: Optional[float] = None) -> Dict[str, Any]:
             else None
         ),
     }
+
+
+def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day Telegram and website manager-delivery aggregates."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    channels: Dict[str, Any] = {}
+    try:
+        with _db_cursor() as cur:
+            cur.execute(
+                "SELECT created_at, manager_notified_at FROM leads WHERE created_at >= ?",
+                (cutoff,),
+            )
+            channels["telegram"] = lead_delivery_snapshot(
+                cur.fetchall(), window_seconds=window
+            )
+            try:
+                cur.execute(
+                    "SELECT created_at, owner_notified_at FROM website_leads WHERE created_at >= ?",
+                    (cutoff,),
+                )
+                website_rows = cur.fetchall()
+            except sqlite3.OperationalError:
+                website_rows = []
+            channels["website"] = lead_delivery_snapshot(
+                website_rows, window_seconds=window
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read lead-delivery aggregates: %s", exc)
+        return {"available": False, "window_seconds": window, "channels": {}}
+    return {"available": True, "window_seconds": window, "channels": channels}
 
 
 def _alert_stale_mdt_retry_queue(now: Optional[float] = None) -> bool:
@@ -3844,7 +3879,7 @@ def _notify_admin(
     phone: str,
     client_name: Optional[str],
     username: str = "",
-) -> None:
+) -> bool:
     """2. Deliver the saved lead to Natalya in VK and optional ops copies."""
     global _last_lead_client_id
     recipients = LEAD_NOTIFY_IDS
@@ -3873,7 +3908,7 @@ def _notify_admin(
             "Lead from %s saved but manager delivery is unavailable",
             _log_correlation(chat_id, namespace="tg-user"),
         )
-        return
+        return False
 
     with _lock:
         _last_lead_client_id = chat_id
@@ -3882,9 +3917,11 @@ def _notify_admin(
         chat_id, info, phone, client_name, username=username, source_label="Telegram",
     )
     reply_kb = kb_admin_reply(chat_id)
+    delivered = owner_delivered
     for recipient in recipients:
         resp = send_message(recipient, text, parse_mode="HTML", reply_markup=reply_kb)
         if resp is not None and getattr(resp, "status_code", 0) == 200:
+            delivered = True
             logger.info("Lead from %s delivered to Telegram manager %s", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"))
             continue
         # Fallback without HTML if Telegram rejected parse_mode (rare).
@@ -3904,6 +3941,7 @@ def _notify_admin(
             )
             resp2 = send_message(recipient, plain, reply_markup=reply_kb)
             if resp2 is not None and getattr(resp2, "status_code", 0) == 200:
+                delivered = True
                 logger.info(
                     "Lead from %s delivered to manager %s (plain-text fallback)", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"),
                 )
@@ -3911,6 +3949,7 @@ def _notify_admin(
         logger.error(
             "Failed to deliver lead from %s to Telegram manager %s", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"),
         )
+    return delivered
 
 
 def _send_ai_blurb(chat_id: int, info: Dict[str, Any]) -> None:
@@ -4065,7 +4104,13 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     # 2. Notify bot creator / admins in Telegram. Failure is operationally
     # important, but the customer's already-saved request must remain durable.
     try:
-        _notify_admin(chat_id, info, phone, client_name, username=username or "")
+        if _notify_admin(chat_id, info, phone, client_name, username=username or ""):
+            with _db_cursor(commit=True) as cur:
+                cur.execute(
+                    "UPDATE leads SET manager_notified_at=? "
+                    "WHERE id=? AND manager_notified_at IS NULL",
+                    (int(time.time()), lead_id),
+                )
     except Exception as exc:
         logger.error("Failed to notify manager about saved lead %s: %s", lead_id, exc)
         _alert_admin_error("Failed to notify manager about saved lead", exc)
@@ -4391,6 +4436,7 @@ def health() -> Any:
         ),
         "bot_mode": BOT_MODE,
         "mdt_retry": _mdt_retry_health(now),
+        "lead_delivery": _lead_delivery_health(now),
         "travelpayouts_stats": _travelpayouts_stats.health_snapshot(now=now),
         "ai_selection": {
             "mode": AI_MODE,
