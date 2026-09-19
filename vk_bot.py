@@ -68,6 +68,7 @@ from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
+from shared import funnel_metrics as _funnel_metrics
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -1014,6 +1015,37 @@ def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
     }
 
 
+def record_funnel_event(
+    channel: str,
+    source: str,
+    stage: str,
+    outcome: str,
+) -> None:
+    try:
+        _funnel_metrics.record(
+            _db_cursor,
+            channel,
+            source or "direct",
+            stage,
+            outcome,
+        )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist VK acquisition funnel event: %s", exc)
+
+
+def _funnel_health(now: Optional[float] = None) -> Dict[str, Any]:
+    try:
+        return _funnel_metrics.snapshot(_db_cursor, now=now)
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK acquisition funnel: %s", exc)
+        return {
+            "available": False,
+            "window_seconds": 30 * 86400,
+            "events": 0,
+            "channels": {},
+        }
+
+
 def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
     safe = tuple(str(value or "unknown")[:40] for value in (category, subject, outcome))
     try:
@@ -1950,6 +1982,7 @@ def handle_start(
     user_id: int, first_name: str = "", source_tag: str = ""
 ) -> None:
     source_tag = _first_touch_source_tag(user_id, source_tag)
+    record_funnel_event("vk", source_tag or "direct", "start", "opened")
     if CONSENT_MODE == "strict" and not has_consent(user_id):
         with _lock:
             user_data[user_id] = {
@@ -3715,12 +3748,22 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     try:
         lead_id = save_lead(user_id, info, phone, first_name=client_name)
         _record_ops_metric("lead", "vk", "accepted")
+        record_funnel_event(
+            "vk", str(info.get("source_tag") or "direct"), "lead", "accepted"
+        )
     except Exception as exc:
         _record_ops_metric("lead", "vk", "save_failure")
         logger.error("Failed to save VK lead for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
     _confirm_to_user(user_id, info, phone)
-    if _notify_admin(user_id, info, phone, client_name) and lead_id is not None:
+    manager_delivered = _notify_admin(user_id, info, phone, client_name)
+    record_funnel_event(
+        "vk",
+        str(info.get("source_tag") or "direct"),
+        "manager",
+        "delivered" if manager_delivered else "failed",
+    )
+    if manager_delivered and lead_id is not None:
         with _db_cursor(commit=True) as cur:
             cur.execute(
                 "UPDATE leads SET manager_notified_at=? "
@@ -4276,6 +4319,7 @@ def health() -> Any:
         "mdt_delivery": _mdt_delivery_health(),
         "lead_delivery": _lead_delivery_health(),
         "ops_events": _ops_event_health(),
+        "acquisition_funnel": _funnel_health(),
         "ai_selection": {
             "mode": AI_MODE,
             "ready": selection_ai_provider.ready,
