@@ -66,6 +66,63 @@ jobs:
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
 
+      - name: Verify deployed legal content and base headers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base="https://bot.r0meo1.ru"
+          legal_json="$(mktemp)"
+          privacy_body="$(mktemp)"
+          privacy_headers="$(mktemp)"
+          cleanup() {
+            rm -f "$legal_json" "$privacy_body" "$privacy_headers"
+          }
+          trap cleanup EXIT
+
+          for attempt in {1..12}; do
+            if curl -fsSL --max-time 15 "$base/vk/miniapp/legal.json" -o "$legal_json" &&
+               curl -fsSL --max-time 15 -D "$privacy_headers" "$base/privacy" -o "$privacy_body"; then
+              break
+            fi
+            if [[ "$attempt" == 12 ]]; then
+              echo "Production legal routes did not become ready" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          python - "$legal_json" "$privacy_body" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as fh:
+              data = json.load(fh)
+          operator = str(data.get("operatorName") or "").strip()
+          if not operator:
+              raise SystemExit("VK legal operator is blank")
+          if operator == 'ТА «АПРЕЛЬ тур»':
+              raise SystemExit("VK legal operator is still the generic brand fallback")
+          if "[указать" in operator or "ЧЕРНОВИК" in operator:
+              raise SystemExit("VK legal operator contains a placeholder")
+
+          with open(sys.argv[2], encoding="utf-8") as fh:
+              privacy = fh.read()
+          if "ИП Замятина Мария Андреевна" not in privacy:
+              raise SystemExit("Telegram privacy page has no verified operator")
+          for forbidden in ("ЧЕРНОВИК / ШАБЛОН", "[указать"):
+              if forbidden in privacy:
+                  raise SystemExit("Telegram privacy page still contains draft placeholders")
+          PY
+
+          grep -qi '^x-content-type-options: nosniff' "$privacy_headers" ||
+            { echo "Privacy response is missing nosniff" >&2; exit 1; }
+          grep -qi '^referrer-policy: strict-origin-when-cross-origin' "$privacy_headers" ||
+            { echo "Privacy response is missing Referrer-Policy" >&2; exit 1; }
+          grep -qi '^permissions-policy:.*camera=()' "$privacy_headers" ||
+            { echo "Privacy response is missing Permissions-Policy" >&2; exit 1; }
+
+          echo "Production legal content and base app security headers: ok"
+
       - name: Verify Agent Desk production routes
         shell: bash
         run: |
