@@ -294,8 +294,6 @@ def _deliver_lead(lead_id: int) -> bool:
 
 
 def _notify_managers(lead_id: int, payload: Dict[str, Any]) -> None:
-    if not _bot.LEAD_NOTIFY_IDS:
-        return
     utm = "/".join(
         value for value in (
             payload.get("utm_source", ""),
@@ -317,6 +315,27 @@ def _notify_managers(lead_id: int, payload: Dict[str, Any]) -> None:
     if utm:
         lines.append(f"UTM: {html.escape(utm)}")
     text = "\n".join(lines)
+    owner_text = (
+        f"🌐 Новая заявка с сайта\n"
+        f"👩‍💼 Владелец: {_bot.LEAD_OWNER_NAME}\n"
+        f"ID: web-lead-{int(lead_id)}\n"
+        f"Клиент: {payload['name']}\n"
+        f"Телефон: {payload['phone']}\n"
+        f"Направление: {payload['destination']}\n"
+        f"Вылет: {payload['origin']}\n"
+        f"Даты: {payload['dates']}\n"
+        f"Людей: {payload['people']}\n"
+        f"Бюджет: {int(payload['budget'])} ₽"
+        + (f"\nUTM: {utm}" if utm else "")
+        + "\n\n🔎 Подбор менеджеру:\n"
+        + f"Tourvisor PRO: {_bot.MANAGER_TOURVISOR_URL}\n"
+        + f"Sletat PRO: {_bot.MANAGER_SLETAT_URL}\n"
+        + f"Qui-Quo: {_bot.MANAGER_QUIQUO_URL}"
+    )
+    try:
+        _bot.send_lead_owner_vk(owner_text)
+    except Exception as exc:
+        logger.warning("Website lead VK owner notification failed: %s", type(exc).__name__)
     for chat_id in _bot.LEAD_NOTIFY_IDS:
         try:
             _bot.send_message(chat_id, text)

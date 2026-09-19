@@ -42,6 +42,7 @@ def _payload():
         "childrenAges": [],
         "budgetMaxRub": 270000,
         "consent": True,
+        "termsAccepted": True,
     }
 
 

@@ -25,7 +25,7 @@ def signed(**changes):
 def payload():
     return dict(type='trip_request', version=2, destination='Египет', departure='Архангельск',
                 date=(date.today() + timedelta(days=30)).isoformat(), nights=10,
-                adults=2, children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True)
+                adults=2, children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True, termsAccepted=True)
 
 
 def test_signature_identity():
@@ -44,7 +44,7 @@ def test_reject_auth(raw):
         validate_launch_params(raw, SECRET, '123', 999)
 
 
-@pytest.mark.parametrize('change', [dict(consent=False), dict(nights=4.5), dict(childrenAges=[True, 14]),
+@pytest.mark.parametrize('change', [dict(consent=False), dict(termsAccepted=False), dict(nights=4.5), dict(childrenAges=[True, 14]),
     dict(childrenAges=[18, 2]), dict(childrenAges=[2]), dict(adults=True), dict(budgetMaxRub=999),
     dict(date='2000-01-01'), dict(destination='  ')])
 def test_reject_trip(change):
@@ -66,12 +66,24 @@ def test_draft_api_and_static():
     assert saved[0][1]['budget_scope'] == 'total'
     assert saved[0][1]['source'] == 'vk_mini_app'
     assert response.headers['Cache-Control'] == 'no-store'
-    for path in ('', 'app.js', 'styles.css', 'vk-bridge.js', 'privacy.html'):
+    for path in (
+        '', 'app.js', 'styles.css', 'vk-bridge.js', 'legal.js',
+        'privacy.html', 'consent.html', 'terms.html', 'moderation.html',
+    ):
         assert client.get('/vk/miniapp/' + path).status_code == 200
+    legal = client.get('/vk/miniapp/legal.json')
+    assert legal.status_code == 200
+    assert legal.json['operatorName']
+    assert legal.json['projectUrl'] == 'https://r0meo1.ru/apreltour/'
     privacy = client.get('/vk/miniapp/privacy.html').get_data(as_text=True)
     assert 'ЧЕРНОВИК' not in privacy
     assert 'Telegram' not in privacy
     assert 'Политика обработки персональных данных' in privacy
+    assert 'Рекламные сообщения' in privacy
+    assert 'https://r0meo1.ru/apreltour/' in privacy
+    assert 'Согласие на обработку персональных данных' in client.get('/vk/miniapp/consent.html').get_data(as_text=True)
+    assert 'Условия использования VK Mini App' in client.get('/vk/miniapp/terms.html').get_data(as_text=True)
+    assert 'Правила модерации и безопасного использования' in client.get('/vk/miniapp/moderation.html').get_data(as_text=True)
     assert client.get('/vk/miniapp/README.md').status_code == 404
 
 

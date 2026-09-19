@@ -106,6 +106,7 @@ def test_review_command_restores_miniapp_after_process_cache_loss(monkeypatch):
         "childrenAges": [],
         "budgetMaxRub": 270000,
         "consent": True,
+        "termsAccepted": True,
     }
 
     with bot._db_cursor(commit=True) as cur:

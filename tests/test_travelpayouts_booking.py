@@ -38,6 +38,7 @@ def vk_payload():
         "budgetMaxRub": 270000,
         "budgetScope": "total",
         "consent": True,
+        "termsAccepted": True,
         "directOnly": False,
     }
 

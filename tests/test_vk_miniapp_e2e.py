@@ -42,6 +42,7 @@ def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator("#destination").fill(destination)
     page.locator("#departure").fill("Архангельск")
     page.locator("#consent").check()
+    page.locator("#terms-accepted").check()
     page.locator("#submit").click()
     page.locator("#review").wait_for(state="visible")
     page.locator("#save").click()

@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import hmac
+import os
 import time
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
@@ -99,6 +100,9 @@ def _booking_configuration_code(exc):
 
 
 def validate_vk_trip(payload):
+    # Privacy consent and service-terms acceptance are separate user actions.
+    if not isinstance(payload, dict) or payload.get("termsAccepted") is not True:
+        raise MiniAppValidationError("terms acceptance is required")
     # JSON numbers must really be integers; do not silently truncate fractions.
     if isinstance(payload, dict):
         for key in ("version", "nights", "adults", "children", "budgetMaxRub"):
@@ -114,7 +118,7 @@ def validate_vk_trip(payload):
     else:
         normalized_payload = payload
     info = validate_trip_request(normalized_payload)
-    info.update(source="vk_mini_app")
+    info.update(source="vk_mini_app", terms_accepted=True)
     return info
 
 
@@ -133,9 +137,26 @@ def create_blueprint(save_draft, settings):
     def index():
         return send_from_directory(static, "index.html")
 
+    @bp.get("/vk/miniapp/legal.json")
+    def legal_config():
+        return jsonify(
+            operatorName=os.getenv("DATA_OPERATOR_NAME", "ТА «АПРЕЛЬ тур»").strip() or "ТА «АПРЕЛЬ тур»",
+            privacyContact=os.getenv(
+                "DATA_OPERATOR_CONTACT",
+                "Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584",
+            ).strip() or "Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584",
+            projectUrl=os.getenv(
+                "PUBLIC_PROJECT_URL",
+                "https://r0meo1.ru/apreltour/",
+            ).strip() or "https://r0meo1.ru/apreltour/",
+        )
+
     @bp.get("/vk/miniapp/<name>")
     def asset(name):
-        if name not in ("app.js", "styles.css", "vk-bridge.js", "privacy.html"):
+        if name not in (
+            "app.js", "styles.css", "vk-bridge.js", "legal.js",
+            "privacy.html", "consent.html", "terms.html", "moderation.html",
+        ):
             return jsonify(ok=False), 404
         return send_from_directory(static, name)
 
