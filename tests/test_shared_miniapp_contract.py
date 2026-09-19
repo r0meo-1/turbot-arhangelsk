@@ -1,4 +1,4 @@
-from shared.telegram_webapp import MiniAppValidationError, validate_trip_request
+from shared.telegram_webapp import MiniAppValidationError, normalise_source_tag, validate_trip_request
 from shared.vk_miniapp import validate_vk_trip
 
 
@@ -44,3 +44,15 @@ def test_shared_contract_rejects_unknown_budget_scope():
 def test_vk_contract_keeps_legacy_total_default_but_accepts_explicit_scope():
     assert validate_vk_trip(_payload())["budget_scope"] == "total"
     assert validate_vk_trip(_payload(budgetScope="per_person"))["budget_scope"] == "per_person"
+
+
+def test_campaign_source_tag_is_canonical_and_bounded():
+    assert normalise_source_tag("Video_Pain") == "video_pain"
+    assert normalise_source_tag("") == ""
+    for value in ("bad tag", "../escape", "x" * 65):
+        try:
+            normalise_source_tag(value)
+        except MiniAppValidationError:
+            pass
+        else:
+            raise AssertionError(f"unsafe source tag must be rejected: {value!r}")
