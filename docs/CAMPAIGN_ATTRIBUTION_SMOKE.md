@@ -24,13 +24,27 @@ A named Direct Mini App instead uses:
 
 Do not invent a short name. Verify the BotFather configuration first.
 
+## Canonical VK links
+
+Use the same campaign tags when traffic is sent to VK:
+
+- Landing: `https://vk.me/club240310110?ref=landing`
+- Pain creative: `https://vk.me/club240310110?ref=video_pain`
+- Dream creative: `https://vk.me/club240310110?ref=video_dream`
+- Thailand vs Vietnam: `https://vk.me/club240310110?ref=video_vs`
+
+VK campaign attribution is read from `message_new.object.message.ref`. It is stored
+as `source_tag`, separately from the signed Mini App launch fields `vk_ref` and
+`vk_platform`.
+
 ## Attribution rules
 
 - Source tags are restricted to ASCII letters, digits, underscore, and hyphen, 1-64 characters.
 - Tags are canonicalized to lower case.
 - Attribution is **first-touch for an active lead**. A later deep link or direct Mini App launch must not replace an already valid source tag.
 - After a lead is completed and its active session is deleted, a later new lead may acquire a new source.
-- Mini App attribution is accepted only from Telegram-signed `initData.start_param`, not arbitrary browser JSON.
+- Telegram Mini App attribution is accepted only from Telegram-signed `initData.start_param`, not arbitrary browser JSON.
+- VK Mini App launch context keeps its signed `vk_ref`/`vk_platform`; the campaign `source_tag` survives the handoff from the chat referral into the Mini App draft.
 - Completed leads persist `source_tag`; manager notifications and admin export expose it for QA.
 
 ## Telegram production smoke
@@ -47,6 +61,15 @@ Do not invent a short name. Verify the BotFather configuration first.
 
 Record screenshots or message IDs in #113. Do not mark attribution production-ready from unit tests alone.
 
-## Remaining acceptance item
+## VK production smoke
 
-VK campaign attribution must be verified separately for campaign paths that send traffic to VK. Do not infer Telegram attribution support means VK parity.
+1. Open a fresh VK conversation with one canonical `?ref=<tag>` link.
+2. Send the first message or press the start button and enter the trip flow.
+3. Confirm the active session has the expected first-touch source in admin diagnostics/export.
+4. Open the VK Mini App, save a trip draft, return to chat, review it, and complete the lead.
+5. Confirm the completed lead and manager notification contain the same campaign source.
+6. During an active lead, reopen VK through a different `?ref=<other_tag>` link. Confirm the original source is retained.
+7. After the first lead is complete, start a genuinely new lead from another campaign and confirm the new source can be acquired.
+8. Keep `vk_ref` and `vk_platform` visible separately when debugging Mini App launch context; they are not campaign tags.
+
+Record the live VK evidence in #113. Automated tests prove the data path, not that VK delivered a real referral event in production.
