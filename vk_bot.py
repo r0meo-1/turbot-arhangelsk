@@ -154,6 +154,10 @@ elif ADMIN_ID:
 else:
     LEAD_NOTIFY_IDS = []
 
+LEAD_OWNER_NAME = os.getenv("LEAD_OWNER_NAME", "Наталья Ильина").strip() or "Наталья Ильина"
+LEAD_OWNER_PHONE = os.getenv("LEAD_OWNER_PHONE", "+79021932923").strip() or "+79021932923"
+LEAD_OWNER_VK_ID = _env_int("LEAD_OWNER_VK_ID", 112655584)
+
 # MDT CRM (same env vars as Telegram bot)
 MDT_ENABLED    = os.getenv("MDT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
 MDT_ACCOUNT    = os.getenv("MDT_ACCOUNT", "")
@@ -1246,7 +1250,7 @@ def send_message(
     if not VK_ACCESS_TOKEN:
         logger.error("VK_ACCESS_TOKEN not set — cannot send message")
         return None
-    if keyboard is None and user_id != ADMIN_ID:
+    if keyboard is None and user_id not in (ADMIN_ID, LEAD_OWNER_VK_ID):
         # Админу кнопки клиента ни к чему: он получает уведомления и ответы на
         # команды, а не проходит воронку.
         keyboard = _keyboard_for_state(user_id)
@@ -3239,7 +3243,8 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
     selected = _selected_tour_summary(info)
     send_message(
         user_id,
-        "✅ Заявка принята! Менеджер «АПРЕЛЬ тур» свяжется с вами.\n\n"
+        "✅ Заявка принята! Наталья Ильина, менеджер «АПРЕЛЬ тур», свяжется с вами.\n"
+        f"☎️ Контакт: {LEAD_OWNER_PHONE}\n\n"
         f"📍 Направление: {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
         + f"📅 Даты: {info.get('dates', '?')}\n"
@@ -3302,11 +3307,31 @@ def _notify_admin_telegram(
 
 
 def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
-    """Notify admin: Telegram (creator) + optional VK peer if ADMIN_ID is a VK user."""
+    """Deliver every VK lead to Natalya's private messages plus optional ops copy."""
     _notify_admin_telegram(user_id, info, phone, client_name)
-    if ADMIN_ID:
-        selected = _selected_tour_summary(info)
-        # Legacy: also ping ADMIN_ID inside VK (if it is a VK user id).
+    selected = _selected_tour_summary(info)
+    owner_message = (
+        "🔔 Новая заявка (VK)!\n"
+        f"👩‍💼 Владелец: {LEAD_OWNER_NAME}\n\n"
+        f"От: {client_name or 'без имени'} (ID: {user_id})\n"
+        f"💬 Диалог: https://vk.com/gim{VK_GROUP_ID}?sel={user_id}\n"
+        f"👤 Профиль: https://vk.com/id{user_id}\n\n"
+        f"📍 {info.get('destination', '?')}\n"
+        + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+        + f"📅 {info.get('dates', '?')}\n"
+        + (f"🌙 {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
+        + (f"🏨 {info['hotel_query']}\n" if info.get("hotel_query") else "")
+        + f"👥 {_party_text(info)}\n"
+        + f"💰 {_budget_summary(info)}\n"
+        + f"📞 Связь клиента: {phone}"
+        + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else "")
+    )
+    owner_result = send_message(LEAD_OWNER_VK_ID, owner_message) if LEAD_OWNER_VK_ID else None
+    if owner_result is None:
+        logger.error("VK lead from %s was not delivered to Natalya PM", user_id)
+
+    if ADMIN_ID and ADMIN_ID != LEAD_OWNER_VK_ID:
+        # Optional operational copy for the legacy admin account.
         send_message(
             ADMIN_ID,
             "🔔 Новая заявка (VK)!\n\n"
@@ -3321,11 +3346,8 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             f"📞 Связь: {phone}"
             + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else ""),
         )
-    elif not LEAD_NOTIFY_IDS:
-        logger.warning(
-            "VK lead from %s not delivered: set ADMIN_ID or LEAD_NOTIFY_IDS (+ BOT_TOKEN for TG)",
-            user_id,
-        )
+    elif not LEAD_NOTIFY_IDS and owner_result is None:
+        logger.warning("VK lead from %s has no working manager delivery channel", user_id)
 
 
 # When true, MDT + AI run inline (tests). Production defers them off the webhook.
