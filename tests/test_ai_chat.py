@@ -170,3 +170,24 @@ def test_noncommercial_travel_advice_still_passes():
     assert reply.reason == ""
     assert reply.text.startswith("ИИ-помощник: ")
     assert "лёгкую одежду" in reply.text
+
+
+def test_verified_lead_context_is_included_but_redacted():
+    captured = {}
+    reply = generate_ai_chat_reply(
+        "Что лучше взять с собой?",
+        enabled=True,
+        groq_client=_FakeGroq(captured),
+        verified_context=(
+            "Направление: Таиланд\n"
+            "Город вылета: Москва\n"
+            "Бюджет: 270000 ₽ на всю поездку\n"
+            "Контакт: test@example.com"
+        ),
+    )
+    assert reply.used_external_model is True
+    prompt = captured["messages"][1]["content"]
+    assert "Направление: Таиланд" in prompt
+    assert "270000 ₽" in prompt
+    assert "test@example.com" not in prompt
+    assert "[email-redacted]" in prompt
