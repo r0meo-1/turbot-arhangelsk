@@ -425,3 +425,128 @@ def test_agent_extension_csv_export_is_authorized_and_contains_lead(client, monk
     assert "Роман" in text
     assert "+79161234567" in text
     assert "Турция" in text
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "https://operator.example/tour/1?hotel=abc&access_token=SECRET&SESSION=s1#frag",
+            "https://operator.example/tour/1?hotel=abc",
+        ),
+        (
+            "https://operator.example/tour/1?AccessToken=x&apiKey=y&safe=1",
+            "https://operator.example/tour/1?safe=1",
+        ),
+        ("javascript:alert(1)", ""),
+        ("file:///tmp/tour.html", ""),
+        ("chrome-extension://abcdefghijkl/page.html", ""),
+        ("not a url", ""),
+        ("https://user:pass@operator.example/tour", ""),
+    ],
+)
+def test_agent_candidate_url_sanitizer(raw, expected):
+    assert website_app._sanitize_candidate_url(raw) == expected
+
+
+def test_agent_extension_sanitizes_candidate_before_delivery(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    kicked = []
+    monkeypatch.setattr(
+        website_app,
+        "_kick_delivery",
+        lambda lead_id, payload: kicked.append((lead_id, dict(payload))),
+    )
+    payload = _payload("agent-url-safe-0001")
+    payload["candidates"] = [{
+        "title": "Hotel Secret",
+        "url": (
+            "https://operator.example/tour/1?hotel=abc&"
+            "AccessToken=secret&SESSION=session&apiKey=key#details"
+        ),
+        "selection": "10 ночей · 219 000 ₽",
+    }]
+
+    response = client.post(
+        "/agent-extension/lead",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json=payload,
+    )
+
+    assert response.status_code == 202
+    stored = kicked[0][1]["agent_candidates"][0]
+    assert stored["title"] == "Hotel Secret"
+    assert stored["selection"] == "10 ночей · 219 000 ₽"
+    assert stored["url"] == "https://operator.example/tour/1?hotel=abc"
+
+    message = website_app._owner_notification_text(response.get_json()["leadId"], kicked[0][1])
+    assert "AccessToken" not in message
+    assert "SESSION" not in message
+    assert "apiKey" not in message
+    assert "#details" not in message
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("=1+1", "'=1+1"),
+        ("+cmd", "'+cmd"),
+        ("-10+20", "'-10+20"),
+        ("@SUM(A1:A2)", "'@SUM(A1:A2)"),
+        ("   =1+1", "'   =1+1"),
+        ("\t@SUM(A1:A2)", "'\t@SUM(A1:A2)"),
+        ("\n+cmd", "'\n+cmd"),
+        ("Обычная заметка", "Обычная заметка"),
+        (" Турция", " Турция"),
+    ],
+)
+def test_csv_safe_cell_blocks_formula_injection(raw, expected):
+    assert website_app._csv_safe_cell(raw) == expected
+
+
+def test_agent_extension_csv_export_escapes_formula_cells(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    payload = _payload("agent-csv-formula-0001")
+    payload["name"] = "=1+1"
+    create = client.post(
+        "/agent-extension/lead",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json=payload,
+    )
+    assert create.status_code == 202
+    lead_id = create.get_json()["leadId"]
+
+    update = client.post(
+        "/agent-extension/status",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+        json={
+            "leadId": lead_id,
+            "status": "working",
+            "note": "@SUM(A1:A2)",
+            "followUpOn": "2026-09-21",
+        },
+    )
+    assert update.status_code == 200
+
+    response = client.get(
+        "/agent-extension/export.csv",
+        headers={
+            "Origin": "chrome-extension://abcdefghijklmnop",
+            "Authorization": "Bearer agent-secret",
+        },
+    )
+    assert response.status_code == 200
+    csv_text = response.get_data(as_text=True)
+    assert "'=1+1" in csv_text
+    assert "'@SUM(A1:A2)" in csv_text
