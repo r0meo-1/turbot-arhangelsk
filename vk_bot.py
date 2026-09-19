@@ -695,6 +695,7 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
+        _funnel_metrics.init_schema(cur)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS ops_metric_events (
