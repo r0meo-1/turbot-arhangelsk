@@ -2401,3 +2401,56 @@ def test_p0_miniapp_preferences_survive_session_reload_and_lead_save(client, mon
     assert lead["budget"] == 600000
     assert lead["budget_scope"] == "total"
     assert lead["direct_only"] == 1
+
+
+def test_start_payload_first_touch_survives_restart(client):
+    chat_id = 61234
+
+    response = _post(client, chat_id, "/start Video_Pain")
+    assert response.status_code == 200
+    assert bot.user_data[chat_id]["source_tag"] == "video_pain"
+
+    response = _post(client, chat_id, "/start video_dream")
+    assert response.status_code == 200
+    assert bot.user_data[chat_id]["source_tag"] == "video_pain"
+
+
+def test_source_tag_persists_in_session_lead_and_manager_handoff():
+    chat_id = 61235
+    info = {
+        "state": bot.STATE_REVIEW,
+        "source_tag": "video_vs",
+        "destination": "Вьетнам",
+        "origin": "Москва",
+        "dates": "2099-02-10",
+        "nights": 10,
+        "people": "2",
+        "kids": 0,
+        "infants": 0,
+        "budget": 270000,
+        "budget_scope": "total",
+        "direct_only": True,
+    }
+
+    bot.set_session(chat_id, info)
+    assert bot.get_session(chat_id)["source_tag"] == "video_vs"
+
+    lead_id = bot.save_lead(
+        chat_id,
+        info,
+        "+79161234567",
+        first_name="Roma",
+        username="tester",
+    )
+    with bot._db_cursor() as cur:
+        cur.execute("SELECT source_tag FROM leads WHERE id = ?", (lead_id,))
+        assert cur.fetchone()[0] == "video_vs"
+
+    text = bot._format_lead_notify_text(
+        chat_id,
+        info,
+        "+79161234567",
+        "Roma",
+        username="tester",
+    )
+    assert "video_vs" in text
