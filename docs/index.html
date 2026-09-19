@@ -3,38 +3,252 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="theme-color" content="#fff8ea" />
-  <meta name="description" content="TurBot от турагентства «АПРЕЛЬ тур» — быстрый подбор путешествия через VK и Telegram. Ответьте на несколько вопросов, получите структурированную заявку и варианты от менеджера." />
-  <title>TurBot — AI-подбор туров | АПРЕЛЬ тур</title>
-  <style>
-    :root{--ink:#17324d;--muted:#6d7f8f;--paper:#fffaf0;--card:#ffffff;--sun:#ffd34e;--orange:#ff9c42;--sea:#28b8b2;--blue:#2f80ed;--line:#e7e1d6;--shadow:0 22px 60px rgba(49,67,83,.13)}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:linear-gradient(180deg,#fffaf0 0,#fff 48%,#f4fbff 100%);line-height:1.6}a{color:inherit;text-decoration:none}.wrap{width:min(1140px,calc(100% - 32px));margin:auto}.nav{position:sticky;top:0;z-index:20;background:rgba(255,250,240,.84);backdrop-filter:blur(16px);border-bottom:1px solid rgba(23,50,77,.07)}.navin{height:70px;display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{display:flex;align-items:center;gap:11px;font-weight:900}.sunlogo{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 38% 35%,#fff9b0 0 11%,var(--sun) 12% 62%,var(--orange) 63%);box-shadow:0 8px 22px rgba(255,156,66,.25)}.brand small{display:block;font-size:10px;letter-spacing:.13em;color:var(--muted);font-weight:800;text-transform:uppercase}.links{display:flex;gap:24px;color:#5f7080;font-size:14px;font-weight:700}.btn{display:inline-flex;align-items:center;justify-content:center;gap:9px;padding:13px 18px;border-radius:15px;font-weight:850;border:1px solid var(--line);background:#fff;box-shadow:0 8px 18px rgba(49,67,83,.05)}.btn.primary{border:0;background:linear-gradient(135deg,var(--sun),var(--orange));color:#4d3300;box-shadow:0 14px 30px rgba(255,156,66,.28)}.btn.dark{background:var(--ink);color:#fff;border-color:var(--ink)}.hero{padding:82px 0 46px;overflow:hidden}.heroGrid{display:grid;grid-template-columns:1.08fr .92fr;gap:52px;align-items:center}.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;background:#fff;border:1px solid var(--line);font-size:13px;font-weight:850;color:#597081}.eyebrow i{width:9px;height:9px;border-radius:50%;background:var(--sea);box-shadow:0 0 0 5px rgba(40,184,178,.12)}h1{font-size:clamp(45px,7vw,78px);line-height:.99;letter-spacing:-.055em;margin:20px 0}.accent{background:linear-gradient(90deg,#ff8f3d,#f7c832 48%,#23b4af);-webkit-background-clip:text;background-clip:text;color:transparent}.lead{font-size:20px;color:var(--muted);max-width:690px;margin:0}.cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:30px}.proof{display:flex;gap:18px;flex-wrap:wrap;margin-top:24px;color:#647788;font-size:13px;font-weight:700}.visual{position:relative;min-height:520px}.orb{position:absolute;border-radius:50%;filter:blur(0)}.orb.one{width:350px;height:350px;background:#dff7f6;right:-40px;top:30px}.orb.two{width:210px;height:210px;background:#fff0c2;left:0;bottom:5px}.phone{position:absolute;width:min(370px,90%);right:18px;top:0;background:#132d48;border:9px solid #132d48;border-radius:38px;box-shadow:0 32px 70px rgba(23,50,77,.28);overflow:hidden}.phoneTop{height:26px;background:#132d48;display:grid;place-items:center}.notch{width:96px;height:8px;border-radius:10px;background:#071927}.chatScreen{background:linear-gradient(180deg,#f8fdff,#edf8fb);padding:18px 14px 22px;min-height:440px}.chatHead{display:flex;align-items:center;gap:10px;background:#fff;border-radius:17px;padding:10px 12px;margin-bottom:14px;box-shadow:0 7px 20px rgba(23,50,77,.08)}.avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,var(--sun),var(--orange));font-weight:900}.chatHead span{display:block;color:#76909f;font-size:11px}.chat{display:grid;gap:9px}.bubble{max-width:88%;padding:10px 12px;border-radius:15px;border:1px solid #e5edf0;background:#fff;font-size:13px;box-shadow:0 5px 12px rgba(23,50,77,.05)}.bubble.me{margin-left:auto;background:#d7f6f2;border-color:#c5ece7}.tripCard{position:absolute;left:6px;bottom:20px;width:240px;padding:18px;background:#fff;border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);transform:rotate(-3deg)}.tripCard strong{font-size:18px}.tripCard small{display:block;color:var(--muted);margin-top:3px}.price{margin-top:10px;color:#0e766f;font-weight:900}.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:10px 0 78px}.stat{background:#fff;border:1px solid var(--line);border-radius:20px;padding:18px}.stat b{font-size:26px;display:block}.stat span{color:var(--muted);font-size:13px}.section{padding:26px 0 78px}.section h2{font-size:clamp(32px,5vw,50px);letter-spacing:-.04em;line-height:1.05;margin:0 0 12px}.intro{color:var(--muted);font-size:18px;max-width:720px;margin:0 0 30px}.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.step,.feature,.destination,.panel{background:#fff;border:1px solid var(--line);border-radius:24px;box-shadow:0 10px 30px rgba(49,67,83,.06)}.step{padding:23px}.num{width:36px;height:36px;border-radius:12px;background:#fff1bf;display:grid;place-items:center;font-weight:900;margin-bottom:15px}.step h3,.feature h3{margin:0 0 7px}.step p,.feature p{margin:0;color:var(--muted);font-size:14px}.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.feature{padding:23px}.icon{font-size:27px;margin-bottom:10px}.destinations{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.destination{min-height:220px;padding:22px;display:flex;flex-direction:column;justify-content:flex-end;position:relative;overflow:hidden}.destination:before{content:"";position:absolute;inset:0;opacity:.95}.destination>*{position:relative}.destination.thai:before{background:linear-gradient(160deg,#d8fbff 0 45%,#95e4da 46% 63%,#f8dc8b 64%)}.destination.viet:before{background:linear-gradient(160deg,#fff1bf 0 35%,#9be4cd 36% 63%,#41b3d1 64%)}.destination.sri:before{background:linear-gradient(160deg,#d5f6d5 0 45%,#8bd3b2 46% 63%,#f3cf79 64%)}.destination h3{font-size:25px;margin:0}.destination span{font-size:13px;font-weight:800}.split{display:grid;grid-template-columns:1fr 1fr;gap:18px}.panel{padding:28px}.check{display:grid;gap:12px;margin-top:18px}.check div{display:flex;gap:10px;align-items:flex-start}.tick{width:23px;height:23px;flex:0 0 23px;border-radius:50%;display:grid;place-items:center;background:#d9f6f2;color:#0e766f;font-weight:900;font-size:13px}.ctaPanel{padding:34px;background:linear-gradient(135deg,#17324d,#205978);color:#fff;border-radius:30px;display:grid;grid-template-columns:1.2fr .8fr;gap:24px;align-items:center;box-shadow:0 26px 70px rgba(23,50,77,.22)}.ctaPanel h2{margin:0 0 10px;color:#fff}.ctaPanel p{margin:0;color:#d6e5ef}.ctaPanel .cta{justify-content:flex-end;margin:0}.footer{padding:42px 0 50px;margin-top:70px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}.foot{display:flex;justify-content:space-between;gap:24px;align-items:center;flex-wrap:wrap}.footlinks{display:flex;gap:18px;flex-wrap:wrap}.footlinks a{text-decoration:underline;text-underline-offset:3px}
-    @media(max-width:900px){.heroGrid,.split,.ctaPanel{grid-template-columns:1fr}.visual{order:-1;min-height:500px}.phone{left:50%;right:auto;transform:translateX(-45%)}.tripCard{left:8%}.steps{grid-template-columns:1fr 1fr}.features,.destinations{grid-template-columns:1fr 1fr}.stats{grid-template-columns:1fr 1fr}.links{display:none}.ctaPanel .cta{justify-content:flex-start}}
-    @media(max-width:620px){.hero{padding-top:46px}.wrap{width:min(100% - 22px,1140px)}.visual{min-height:460px}.phone{width:88%;transform:translateX(-50%)}.tripCard{width:210px;left:0}.steps,.features,.destinations{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}.nav .btn{padding:10px 12px;font-size:13px}.brand small{display:none}.lead{font-size:18px}.cta>.btn{width:100%}.ctaPanel{padding:25px}.ctaPanel .cta{width:100%}}
-  </style>
+  <meta name="theme-color" content="#081b33" />
+  <meta name="description" content="TurBot помогает быстро собрать пожелания к поездке и передать заявку менеджеру АПРЕЛЬ тур. Telegram, VK, зимние пляжные направления и подбор под бюджет." />
+  <title>TurBot × АПРЕЛЬ тур — подбор путешествий без десятков вкладок</title>
+  <link rel="stylesheet" href="turbot/styles.css" />
 </head>
 <body>
-  <nav class="nav"><div class="wrap navin"><a class="brand" href="#top"><span class="sunlogo">☀</span><span>АПРЕЛЬ тур<small>TurBot AI</small></span></a><div class="links"><a href="#how">Как это работает</a><a href="#why">Почему удобно</a><a href="#where">Куда поехать</a></div><a class="btn primary" href="https://vk.ru/club240310110" target="_blank" rel="noreferrer">Подобрать тур</a></div></nav>
+  <header class="nav wrap" id="top">
+    <a class="brand" href="#top" aria-label="TurBot — на главную">
+      <span class="bot-logo" aria-hidden="true">✦</span>
+      <span><strong>TurBot</strong><small>АПРЕЛЬ тур · travel tech</small></span>
+    </a>
+    <nav aria-label="Основная навигация">
+      <a href="#destinations">Направления</a>
+      <a href="#how">Как работает</a>
+      <a href="#manager">Менеджер</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-small btn-primary" href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Подобрать тур</a>
+  </header>
 
-  <main id="top">
-    <section class="hero"><div class="wrap heroGrid">
-      <div><span class="eyebrow"><i></i> AI-помощник турагентства «АПРЕЛЬ тур»</span><h1>Ваш отпуск начинается <span class="accent">с пары сообщений</span></h1><p class="lead">TurBot спросит, куда и когда вы хотите поехать, уточнит бюджет и состав путешественников, а затем передаст менеджеру уже готовую заявку. Меньше переписки, быстрее до подходящих вариантов.</p><div class="cta"><a class="btn primary" href="https://vk.ru/club240310110" target="_blank" rel="noreferrer">🌴 Подобрать тур в VK</a><a class="btn" href="#how">Как это работает ↓</a></div><div class="proof"><span>✓ Без длинных анкет</span><span>✓ Подбор под бюджет</span><span>✓ Менеджер подключается с готовой заявкой</span></div></div>
-      <div class="visual"><div class="orb one"></div><div class="orb two"></div><div class="phone"><div class="phoneTop"><span class="notch"></span></div><div class="chatScreen"><div class="chatHead"><div class="avatar">T</div><div><strong>TurBot</strong><span>онлайн · помощник АПРЕЛЬ тур</span></div></div><div class="chat"><div class="bubble">Куда хотите поехать? 🌍</div><div class="bubble me">Таиланд или Вьетнам</div><div class="bubble">Когда планируете отпуск?</div><div class="bubble me">Февраль, примерно на 10 дней</div><div class="bubble">Какой бюджет на поездку?</div><div class="bubble me">До 270 000 ₽ на двоих</div><div class="bubble">Отлично. Я собрал заявку — менеджер сможет сразу подобрать подходящие варианты ✈️</div></div></div></div><div class="tripCard"><strong>Заявка готова ✨</strong><small>2 взрослых · 10 дней · февраль</small><div class="price">Бюджет до 270 000 ₽</div></div></div>
-    </div></section>
+  <main>
+    <section class="hero">
+      <div class="hero-orb hero-orb-one"></div>
+      <div class="hero-orb hero-orb-two"></div>
+      <div class="wrap hero-grid">
+        <div class="hero-copy">
+          <div class="eyebrow">AI-помощник + живой менеджер</div>
+          <h1>Тур без <span>47 вкладок</span> и переписки на полдня.</h1>
+          <p class="lead">TurBot собирает параметры поездки в Telegram или VK, а менеджер АПРЕЛЬ тур проверяет варианты, цены и доступность перед оформлением.</p>
+          <div class="hero-actions">
+            <a class="btn btn-primary btn-large" href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Открыть TurBot в Telegram <span aria-hidden="true">→</span></a>
+            <a class="btn btn-ghost btn-large" href="https://vk.me/club240310110?ref=landing" data-vk-turbot-link target="_blank" rel="noopener noreferrer">Написать в VK</a>
+          </div>
+          <div class="microcopy">Цены и наличие меняются. Окончательные условия подтверждает менеджер перед бронированием.</div>
+          <div class="trust">
+            <div><strong>1 анкета</strong><span>вместо длинной переписки</span></div>
+            <div><strong>2 канала</strong><span>Telegram и VK</span></div>
+            <div><strong>Человек</strong><span>проверяет финальный вариант</span></div>
+          </div>
+        </div>
 
-    <div class="wrap stats"><div class="stat"><b>3–5 мин</b><span>чтобы заполнить пожелания</span></div><div class="stat"><b>24/7</b><span>TurBot принимает заявки</span></div><div class="stat"><b>1 заявка</b><span>вместо десятков сообщений</span></div><div class="stat"><b>Человек</b><span>менеджер помогает с финальным выбором</span></div></div>
+        <div class="product-card" aria-label="Пример подбора тура">
+          <div class="product-top">
+            <span class="live-dot"></span>
+            <span>TurBot online</span>
+            <span class="product-badge">Зима 2027</span>
+          </div>
+          <div class="product-title">Соберём запрос за пару минут</div>
+          <div class="finder-grid">
+            <div class="finder-item"><small>Куда</small><strong>Вьетнам</strong></div>
+            <div class="finder-item"><small>Когда</small><strong>Январь–февраль</strong></div>
+            <div class="finder-item"><small>Бюджет</small><strong>до 270 000 ₽</strong></div>
+            <div class="finder-item"><small>Перелёт</small><strong>прямой / через Китай</strong></div>
+          </div>
+          <div class="route-line">
+            <span class="route-dot">MOW</span>
+            <span class="route-track"><i></i></span>
+            <span class="route-dot">SEA</span>
+          </div>
+          <div class="product-note">
+            <span aria-hidden="true">✓</span>
+            <div><strong>Заявка готова</strong><small>Менеджер получит структурированные пожелания</small></div>
+          </div>
+          <a class="product-cta" href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Продолжить в боте →</a>
+        </div>
+      </div>
+    </section>
 
-    <section class="section" id="how"><div class="wrap"><h2>Как работает TurBot</h2><p class="intro">Никакой магии с дымом и зеркалами. Просто короткий маршрут от «хочу в отпуск» до понятной заявки.</p><div class="steps"><article class="step"><div class="num">1</div><h3>Напишите TurBot</h3><p>Откройте диалог в VK. Помощник сразу начнёт с главных вопросов.</p></article><article class="step"><div class="num">2</div><h3>Расскажите о поездке</h3><p>Направление, даты, бюджет, количество путешественников и важные пожелания.</p></article><article class="step"><div class="num">3</div><h3>Проверьте заявку</h3><p>Перед отправкой TurBot покажет итог, чтобы можно было исправить детали.</p></article><article class="step"><div class="num">4</div><h3>Получите варианты</h3><p>Менеджер уже видит структурированные пожелания и быстрее переходит к подбору.</p></article></div></div></section>
+    <section class="signal-strip" aria-label="Ключевые возможности">
+      <div class="wrap signal-grid">
+        <div><span>01</span><strong>Подбор под бюджет</strong></div>
+        <div><span>02</span><strong>Прямые рейсы отдельно</strong></div>
+        <div><span>03</span><strong>Можно рассмотреть Китай</strong></div>
+        <div><span>04</span><strong>Финальная проверка менеджером</strong></div>
+      </div>
+    </section>
 
-    <section class="section" id="why"><div class="wrap"><h2>Удобно и туристу, и менеджеру</h2><p class="intro">Человек не повторяет одно и то же пять раз, менеджер не разгадывает бюджет по обрывкам переписки. Неожиданно, но структура действительно помогает.</p><div class="features"><article class="feature"><div class="icon">🎯</div><h3>Подбор по вашим условиям</h3><p>TurBot собирает бюджет, даты, состав и пожелания, чтобы отсечь заведомо неподходящие варианты.</p></article><article class="feature"><div class="icon">💬</div><h3>Привычный мессенджер</h3><p>Не нужно регистрироваться в отдельном сервисе или разбираться со сложной формой.</p></article><article class="feature"><div class="icon">🧑‍💼</div><h3>Живой менеджер на финале</h3><p>AI помогает собрать данные, а решение по туру, нюансам и бронированию остаётся с человеком.</p></article><article class="feature"><div class="icon">✏️</div><h3>Можно исправить</h3><p>Перед отправкой заявки вы проверяете детали и при необходимости возвращаетесь к нужному пункту.</p></article><article class="feature"><div class="icon">🔒</div><h3>Аккуратно с данными</h3><p>Контактные данные запрашиваются только когда они действительно нужны для заявки.</p></article><article class="feature"><div class="icon">⚡</div><h3>Быстрее к конкретике</h3><p>Менеджер получает не «хочу куда-нибудь к морю», а нормальный набор параметров для поиска.</p></article></div></div></section>
+    <section id="destinations" class="section wrap">
+      <div class="section-head section-head-split">
+        <div>
+          <span class="eyebrow">Популярные зимние направления</span>
+          <h2>Пляж зимой, а не борьба с серым небом.</h2>
+        </div>
+        <p>Начальные сценарии TurBot ориентированы на тёплый отдых из Москвы. Направление можно сменить в анкете, человечество всё-таки изобрело выбор.</p>
+      </div>
+      <div class="destination-grid">
+        <article class="destination destination-vietnam">
+          <div class="destination-icon">VN</div>
+          <div class="destination-meta">Январь–февраль</div>
+          <h3>Вьетнам</h3>
+          <p>Пляжный отдых, прогулки, сравнение прямых вариантов и маршрутов через Китай.</p>
+          <a href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Подобрать →</a>
+        </article>
+        <article class="destination destination-thailand">
+          <div class="destination-icon">TH</div>
+          <div class="destination-meta">Зимний сезон</div>
+          <h3>Таиланд</h3>
+          <p>Классика зимнего моря: курорты, отели и перелёты под заданный бюджет.</p>
+          <a href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Подобрать →</a>
+        </article>
+        <article class="destination destination-srilanka">
+          <div class="destination-icon">LK</div>
+          <div class="destination-meta">Альтернатива Азии</div>
+          <h3>Шри-Ланка</h3>
+          <p>Океан, прогулки и спокойный формат отдыха без обязательной экскурсионной гонки.</p>
+          <a href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Подобрать →</a>
+        </article>
+        <article class="destination destination-tanzania">
+          <div class="destination-icon">TZ</div>
+          <div class="destination-meta">Тёплое направление</div>
+          <h3>Танзания</h3>
+          <p>Сравниваем доступные пакетные варианты и логистику на нужные даты.</p>
+          <a href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Подобрать →</a>
+        </article>
+      </div>
+    </section>
 
-    <section class="section" id="where"><div class="wrap"><h2>Популярные направления</h2><p class="intro">Можно начать с любимой страны или просто указать бюджет и даты. TurBot не обидится на неопределённость, в отличие от некоторых поисковых форм.</p><div class="destinations"><article class="destination thai"><span>Пляжи · острова · зима в тепле</span><h3>Таиланд 🇹🇭</h3></article><article class="destination viet"><span>Море · еда · курорты</span><h3>Вьетнам 🇻🇳</h3></article><article class="destination sri"><span>Океан · природа · серф</span><h3>Шри-Ланка 🇱🇰</h3></article></div></div></section>
+    <section class="section section-dark" id="how">
+      <div class="wrap">
+        <div class="section-head centered">
+          <span class="eyebrow eyebrow-dark">Как это работает</span>
+          <h2>Бот собирает. Менеджер проверяет. Вы выбираете.</h2>
+        </div>
+        <div class="steps">
+          <article class="step">
+            <span class="step-num">01</span>
+            <div class="step-icon">◎</div>
+            <h3>Откройте TurBot</h3>
+            <p>Запустите <a href="https://t.me/apreltour_bot?start=landing" data-turbot-link>@apreltour_bot</a> или диалог VK.</p>
+          </article>
+          <article class="step">
+            <span class="step-num">02</span>
+            <div class="step-icon">◇</div>
+            <h3>Задайте параметры</h3>
+            <p>Страна, даты, длительность, состав туристов, бюджет, отель и тип перелёта.</p>
+          </article>
+          <article class="step">
+            <span class="step-num">03</span>
+            <div class="step-icon">↗</div>
+            <h3>Передайте менеджеру</h3>
+            <p>После подтверждения заявка уходит менеджеру для поиска и проверки реальных вариантов.</p>
+          </article>
+        </div>
+      </div>
+    </section>
 
-    <section class="section"><div class="wrap split"><div class="panel"><h2>Что подготовить</h2><p class="intro" style="font-size:16px;margin-bottom:0">Для старта достаточно приблизительных ответов. Точный номер рейса в 23:47 от вас никто не потребует.</p><div class="check"><div><span class="tick">✓</span><span>Откуда хотите вылететь</span></div><div><span class="tick">✓</span><span>Примерные даты и длительность</span></div><div><span class="tick">✓</span><span>Сколько взрослых и детей</span></div><div><span class="tick">✓</span><span>Комфортный общий бюджет</span></div><div><span class="tick">✓</span><span>Что важно: пляж, питание, отель, прямой перелёт и т.д.</span></div></div></div><div class="panel"><h2>Что будет дальше</h2><p class="intro" style="font-size:16px;margin-bottom:0">После подтверждения заявки менеджер «АПРЕЛЬ тур» получает её в структурированном виде и может перейти к конкретным предложениям.</p><div class="check"><div><span class="tick">1</span><span>Проверка доступных вариантов</span></div><div><span class="tick">2</span><span>Сравнение цены, перелёта и условий</span></div><div><span class="tick">3</span><span>Обсуждение лучших вариантов с вами</span></div><div><span class="tick">4</span><span>Бронирование выбранного тура</span></div></div></div></div></section>
+    <section class="section wrap">
+      <div class="compare-card">
+        <div class="compare-copy">
+          <span class="eyebrow">Что можно указать</span>
+          <h2>Нормальный бриф, а не «хочу куда-нибудь тепло».</h2>
+          <p>Чем точнее параметры, тем меньше лишних предложений и повторных вопросов.</p>
+        </div>
+        <div class="chips" aria-label="Параметры заявки">
+          <span>Страна</span><span>Даты</span><span>10 дней</span><span>Бюджет</span>
+          <span>2 взрослых</span><span>Город вылета</span><span>Прямой рейс</span>
+          <span>Через Китай</span><span>Отель</span><span>Пляж</span><span>Прогулки</span>
+        </div>
+      </div>
+    </section>
 
-    <section class="section"><div class="wrap"><div class="ctaPanel"><div><h2>Готовы выбраться в отпуск?</h2><p>Откройте TurBot, ответьте на несколько вопросов и отправьте готовую заявку менеджеру.</p></div><div class="cta"><a class="btn primary" href="https://vk.ru/club240310110" target="_blank" rel="noreferrer">Начать подбор в VK →</a></div></div></div></section>
+    <section class="section manager-section" id="manager">
+      <div class="wrap manager-grid">
+        <div>
+          <span class="eyebrow">Живой человек на финальном этапе</span>
+          <h2>Наталья Ильина</h2>
+          <p class="manager-role">Подбор туров · АПРЕЛЬ тур · Северодвинск</p>
+          <p class="manager-text">Если не хочется проходить бота, можно сразу перейти к менеджеру. Она получает запрос и помогает с подбором и оформлением.</p>
+          <div class="manager-actions">
+            <a class="btn btn-primary" href="https://vk.ru/id112655584" target="_blank" rel="noopener noreferrer">Открыть профиль VK</a>
+            <a class="btn btn-ghost" href="tel:+79021932923">+7 902 193-29-23</a>
+          </div>
+        </div>
+        <div class="manager-card">
+          <div class="manager-avatar" aria-hidden="true">НИ</div>
+          <div class="manager-status"><span></span> Контакт менеджера</div>
+          <ul>
+            <li><b>Канал:</b> VK / телефон</li>
+            <li><b>Задача:</b> проверка вариантов и условий</li>
+            <li><b>Важно:</b> цена фиксируется только на этапе подтверждения</li>
+          </ul>
+          <a href="https://vk.ru/id112655584" target="_blank" rel="noopener noreferrer">Наталья Ильина во ВКонтакте →</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section wrap" id="faq">
+      <div class="section-head centered narrow">
+        <span class="eyebrow">FAQ</span>
+        <h2>До того как чат превратится в справочную службу.</h2>
+      </div>
+      <div class="faq-list">
+        <details>
+          <summary>TurBot сам бронирует тур?</summary>
+          <p>Нет. TurBot собирает запрос и помогает передать его менеджеру. Подбор, актуальная цена, наличие и оформление подтверждаются человеком и поставщиками.</p>
+        </details>
+        <details>
+          <summary>Можно искать только Вьетнам и Таиланд?</summary>
+          <p>Нет. Эти направления выделены как популярные зимние сценарии. В заявке можно обсудить и другие страны.</p>
+        </details>
+        <details>
+          <summary>Можно искать только прямой перелёт?</summary>
+          <p>Да. Если это принципиально, укажите прямой перелёт. При желании можно отдельно рассмотреть варианты через Китай.</p>
+        </details>
+        <details>
+          <summary>Цена на сайте окончательная?</summary>
+          <p>Нет. На сайте нет обещаний фиксированной цены. Стоимость и наличие зависят от даты проверки и подтверждаются менеджером перед оформлением.</p>
+        </details>
+        <details>
+          <summary>Куда попадает заявка?</summary>
+          <p>После подтверждения она передаётся в рабочий процесс АПРЕЛЬ тур и менеджеру для обработки. Подробности обработки данных описаны в политике конфиденциальности.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="cta">
+      <div class="wrap cta-inner">
+        <div>
+          <span class="eyebrow eyebrow-dark">Готовы начать</span>
+          <h2>Сначала пожелания. Потом варианты. Никакой магии, просто нормальный процесс.</h2>
+        </div>
+        <div class="cta-actions">
+          <a class="btn btn-white btn-large" href="https://t.me/apreltour_bot?start=landing" data-turbot-link>Telegram @apreltour_bot</a>
+          <a class="btn btn-vk btn-large" href="https://vk.me/club240310110?ref=landing" data-vk-turbot-link target="_blank" rel="noopener noreferrer">Открыть VK</a>
+        </div>
+      </div>
+    </section>
   </main>
 
-  <footer class="footer"><div class="wrap foot"><div><strong>АПРЕЛЬ тур · TurBot</strong><br>AI-помощник для первичного подбора путешествия</div><div class="footlinks"><a href="https://bot.r0meo1.ru/privacy" target="_blank" rel="noreferrer">Политика ПДн</a><a href="https://github.com/r0meo-1/turbot-arhangelsk" target="_blank" rel="noreferrer">GitHub</a><a href="https://bot.r0meo1.ru/health" target="_blank" rel="noreferrer">Статус сервиса</a></div></div></footer>
+  <footer class="footer wrap">
+    <div class="footer-main">
+      <a class="brand" href="#top">
+        <span class="bot-logo" aria-hidden="true">✦</span>
+        <span><strong>TurBot</strong><small>АПРЕЛЬ тур</small></span>
+      </a>
+      <p>Сервис помогает сформировать предварительную заявку на подбор поездки. Бронирование и договор оформляются отдельно.</p>
+    </div>
+    <div class="footer-links">
+      <a href="turbot/privacy.html">Политика ПДн</a>
+      <a href="turbot/consent.html">Согласие</a>
+      <a href="turbot/terms.html">Условия</a>
+      <a href="turbot/moderation.html">Правила</a>
+    </div>
+    <div class="footer-bottom">© 2026 TurBot · АПРЕЛЬ тур</div>
+  </footer>
+
+  <script src="turbot/attribution.js"></script>
 </body>
 </html>
