@@ -43,3 +43,15 @@ def test_deploy_probe_skips_known_expired_tourvisor_jwt():
     source = Path("deploy/verify-vk-miniapp.sh").read_text(encoding="utf-8")
     assert "jwt_status" in source
     assert "probe=skipped reason=expired_jwt" in source
+
+
+
+def test_deploy_probe_checks_sletat_without_printing_credentials():
+    source = Path("deploy/verify-vk-miniapp.sh").read_text(encoding="utf-8")
+    assert "inspect_sletat()" in source
+    assert "Sletat config:" in source
+    assert "GetDepartCities" in source
+    assert "GetCountries" in source
+    assert "townFromId" in source
+    assert "inspect_sletat\ninspect_travelata\ninspect_tourvisor" in source
+    assert "Never print credentials, query strings, URLs, or response bodies." in source
