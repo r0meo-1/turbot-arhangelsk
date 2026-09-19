@@ -95,3 +95,49 @@ def test_funnel_cleanup_removes_only_expired_events(tmp_path):
             "SELECT source FROM acquisition_funnel_events ORDER BY id"
         ).fetchall()
     assert rows == [("fresh",)]
+
+
+
+def test_format_report_is_compact_and_channel_aware():
+    data = {
+        "window_seconds": 30 * 86400,
+        "channels": {
+            "telegram": {
+                "video_pain": {
+                    "start": {"opened": 12},
+                    "lead": {"accepted": 3},
+                    "manager": {"delivered": 3},
+                    "ai_handoff": {"escalated": 1},
+                    "summary": {
+                        "leads": 3,
+                        "manager_delivered": 3,
+                        "lead_to_manager_pct": 100.0,
+                    },
+                }
+            },
+            "website": {
+                "vk:autumn": {
+                    "lead": {"accepted": 2, "duplicate": 1},
+                    "manager": {"delivered": 1, "failed": 1},
+                    "summary": {
+                        "leads": 2,
+                        "manager_delivered": 1,
+                        "lead_to_manager_pct": 50.0,
+                    },
+                }
+            },
+        },
+    }
+
+    report = funnel_metrics.format_report(
+        data,
+        channels=["telegram", "website"],
+    )
+
+    assert "📈 Воронка · 30 дней" in report
+    assert "video_pain: старт 12 → лиды 3 → менеджер 3 (100%)" in report
+    assert "AI→человек 1" in report
+    assert "vk:autumn: лиды 2 → менеджер 1 (50%)" in report
+    assert "дубли 1" in report
+    assert "ошибки доставки 1" in report
+    assert "Старты формы сайта считаются отдельно" in report
