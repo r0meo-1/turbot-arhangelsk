@@ -2588,7 +2588,7 @@ def _tour_search_worker(
         _send_tour_results_page(user_id, 0)
         return
 
-    logger.info("VK package tour search returned no offers for %s: %s", user_id, result.error)
+    logger.info("VK package tour search returned no offers for %s: %s", _log_correlation(user_id, namespace="vk-user"), result.error)
     edit_message(
         user_id,
         wait_message_id,
@@ -3471,7 +3471,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
     )
     owner_result = send_message(LEAD_OWNER_VK_ID, owner_message) if LEAD_OWNER_VK_ID else None
     if owner_result is None:
-        logger.error("VK lead from %s was not delivered to Natalya PM", user_id)
+        logger.error("VK lead from %s was not delivered to owner PM", _log_correlation(user_id, namespace="vk-user"))
 
     if ADMIN_ID and ADMIN_ID != LEAD_OWNER_VK_ID:
         send_message(
@@ -3490,7 +3490,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else ""),
         )
     elif not LEAD_NOTIFY_IDS and owner_result is None:
-        logger.warning("VK lead from %s has no working manager delivery channel", user_id)
+        logger.warning("VK lead from %s has no working manager delivery channel", _log_correlation(user_id, namespace="vk-user"))
 
 
 # When true, MDT + AI run inline (tests). Production defers them off the webhook.
@@ -3606,7 +3606,7 @@ def _post_completion_side_effects(
         if result and TUTU_SHOW_ADMIN:
             _send_tutu_to_admin(user_id, result, client_name)
     except Exception as exc:
-        logger.error("VK post-completion side effects failed for %s: %s", user_id, exc)
+        logger.error("VK post-completion side effects failed for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
 
 def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None:
@@ -3615,7 +3615,7 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     with _lock:
         live = user_data.get(user_id)
         if live is None or live.get("_completing"):
-            logger.info("Concurrent VK completion ignored for user_id=%s", user_id)
+            logger.info("Concurrent VK completion ignored for %s", _log_correlation(user_id, namespace="vk-user"))
             return
         live["_completing"] = True
         info = dict(live)
@@ -3626,7 +3626,7 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     try:
         lead_id = save_lead(user_id, info, phone, first_name=client_name)
     except Exception as exc:
-        logger.error("Failed to save VK lead for %s: %s", user_id, exc)
+        logger.error("Failed to save VK lead for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
     _confirm_to_user(user_id, info, phone)
     _notify_admin(user_id, info, phone, client_name)
