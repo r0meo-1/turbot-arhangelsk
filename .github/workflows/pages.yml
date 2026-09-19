@@ -46,17 +46,27 @@ jobs:
         run: |
           set -euo pipefail
           root="${PAGE_URL%/}"
+
           for attempt in {1..12}; do
-            if home="$(curl -fsSL --max-time 15 "$root/")" &&                landing="$(curl -fsSL --max-time 15 "$root/turbot/")" &&                privacy="$(curl -fsSL --max-time 15 "$root/turbot/privacy.html")"; then
-              if grep -q 'TurBot × АПРЕЛЬ тур' <<<"$home" &&                  grep -q 'Наталья Ильина' <<<"$landing" &&                  grep -q 'data-turbot-link' <<<"$landing" &&                  grep -q 'Политика обработки персональных данных' <<<"$privacy"; then
-                echo "TurBot Pages smoke: ok"
-                break
-              fi
+            home="$(curl -fsSL --max-time 15 "$root/" || true)"
+            canonical="$(curl -fsSL --max-time 15 "$root/apreltour/" || true)"
+            landing="$(curl -fsSL --max-time 15 "$root/turbot/" || true)"
+            privacy="$(curl -fsSL --max-time 15 "$root/turbot/privacy.html" || true)"
+
+            if grep -q 'TurBot × АПРЕЛЬ тур' <<<"$home" &&
+               grep -q 'Наталья Ильина' <<<"$canonical" &&
+               grep -q 'data-turbot-link' <<<"$canonical" &&
+               grep -q 'Наталья Ильина' <<<"$landing" &&
+               grep -q 'Политика обработки персональных данных' <<<"$privacy"; then
+              echo "TurBot Pages smoke: ok"
+              break
             fi
+
             if [[ "$attempt" == "12" ]]; then
               echo "TurBot Pages smoke failed" >&2
               exit 1
             fi
+
             echo "Published TurBot site not ready yet (attempt $attempt/12)"
             sleep 5
           done
@@ -68,15 +78,21 @@ jobs:
         run: |
           set -euo pipefail
           base="${PAGE_URL%/}/miniapp"
+
           for attempt in {1..12}; do
-            if html="$(curl -fsSL --max-time 15 "$base/")" &&                js="$(curl -fsSL --max-time 15 "$base/app.js")"; then
-              if grep -q 'trip-form' <<<"$html" &&                  grep -q "budgetScope: 'total'" <<<"$js" &&                  grep -q "source: 'telegram_mini_app'" <<<"$js"; then
-                echo "Telegram Mini App Pages smoke: ok"
-                exit 0
-              fi
+            html="$(curl -fsSL --max-time 15 "$base/" || true)"
+            js="$(curl -fsSL --max-time 15 "$base/app.js" || true)"
+
+            if grep -q 'trip-form' <<<"$html" &&
+               grep -q "budgetScope: 'total'" <<<"$js" &&
+               grep -q "source: 'telegram_mini_app'" <<<"$js"; then
+              echo "Telegram Mini App Pages smoke: ok"
+              exit 0
             fi
+
             echo "Published Mini App not ready yet (attempt $attempt/12)"
             sleep 5
           done
+
           echo "Telegram Mini App Pages smoke failed" >&2
           exit 1
