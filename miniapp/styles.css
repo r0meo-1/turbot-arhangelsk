@@ -17,6 +17,10 @@ body {
 }
 button, input { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible {
+  outline: 3px solid #64c9ff;
+  outline-offset: 3px;
+}
 a { color: var(--tg-theme-link-color, #5cc8ff); }
 [hidden] { display: none !important; }
 .shell { width: min(100%, 560px); margin: 0 auto; padding: max(18px, env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom)); }
