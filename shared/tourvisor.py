@@ -63,6 +63,8 @@ class TourOffer:
     discount_pct: int = 0
     old_price: int = 0
     beach_line: str = ""
+    provider: str = ""
+    provider_search_id: Optional[int] = None
 
 
 @dataclass
@@ -1153,16 +1155,22 @@ def get_hotel_details(hotel_name: str, country: str = "", region: str = "") -> D
 
 
 def actualize_tour(tour_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Check flight seat status, hotel confirmation status, and live pricing."""
+    """Return a conservative fallback when no live provider actualizer is used.
+
+    Search results are not proof of current seats, hotel availability, or final
+    price. Provider-specific adapters may replace this with a real live
+    actualization, but this fallback must never fabricate green availability.
+    """
     price = int(tour_data.get("price") or 0)
     fuel = int(tour_data.get("fuel_charge") or 0)
     return {
-        "status": "available",
-        "flight_status": "🟢 Места на рейсе туда и обратно есть",
-        "hotel_status": "🟢 Мгновенное подтверждение номера в отеле",
+        "status": "unknown",
+        "confirmed": False,
+        "flight_status": "🟡 Перелёт требует актуальной проверки у провайдера",
+        "hotel_status": "🟡 Наличие номера требует актуальной проверки у провайдера",
         "total_price": price + fuel,
         "currency": str(tour_data.get("currency") or "RUB"),
-        "actualized_at": datetime.now().strftime("%H:%M"),
+        "actualized_at": "",
     }
 
 
