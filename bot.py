@@ -2585,7 +2585,8 @@ def _handle_lead_assist(
         log=logger,
     )
     entrypoint_key = _safe_ai_metric_label(entrypoint, default="generic", limit=16)
-    record_ai_chat_outcome(reply, source=f"lead_{entrypoint_key}")
+    metric_source = "lead_assist" if entrypoint_key == "generic" else f"lead_{entrypoint_key}"
+    record_ai_chat_outcome(reply, source=metric_source)
     send_message(chat_id, f"🤖 {reply.text}")
     if reply.handoff_required or reply.reason in {"provider_unavailable", "provider_error"}:
         _notify_lead_assist_handoff(chat_id, question, reply.reason, info=info)
