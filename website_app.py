@@ -116,6 +116,13 @@ def _init_schema() -> None:
         )
 
 
+def _funnel_source(payload: Dict[str, Any]) -> str:
+    """Return bounded marketing attribution without any customer field."""
+    source = str(payload.get("utm_source") or "direct").strip()
+    campaign = str(payload.get("utm_campaign") or "").strip()
+    return f"{source}:{campaign}" if campaign else source
+
+
 def _safe_text(value: Any, max_len: int) -> str:
     text = str(value or "").strip()
     if len(text) > max_len:
@@ -400,6 +407,12 @@ def _deliver_lead(lead_id: int) -> bool:
 
     now = int(time.time())
     attempts = int(row[1] or 0) + 1
+    _bot.record_funnel_event(
+        "website",
+        _funnel_source(payload),
+        "manager",
+        "delivered" if success else "failed",
+    )
     with _bot._db_cursor(commit=True) as cur:
         if success:
             cur.execute(
@@ -673,8 +686,13 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
                 raise exc
         else:
             duplicate = False
-    _bot._record_ops_metric(
-        "lead", "website", "duplicate" if duplicate else "accepted"
+    outcome = "duplicate" if duplicate else "accepted"
+    _bot._record_ops_metric("lead", "website", outcome)
+    _bot.record_funnel_event(
+        "website",
+        _funnel_source(payload),
+        "lead",
+        outcome,
     )
     return lead_id, duplicate
 
