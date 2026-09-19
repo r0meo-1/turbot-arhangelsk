@@ -143,8 +143,8 @@ def create_blueprint(save_draft, settings):
             operatorName=os.getenv("DATA_OPERATOR_NAME", "ТА «АПРЕЛЬ тур»").strip() or "ТА «АПРЕЛЬ тур»",
             privacyContact=os.getenv(
                 "DATA_OPERATOR_CONTACT",
-                "сообщения сообщества «Апрель Тур» во ВКонтакте",
-            ).strip() or "сообщения сообщества «Апрель Тур» во ВКонтакте",
+                "Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584",
+            ).strip() or "Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584",
             projectUrl=os.getenv(
                 "PUBLIC_PROJECT_URL",
                 "https://r0meo1.ru/apreltour/",
