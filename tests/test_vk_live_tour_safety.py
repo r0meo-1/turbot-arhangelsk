@@ -1,4 +1,9 @@
+import base64
+import json
+import time
 from pathlib import Path
+
+from shared import tourvisor
 
 
 # Regression guards for the production VK funnel: demo inventory must never
@@ -23,10 +28,6 @@ def test_live_hot_tours_entry_point_cannot_show_curated_demo_catalogue():
 
 
 def test_expired_tourvisor_jwt_disables_live_search_ui():
-    import base64
-    import json
-    import time
-
     source = Path("vk_bot.py").read_text(encoding="utf-8")
     assert "if TOURVISOR_ENABLED and _tourvisor_jwt_expired(TOURVISOR_TOKEN):" in source
     assert 'logger.warning("VK Tourvisor JWT is expired; disabling live search UI")' in source
@@ -35,10 +36,10 @@ def test_expired_tourvisor_jwt_disables_live_search_ui():
         json.dumps({"exp": int(time.time()) - 60}).encode()
     ).decode().rstrip("=")
     token = f"header.{payload}.signature"
-    namespace = {}
-    helper_source = source[
-        source.index("def _tourvisor_jwt_expired"):
-        source.index("if TOURVISOR_ENABLED and _tourvisor_jwt_expired")
-    ]
-    exec(helper_source, {"json": json, "base64": base64, "time": time}, namespace)
-    assert namespace["_tourvisor_jwt_expired"](token) is True
+    assert tourvisor.jwt_expired(token) is True
+
+
+def test_deploy_probe_skips_known_expired_tourvisor_jwt():
+    source = Path("deploy/verify-vk-miniapp.sh").read_text(encoding="utf-8")
+    assert "jwt_status" in source
+    assert "probe=skipped reason=expired_jwt" in source
