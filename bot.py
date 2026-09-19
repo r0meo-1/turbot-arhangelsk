@@ -2701,7 +2701,7 @@ def _admin_export(chat_id: int, arg: str) -> bool:
     """Export completed leads as a formatted message (last 50)."""
     with _db_cursor() as cur:
         cur.execute(
-            "SELECT chat_id, first_name, destination, dates, people, budget, phone, created_at "
+            "SELECT chat_id, first_name, destination, dates, people, budget, source_tag, phone, created_at "
             "FROM leads ORDER BY created_at DESC LIMIT 50"
         )
         rows = cur.fetchall()
@@ -2710,12 +2710,13 @@ def _admin_export(chat_id: int, arg: str) -> bool:
         return True
     lines = [f"📋 Экспорт заявок ({len(rows)}):\n"]
     for i, row in enumerate(rows, 1):
-        cid, name, dest, dates, people, budget, phone, created = row
+        cid, name, dest, dates, people, budget, source_tag, phone, created = row
         when = datetime.fromtimestamp(created).strftime("%d.%m.%Y") if created else "?"
         who = name or str(cid)
+        source = source_tag or "organic"
         lines.append(
             f"{i}. [{when}] {who} | {dest or '?'} | {dates or '?'} | "
-            f"{people or '?'} чел | {budget or '?'}₽ | {phone}"
+            f"{people or '?'} чел | {budget or '?'}₽ | src={source} | {phone}"
         )
     # Split into chunks if too long (Telegram limit ~4096 chars)
     text = "\n".join(lines)
@@ -2859,7 +2860,7 @@ def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> No
     """Begin the tour-selection dialog and retain a validated campaign source."""
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
-    source_tag = normalise_source_tag(source_tag or previous_source)
+    source_tag = normalise_source_tag(previous_source or source_tag)
 
     if CONSENT_MODE == "strict" and not has_consent(chat_id):
         with _lock:
@@ -2901,7 +2902,7 @@ def _begin_destination(chat_id: int, first_name: str = "", source_tag: str = "")
     """Enter the first data-collection step while preserving campaign attribution."""
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
-        effective_source = normalise_source_tag(source_tag or previous_source)
+        effective_source = normalise_source_tag(previous_source or source_tag)
         user_data[chat_id] = {
             "state": STATE_DESTINATION,
             "source_tag": effective_source or None,
@@ -4308,7 +4309,7 @@ def _accept_miniapp_trip(
     info = validate_trip_request(payload)
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
-    source_tag = normalise_source_tag(trusted_source_tag or previous_source)
+    source_tag = normalise_source_tag(previous_source or trusted_source_tag)
     if source_tag:
         info["source_tag"] = source_tag
     first_name = str(from_info.get("first_name") or "").strip()
