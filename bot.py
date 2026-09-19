@@ -67,6 +67,7 @@ from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
+from shared import funnel_metrics as _funnel_metrics
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
@@ -787,6 +788,7 @@ def init_db() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)"
         )
+        _funnel_metrics.init_schema(cur)
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS ops_metric_events (
@@ -2051,6 +2053,38 @@ def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
     return {"available": True, "window_seconds": window, "channels": channels}
 
 
+def record_funnel_event(
+    channel: str,
+    source: str,
+    stage: str,
+    outcome: str,
+) -> None:
+    """Persist privacy-minimized acquisition telemetry without customer identity."""
+    try:
+        _funnel_metrics.record(
+            _db_cursor,
+            channel,
+            source or "direct",
+            stage,
+            outcome,
+        )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist acquisition funnel event: %s", exc)
+
+
+def _funnel_health(now: Optional[float] = None) -> Dict[str, Any]:
+    try:
+        return _funnel_metrics.snapshot(_db_cursor, now=now)
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read acquisition funnel: %s", exc)
+        return {
+            "available": False,
+            "window_seconds": 30 * 86400,
+            "events": 0,
+            "channels": {},
+        }
+
+
 def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
     """Persist one bounded operational event without customer data."""
     safe = tuple(str(value or "unknown")[:40] for value in (category, subject, outcome))
@@ -2388,6 +2422,12 @@ def _notify_lead_assist_handoff(
         f"\n\nПараметры поездки:\n{trip_context}"
         if trip_context
         else ""
+    )
+    record_funnel_event(
+        "telegram",
+        str((info or {}).get("source_tag") or "direct"),
+        "ai_handoff",
+        "escalated",
     )
     manager_text = (
         "🤖→👩‍💼 Вопрос клиента требует менеджера\n"
@@ -3150,6 +3190,7 @@ def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> No
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
     source_tag = normalise_source_tag(previous_source or source_tag)
+    record_funnel_event("telegram", source_tag or "direct", "start", "opened")
 
     if CONSENT_MODE == "strict" and not has_consent(chat_id):
         with _lock:
@@ -4135,6 +4176,9 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     try:
         lead_id = save_lead(chat_id, info, phone, first_name=first_name, username=username)
         _record_ops_metric("lead", "telegram", "accepted")
+        record_funnel_event(
+            "telegram", str(info.get("source_tag") or "direct"), "lead", "accepted"
+        )
     except Exception as exc:
         _record_ops_metric("lead", "telegram", "save_failure")
         logger.error("Failed to save lead for %s: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
@@ -4168,7 +4212,16 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     # 2. Notify bot creator / admins in Telegram. Failure is operationally
     # important, but the customer's already-saved request must remain durable.
     try:
-        if _notify_admin(chat_id, info, phone, client_name, username=username or ""):
+        manager_delivered = _notify_admin(
+            chat_id, info, phone, client_name, username=username or ""
+        )
+        record_funnel_event(
+            "telegram",
+            str(info.get("source_tag") or "direct"),
+            "manager",
+            "delivered" if manager_delivered else "failed",
+        )
+        if manager_delivered:
             with _db_cursor(commit=True) as cur:
                 cur.execute(
                     "UPDATE leads SET manager_notified_at=? "
@@ -4176,6 +4229,9 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
                     (int(time.time()), lead_id),
                 )
     except Exception as exc:
+        record_funnel_event(
+            "telegram", str(info.get("source_tag") or "direct"), "manager", "failed"
+        )
         logger.error("Failed to notify manager about saved lead %s: %s", lead_id, exc)
         _alert_admin_error("Failed to notify manager about saved lead", exc)
 
@@ -4502,6 +4558,7 @@ def health() -> Any:
         "mdt_retry": _mdt_retry_health(now),
         "lead_delivery": _lead_delivery_health(now),
         "ops_events": _ops_event_health(now),
+        "acquisition_funnel": _funnel_health(now),
         "travelpayouts_stats": _travelpayouts_stats.health_snapshot(now=now),
         "ai_selection": {
             "mode": AI_MODE,
