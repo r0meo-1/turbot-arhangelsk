@@ -26,15 +26,41 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
       - name: Upload site
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs
+
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+
+      - name: Verify published TurBot site
+        shell: bash
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          root="${PAGE_URL%/}"
+          for attempt in {1..12}; do
+            if home="$(curl -fsSL --max-time 15 "$root/")" &&                landing="$(curl -fsSL --max-time 15 "$root/turbot/")" &&                privacy="$(curl -fsSL --max-time 15 "$root/turbot/privacy.html")"; then
+              if grep -q 'TurBot × АПРЕЛЬ тур' <<<"$home" &&                  grep -q 'Наталья Ильина' <<<"$landing" &&                  grep -q 'data-turbot-link' <<<"$landing" &&                  grep -q 'Политика обработки персональных данных' <<<"$privacy"; then
+                echo "TurBot Pages smoke: ok"
+                break
+              fi
+            fi
+            if [[ "$attempt" == "12" ]]; then
+              echo "TurBot Pages smoke failed" >&2
+              exit 1
+            fi
+            echo "Published TurBot site not ready yet (attempt $attempt/12)"
+            sleep 5
+          done
+
       - name: Verify published Telegram Mini App
         shell: bash
         env:
@@ -43,11 +69,8 @@ jobs:
           set -euo pipefail
           base="${PAGE_URL%/}/miniapp"
           for attempt in {1..12}; do
-            if html="$(curl -fsSL --max-time 15 "$base/")" && \
-               js="$(curl -fsSL --max-time 15 "$base/app.js")"; then
-              if grep -q 'trip-form' <<<"$html" && \
-                 grep -q "budgetScope: 'total'" <<<"$js" && \
-                 grep -q "source: 'telegram_mini_app'" <<<"$js"; then
+            if html="$(curl -fsSL --max-time 15 "$base/")" &&                js="$(curl -fsSL --max-time 15 "$base/app.js")"; then
+              if grep -q 'trip-form' <<<"$html" &&                  grep -q "budgetScope: 'total'" <<<"$js" &&                  grep -q "source: 'telegram_mini_app'" <<<"$js"; then
                 echo "Telegram Mini App Pages smoke: ok"
                 exit 0
               fi
