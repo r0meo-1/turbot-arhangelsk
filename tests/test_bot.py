@@ -2529,3 +2529,27 @@ def test_admin_export_includes_campaign_source(monkeypatch):
 
     assert bot._admin_export(999, "") is True
     assert any("src=video_vs" in text for _, text in sent)
+
+
+
+def test_agentdesk_pairing_token_is_derived_and_admin_only_helper(monkeypatch):
+    sent = []
+    monkeypatch.setattr(bot, "BOT_TOKEN", "123456789:very-secret-telegram-token")
+    monkeypatch.delenv("AGENT_EXTENSION_TOKEN", raising=False)
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda chat_id, text, **kwargs: sent.append((chat_id, text, kwargs)),
+    )
+
+    token = bot.agent_extension_token()
+    assert token
+    assert token != bot.BOT_TOKEN
+    assert bot.BOT_TOKEN not in token
+    assert len(token) == 64
+
+    assert bot._admin_agentdesk(bot.ADMIN_ID, "") is True
+    assert sent
+    assert sent[-1][0] == bot.ADMIN_ID
+    assert token in sent[-1][1]
+    assert bot.BOT_TOKEN not in sent[-1][1]
