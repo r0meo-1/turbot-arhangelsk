@@ -120,6 +120,82 @@ jobs:
             { echo "Privacy response is missing Referrer-Policy" >&2; exit 1; }
           grep -qi '^permissions-policy:.*camera=()' "$privacy_headers" ||
             { echo "Privacy response is missing Permissions-Policy" >&2; exit 1; }
+          grep -Eqi '^strict-transport-security:[[:space:]]*max-age=31536000([[:space:]]*;.*)?
+          check_security_headers() {
+            local label="$1"
+            local header_file="$2"
+            grep -qi '^x-content-type-options: nosniff' "$header_file" ||
+              { echo "$label missing nosniff" >&2; return 1; }
+            grep -qi '^referrer-policy:' "$header_file" ||
+              { echo "$label missing Referrer-Policy" >&2; return 1; }
+            grep -qi '^permissions-policy:.*camera=()' "$header_file" ||
+              { echo "$label missing Permissions-Policy" >&2; return 1; }
+            grep -qi '^strict-transport-security: max-age=31536000' "$header_file" ||
+              { echo "$label missing host-scoped HSTS" >&2; return 1; }
+            grep -qi '^content-security-policy-report-only:.*default-src' "$header_file" ||
+              { echo "$label missing CSP Report-Only" >&2; return 1; }
+          }
+
+          health_headers="$(mktemp)"
+          vk_headers="$(mktemp)"
+          tg_headers="$(mktemp)"
+          trap 'cleanup; rm -f "$health_headers" "$vk_headers" "$tg_headers"' EXIT
+
+          curl -fsSL --max-time 15 -D "$health_headers" "$base/health" -o /dev/null
+          curl -fsSL --max-time 15 -D "$vk_headers" "$base/vk/miniapp/legal.json" -o /dev/null
+          tg_status="$(curl -sS --max-time 15 -D "$tg_headers" -o /dev/null -w '%{http_code}' \
+            -X POST "$base/miniapp/submit" \
+            -H 'Origin: https://r0meo-1.github.io' \
+            -H 'Content-Type: application/json' \
+            --data '{"initData":"tampered","payload":{}}')"
+          if [[ "$tg_status" != "401" ]]; then
+            echo "Telegram Mini App invalid-auth header probe returned HTTP $tg_status, expected 401" >&2
+            exit 1
+          fi
+
+          check_security_headers "health" "$health_headers"
+          check_security_headers "privacy" "$privacy_headers"
+          check_security_headers "VK Mini App" "$vk_headers"
+          check_security_headers "Telegram Mini App API" "$tg_headers"
+          echo "Runtime security headers smoke: ok"
+
+      - name: Verify Agent Desk production routes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          base="https://bot.r0meo1.ru"
+
+          for attempt in {1..12}; do
+            if curl -fsSL --max-time 15 "$base/health" >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 12 ]]; then
+              echo "TurBot public health check failed" >&2
+              exit 1
+            fi
+            sleep 5
+          done
+
+          for path in agent-extension/leads agent-extension/export.csv; do
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$base/$path")"
+            if [[ "$status" != "401" ]]; then
+              echo "$path returned HTTP $status without auth; expected 401" >&2
+              exit 1
+            fi
+          done
+
+          status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -X POST "$base/agent-extension/status" \
+            -H 'Content-Type: application/json' \
+            --data '{}')"
+          if [[ "$status" != "401" ]]; then
+            echo "agent-extension/status returned HTTP $status without auth; expected 401" >&2
+            exit 1
+          fi
+
+          echo "Agent Desk production routes are deployed and fail closed without auth"
+ "$privacy_headers" ||
+            { echo "Privacy response is missing host-scoped HSTS" >&2; exit 1; }
 
           echo "Production legal content and base app security headers: ok"
 
