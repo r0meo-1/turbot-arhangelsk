@@ -306,6 +306,26 @@ def test_admin_funnel_reports_sources_without_customer_data(client, monkeypatch)
     assert "Старты формы сайта считаются отдельно" in body
 
 
+def test_admin_providers_reports_safe_provider_state(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        bot._provider_status,
+        "format_report",
+        lambda: "🧭 Провайдеры туров\nАвтопоиск: 🔴 недоступен",
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, bot.ADMIN_ID, "/providers")
+
+    assert len(sent) == 1
+    assert sent[0][0] == bot.ADMIN_ID
+    assert "Провайдеры туров" in sent[0][1]
+
+
 def test_admin_ai_stats_reports_only_aggregate_outcomes(client, monkeypatch):
     sent = []
     bot.record_ai_chat_outcome(
