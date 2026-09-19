@@ -33,7 +33,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
         url = f"http://127.0.0.1:{server.server_port}/index.html"
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="msedge", headless=True)
-            context = browser.new_context()
+            context = browser.new_context(viewport={"width": 320, "height": 760})
             context.add_init_script(
                 f"""
                 window.__tgClosed = false;
@@ -81,6 +81,47 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
 
             page.route(API_URL, accept_submit)
             page.goto(url, wait_until="domcontentloaded")
+
+            # Narrow-mobile acceptance: the entire customer form must fit the
+            # viewport without page-level horizontal scrolling.
+            assert page.evaluate(
+                "document.documentElement.scrollWidth <= window.innerWidth"
+            )
+            shell_box = page.locator(".shell").bounding_box()
+            assert shell_box is not None
+            assert shell_box["x"] >= 0
+            assert shell_box["x"] + shell_box["width"] <= 320.5
+
+            # Critical form controls need stable accessible names instead of
+            # relying on placeholders or visual proximity.
+            for label in (
+                "Направление",
+                "Вылет",
+                "Ночей",
+                "Дата вылета",
+                "Взрослых",
+                "Детей до 18",
+                "Бюджет на всю поездку",
+            ):
+                assert page.get_by_label(label, exact=True).count() == 1
+
+            # Keyboard users must get an explicit visible focus indicator.
+            page.locator("#destination").focus()
+            page.keyboard.press("Tab")
+            focused = page.evaluate(
+                """() => {
+                  const el = document.activeElement;
+                  const style = getComputedStyle(el);
+                  return {
+                    isChip: el?.classList?.contains('chip') || false,
+                    outlineWidth: style.outlineWidth,
+                    outlineStyle: style.outlineStyle
+                  };
+                }"""
+            )
+            assert focused["isChip"] is True
+            assert focused["outlineStyle"] != "none"
+            assert focused["outlineWidth"] != "0px"
 
             # start_param=thailand should prefill the country, then the user may
             # choose a more specific resort suggestion.
