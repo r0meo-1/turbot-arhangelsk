@@ -25,7 +25,7 @@ def signed(**changes):
 def payload():
     return dict(type='trip_request', version=2, destination='Египет', departure='Архангельск',
                 date=(date.today() + timedelta(days=30)).isoformat(), nights=10,
-                adults=2, children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True)
+                adults=2, children=2, childrenAges=[0, 14], budgetMaxRub=270000, consent=True, termsAccepted=True, termsAccepted=True)
 
 
 def test_signature_identity():
