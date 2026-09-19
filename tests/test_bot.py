@@ -2653,6 +2653,7 @@ def test_lead_assist_handoff_notifies_manager_with_redacted_question(monkeypatch
 
     sent = []
     owner = []
+    metrics = []
     monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
     monkeypatch.setattr(
         bot,
@@ -2679,6 +2680,11 @@ def test_lead_assist_handoff_notifies_manager_with_redacted_question(monkeypatch
             reason="verified_source_or_human_required",
         ),
     )
+    monkeypatch.setattr(
+        bot,
+        "record_ai_chat_outcome",
+        lambda reply, *, source="beta": metrics.append((source, reply.reason)),
+    )
 
     assert bot._handle_lead_assist(
         chat_id,
@@ -2689,8 +2695,14 @@ def test_lead_assist_handoff_notifies_manager_with_redacted_question(monkeypatch
     assert manager_messages
     assert "test@example.com" not in manager_messages[-1]
     assert "[email-redacted]" in manager_messages[-1]
+    assert "Параметры поездки:" in manager_messages[-1]
+    assert "Направление: Таиланд" in manager_messages[-1]
+    assert "Туристов: 2" in manager_messages[-1]
+    assert "Бюджет: 250000 ₽ на человека" in manager_messages[-1]
     assert f"/send {chat_id}" in manager_messages[-1]
     assert owner and "test@example.com" not in owner[-1]
+    assert "Параметры поездки:" in owner[-1]
+    assert metrics == [("lead_assist", "verified_source_or_human_required")]
 
 
 def test_ask_command_invokes_lead_assist_without_advancing_dialog(client, monkeypatch):
