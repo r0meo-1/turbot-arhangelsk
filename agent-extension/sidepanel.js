@@ -1,6 +1,7 @@
 const API = "https://bot.r0meo1.ru/agent-extension/lead";
 const LEADS_API = "https://bot.r0meo1.ru/agent-extension/leads";
 const STATUS_API = "https://bot.r0meo1.ru/agent-extension/status";
+const EXPORT_API = "https://bot.r0meo1.ru/agent-extension/export.csv";
 const fieldIds = ["name","phone","destination","origin","dates","people","budget","consent"];
 
 const $ = (id) => document.getElementById(id);
@@ -205,14 +206,24 @@ function renderLeads(leads) {
       option.selected = value === lead.status;
       select.append(option);
     });
+    const followLabel = document.createElement("label");
+    followLabel.className = "followup-label";
+    followLabel.textContent = "Следующий контакт";
+    const follow = document.createElement("input");
+    follow.type = "date";
+    follow.value = lead.followUpOn || "";
+    followLabel.append(follow);
+
     const note = document.createElement("textarea");
     note.placeholder = "Заметка менеджера";
     note.value = lead.note || "";
     const save = document.createElement("button");
     save.className = "save-status";
     save.textContent = "Сохранить статус";
-    save.addEventListener("click", () => updateLeadStatus(lead.id, select.value, note.value, save));
-    controls.append(select, note, save);
+    save.addEventListener("click", () => updateLeadStatus(
+      lead.id, select.value, note.value, follow.value, save
+    ));
+    controls.append(select, followLabel, note, save);
 
     card.append(head, meta, controls);
     box.append(card);
@@ -235,7 +246,7 @@ async function loadLeads() {
   renderLeads(data.leads || []);
 }
 
-async function updateLeadStatus(leadId, status, note, button) {
+async function updateLeadStatus(leadId, status, note, followUpOn, button) {
   const state = await chrome.storage.local.get({ agentToken: "" });
   if (!state.agentToken) return setStatus("Сначала сохрани Agent token.");
   button.disabled = true;
@@ -246,7 +257,7 @@ async function updateLeadStatus(leadId, status, note, button) {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + state.agentToken
       },
-      body: JSON.stringify({ leadId, status, note })
+      body: JSON.stringify({ leadId, status, note, followUpOn })
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
@@ -260,6 +271,27 @@ async function updateLeadStatus(leadId, status, note, button) {
     button.disabled = false;
   }
 }
+
+async function exportLeads() {
+  const state = await chrome.storage.local.get({ agentToken: "" });
+  if (!state.agentToken) return setStatus("Сначала сохрани Agent token.");
+  try {
+    const response = await fetch(EXPORT_API, {
+      headers: { "Authorization": "Bearer " + state.agentToken }
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || ("HTTP " + response.status));
+    }
+    const text = await response.text();
+    const url = "data:text/csv;charset=utf-8," + encodeURIComponent(text);
+    await chrome.tabs.create({ url });
+    setStatus("CSV открыт в новой вкладке.", true);
+  } catch (error) {
+    setStatus("CSV не выгружен: " + (error.message || "ошибка"));
+  }
+}
+
 
 document.querySelectorAll("[data-open]").forEach((button) => {
   button.addEventListener("click", () => chrome.tabs.create({ url: button.dataset.open }));
@@ -278,6 +310,7 @@ $("saveToken").addEventListener("click", async () => {
 $("refreshLeads").addEventListener("click", () => {
   loadLeads().catch((error) => setStatus("CRM: " + error.message));
 });
+$("exportLeads").addEventListener("click", exportLeads);
 $("send").addEventListener("click", sendLead);
 
 chrome.storage.onChanged.addListener((changes, area) => {
