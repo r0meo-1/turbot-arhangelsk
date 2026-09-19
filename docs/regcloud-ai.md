@@ -31,7 +31,7 @@ base URLs.
 Keep the file private:
 
 ```bash
-sudo chown root:root /opt/turbot/.env
+sudo chown turbot:turbot /opt/turbot/.env
 sudo chmod 600 /opt/turbot/.env
 ```
 
