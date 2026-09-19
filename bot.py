@@ -64,7 +64,8 @@ from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.telegram_webapp import (
-    MiniAppValidationError, validate_init_data, validate_trip_request,
+    MiniAppValidationError, validate_init_data, validate_init_data_context,
+    validate_trip_request,
 )
 
 load_dotenv()
@@ -646,6 +647,7 @@ def init_db() -> None:
                 budget INTEGER,
                 budget_scope TEXT,
                 direct_only INTEGER,
+                source_tag TEXT,
                 phone TEXT,
                 updated_at INTEGER NOT NULL
             )
@@ -669,6 +671,7 @@ def init_db() -> None:
                 budget INTEGER,
                 budget_scope TEXT,
                 direct_only INTEGER,
+                source_tag TEXT,
                 phone TEXT NOT NULL,
                 created_at INTEGER NOT NULL
             )
@@ -696,6 +699,8 @@ def init_db() -> None:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN budget_scope TEXT")
             if "direct_only" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN direct_only INTEGER")
+            if "source_tag" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN source_tag TEXT")
         cur.execute("PRAGMA table_info(sessions)")
         if "review_token" not in {row[1] for row in cur.fetchall()}:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
@@ -970,9 +975,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
             INSERT INTO sessions (
                 chat_id, state, destination, origin, dates, nights, people,
                 kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, review_token, updated_at
+                source_tag, phone, review_token, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
@@ -986,6 +991,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 budget=excluded.budget,
                 budget_scope=excluded.budget_scope,
                 direct_only=excluded.direct_only,
+                source_tag=excluded.source_tag,
                 phone=excluded.phone,
                 review_token=excluded.review_token,
                 updated_at=excluded.updated_at
@@ -1004,6 +1010,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("budget"),
                 data.get("budget_scope"),
                 _sqlite_bool(data.get("direct_only")),
+                data.get("source_tag"),
                 data.get("phone"),
                 data.get("review_token"),
                 data.get("updated_at", now),
@@ -1016,7 +1023,7 @@ def update_session(chat_id: int, **kwargs) -> None:
     allowed = {
         "state", "destination", "origin", "dates", "nights", "people", "kids",
         "kids_ages", "infants", "budget", "budget_scope", "direct_only",
-        "phone", "review_token", "updated_at",
+        "source_tag", "phone", "review_token", "updated_at",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -1100,8 +1107,8 @@ def save_lead(
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates, nights,
                 people, kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_tag, phone, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -1118,6 +1125,7 @@ def save_lead(
                 info.get("budget"),
                 info.get("budget_scope"),
                 _sqlite_bool(info.get("direct_only")),
+                info.get("source_tag"),
                 phone,
                 now,
             ),
@@ -2694,7 +2702,7 @@ def _admin_export(chat_id: int, arg: str) -> bool:
     """Export completed leads as a formatted message (last 50)."""
     with _db_cursor() as cur:
         cur.execute(
-            "SELECT chat_id, first_name, destination, dates, people, budget, phone, created_at "
+            "SELECT chat_id, first_name, destination, dates, people, budget, source_tag, phone, created_at "
             "FROM leads ORDER BY created_at DESC LIMIT 50"
         )
         rows = cur.fetchall()
@@ -2703,12 +2711,13 @@ def _admin_export(chat_id: int, arg: str) -> bool:
         return True
     lines = [f"📋 Экспорт заявок ({len(rows)}):\n"]
     for i, row in enumerate(rows, 1):
-        cid, name, dest, dates, people, budget, phone, created = row
+        cid, name, dest, dates, people, budget, source_tag, phone, created = row
         when = datetime.fromtimestamp(created).strftime("%d.%m.%Y") if created else "?"
         who = name or str(cid)
+        source = source_tag or "organic"
         lines.append(
             f"{i}. [{when}] {who} | {dest or '?'} | {dates or '?'} | "
-            f"{people or '?'} чел | {budget or '?'}₽ | {phone}"
+            f"{people or '?'} чел | {budget or '?'}₽ | src={source} | {phone}"
         )
     # Split into chunks if too long (Telegram limit ~4096 chars)
     text = "\n".join(lines)
@@ -2848,11 +2857,52 @@ def _strip_emoji_prefix(text: str, options: Optional[List[str]] = None) -> str:
     return text
 
 
-def handle_start(chat_id: int, first_name: str = "") -> None:
+_SOURCE_TAG_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _normalize_source_tag(value: Any) -> Optional[str]:
+    """Return a bounded campaign tag safe for persistence and display."""
+    if not isinstance(value, str):
+        return None
+    tag = value.strip()
+    if not _SOURCE_TAG_RE.fullmatch(tag):
+        return None
+    return tag.lower()
+
+
+def _parse_start_payload(text: str) -> Optional[str]:
+    """Extract a Telegram /start payload, including /start@bot forms."""
+    if not isinstance(text, str):
+        return None
+    parts = text.strip().split(maxsplit=1)
+    if not parts:
+        return None
+    command = parts[0].split("@", 1)[0].lower()
+    if command != "/start" or len(parts) != 2:
+        return None
+    return _normalize_source_tag(parts[1])
+
+
+def _first_touch_source(chat_id: int, incoming: Any = None) -> Optional[str]:
+    """Preserve an existing valid source tag; otherwise accept a new one."""
+    with _lock:
+        current = user_data.get(chat_id) or {}
+        existing = _normalize_source_tag(current.get("source_tag"))
+    return existing or _normalize_source_tag(incoming)
+
+
+def handle_start(
+    chat_id: int, first_name: str = "", source_tag: Optional[str] = None
+) -> None:
     """Begin the tour-selection dialog (soft notice or strict consent)."""
+    source_tag = _first_touch_source(chat_id, source_tag)
     if CONSENT_MODE == "strict" and not has_consent(chat_id):
         with _lock:
-            user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+            user_data[chat_id] = {
+                "state": STATE_CONSENT,
+                "source_tag": source_tag,
+                "updated_at": int(time.time()),
+            }
         _mark_dirty(chat_id)
         send_message(chat_id, _welcome_text(first_name), parse_mode="HTML")
         send_message(
@@ -2865,7 +2915,11 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
     # Soft mode: welcome + one «Начать» tap (or skip if already started before).
     if CONSENT_MODE == "soft" and not has_consent(chat_id):
         with _lock:
-            user_data[chat_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+            user_data[chat_id] = {
+                "state": STATE_CONSENT,
+                "source_tag": source_tag,
+                "updated_at": int(time.time()),
+            }
         _mark_dirty(chat_id)
         send_message(
             chat_id,
@@ -2875,13 +2929,20 @@ def handle_start(chat_id: int, first_name: str = "") -> None:
         )
         return
 
-    _begin_destination(chat_id, first_name)
+    _begin_destination(chat_id, first_name, source_tag=source_tag)
 
 
-def _begin_destination(chat_id: int, first_name: str = "") -> None:
+def _begin_destination(
+    chat_id: int, first_name: str = "", source_tag: Optional[str] = None
+) -> None:
     """Enter the first data-collection step (destination)."""
+    source_tag = _first_touch_source(chat_id, source_tag)
     with _lock:
-        user_data[chat_id] = {"state": STATE_DESTINATION, "updated_at": int(time.time())}
+        user_data[chat_id] = {
+            "state": STATE_DESTINATION,
+            "source_tag": source_tag,
+            "updated_at": int(time.time()),
+        }
     _mark_dirty(chat_id)
     name = f", {first_name}" if first_name else ""
     send_message(
@@ -3570,7 +3631,8 @@ def _format_lead_notify_text(
         f"{_trip_details_text(info)}"
         f"👥 {_esc(_party_text(info))}\n"
         f"💰 {'от' if info.get('budget_open_ended') else 'до'} {_esc(info.get('budget', '?'))} ₽ на человека\n"
-        f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
+        + (f"📊 Источник: <code>{_esc(info['source_tag'])}</code>\n" if info.get("source_tag") else "")
+        + f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
         f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}"
     )
 
@@ -3849,16 +3911,20 @@ def miniapp_submit() -> Response:
     if not isinstance(body, dict):
         return _miniapp_json({"ok": False, "error": "Invalid JSON body"}, 400)
     try:
-        telegram_user = validate_init_data(
+        launch_context = validate_init_data_context(
             str(body.get("initData") or ""), BOT_TOKEN, max_age=3600
         )
+        telegram_user = launch_context["user"]
     except MiniAppValidationError as exc:
         logger.info("Rejected Mini App initData: %s", exc)
         return _miniapp_json({"ok": False, "error": "Telegram authorization failed"}, 401)
 
     try:
         info = _accept_miniapp_trip(
-            int(telegram_user["id"]), telegram_user, body.get("payload")
+            int(telegram_user["id"]),
+            telegram_user,
+            body.get("payload"),
+            source_tag=launch_context.get("start_param"),
         )
     except MiniAppValidationError as exc:
         return _miniapp_json({"ok": False, "error": str(exc)}, 400)
@@ -4264,10 +4330,16 @@ def _process_callback(data: Dict[str, Any]) -> None:
 
 
 def _accept_miniapp_trip(
-    chat_id: int, from_info: Dict[str, Any], payload: Any
+    chat_id: int,
+    from_info: Dict[str, Any],
+    payload: Any,
+    source_tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
+    source_tag = _first_touch_source(chat_id, source_tag)
     info = validate_trip_request(payload)
+    if source_tag:
+        info["source_tag"] = source_tag
     first_name = str(from_info.get("first_name") or "").strip()
     username = str(from_info.get("username") or "").strip()
     _touch_user(chat_id, first_name, username)
@@ -4369,8 +4441,8 @@ def _process_update(data: Dict[str, Any]) -> None:
             return
 
     # --- User commands ---
-    if text == "/start":
-        handle_start(chat_id, first_name)
+    if text == "/start" or text.startswith("/start ") or text.startswith("/start@"):
+        handle_start(chat_id, first_name, source_tag=_parse_start_payload(text))
         return
 
     if text == "/help":
