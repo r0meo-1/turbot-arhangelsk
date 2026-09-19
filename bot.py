@@ -55,6 +55,7 @@ from shared.validation import (
 )
 from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
+from shared.log_privacy import correlation_id as _log_correlation
 from shared import tutu as _tutu
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
@@ -1465,11 +1466,11 @@ def send_message(
         )
         if resp.status_code != 200:
             logger.error(
-                "Telegram %d for %s: %s", resp.status_code, chat_id, resp.text[:200],
+                "Telegram %d for %s: %s", resp.status_code, _log_correlation(chat_id, namespace="tg-user"), resp.text[:200],
             )
         return resp
     except requests.exceptions.RequestException as exc:
-        logger.error("send_message(%s) failed: %s", chat_id, exc)
+        logger.error("send_message(%s) failed: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
         return None
 
 
@@ -3724,8 +3725,8 @@ def _notify_admin(
     owner_delivered = send_lead_owner_vk(owner_text)
     if not recipients and not owner_delivered:
         logger.warning(
-            "Lead from chat_id=%s saved but manager delivery is unavailable",
-            chat_id,
+            "Lead from %s saved but manager delivery is unavailable",
+            _log_correlation(chat_id, namespace="tg-user"),
         )
         return
 
@@ -3739,7 +3740,7 @@ def _notify_admin(
     for recipient in recipients:
         resp = send_message(recipient, text, parse_mode="HTML", reply_markup=reply_kb)
         if resp is not None and getattr(resp, "status_code", 0) == 200:
-            logger.info("Lead from %s delivered to Telegram chat %s", chat_id, recipient)
+            logger.info("Lead from %s delivered to Telegram manager %s", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"))
             continue
         # Fallback without HTML if Telegram rejected parse_mode (rare).
         if resp is not None and getattr(resp, "status_code", 0) != 200:
@@ -3759,11 +3760,11 @@ def _notify_admin(
             resp2 = send_message(recipient, plain, reply_markup=reply_kb)
             if resp2 is not None and getattr(resp2, "status_code", 0) == 200:
                 logger.info(
-                    "Lead from %s delivered to %s (plain-text fallback)", chat_id, recipient,
+                    "Lead from %s delivered to manager %s (plain-text fallback)", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"),
                 )
                 continue
         logger.error(
-            "Failed to deliver lead from %s to Telegram chat %s", chat_id, recipient,
+            "Failed to deliver lead from %s to Telegram manager %s", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"),
         )
 
 
@@ -3851,7 +3852,7 @@ def _post_completion_side_effects(
         if result and TUTU_SHOW_ADMIN:
             _send_tutu_to_admin(chat_id, result, client_name)
     except Exception as exc:
-        logger.error("Post-completion side effects failed for %s: %s", chat_id, exc)
+        logger.error("Post-completion side effects failed for %s: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
         _alert_admin_error("Post-completion side effects failed", exc)
 
 
@@ -3869,7 +3870,7 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     with _lock:
         live = user_data.get(chat_id)
         if live is None or live.get("_completing"):
-            logger.info("Concurrent completion ignored for chat_id=%s", chat_id)
+            logger.info("Concurrent completion ignored for %s", _log_correlation(chat_id, namespace="tg-user"))
             return
         if review_token is not None and (
             live.get("state") != STATE_REVIEW or live.get("review_token") != review_token
@@ -3888,7 +3889,7 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     try:
         lead_id = save_lead(chat_id, info, phone, first_name=first_name, username=username)
     except Exception as exc:
-        logger.error("Failed to save lead for %s: %s", chat_id, exc)
+        logger.error("Failed to save lead for %s: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
         _alert_admin_error("Failed to save lead", exc)
         with _lock:
             live.pop("_completing", None)
@@ -3913,7 +3914,7 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     try:
         _confirm_to_user(chat_id, info, phone)  # 1. Confirm to user
     except Exception as exc:
-        logger.error("Failed to confirm saved lead %s to client %s: %s", lead_id, chat_id, exc)
+        logger.error("Failed to confirm saved lead %s to client %s: %s", lead_id, _log_correlation(chat_id, namespace="tg-user"), exc)
         _alert_admin_error("Failed to confirm saved lead to client", exc)
 
     # 2. Notify bot creator / admins in Telegram. Failure is operationally
@@ -4474,7 +4475,7 @@ def _process_update(data: Dict[str, Any]) -> None:
             payload = json.loads(raw_web_app_data)
             _accept_miniapp_trip(chat_id, from_info, payload)
         except (json.JSONDecodeError, MiniAppValidationError) as exc:
-            logger.info("Rejected Telegram web_app_data for chat %s: %s", chat_id, exc)
+            logger.info("Rejected Telegram web_app_data for %s: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
             send_message(chat_id, "Не удалось проверить данные Mini App. Откройте форму ещё раз.")
         return
 
