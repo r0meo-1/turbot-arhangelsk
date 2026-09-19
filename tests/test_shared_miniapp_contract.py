@@ -16,6 +16,7 @@ def _payload(**overrides):
         "budgetMaxRub": 270000,
         "directOnly": True,
         "consent": True,
+        "termsAccepted": True,
     }
     payload.update(overrides)
     return payload
