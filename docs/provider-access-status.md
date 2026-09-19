@@ -62,3 +62,21 @@ Real credentials belong only in the production environment/secrets store:
 - no `.env.example` values;
 - no screenshots or chat messages;
 - no client-side JavaScript.
+
+
+## Travelata
+
+Status: **Partner API credentials requested on 2026-09-19; pending.**
+
+- Existing TurBot adapter uses `https://api-gateway.travelata.ru/partners`.
+- Authentication: HTTP Basic Auth.
+- Runtime secrets: `TRAVELATA_USERNAME`, `TRAVELATA_PASSWORD`.
+- Keep as a package-tour fallback provider.
+
+## Level.Travel
+
+Status: **Partner API access requested on 2026-09-19; pending.**
+
+- Public partner documentation supports custom search/chatbot use cases.
+- Access is individual and should provide an API key after approval.
+- Do not add guessed endpoints or legacy contracts before current access/docs arrive.
