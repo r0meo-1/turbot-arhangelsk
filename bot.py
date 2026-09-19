@@ -197,6 +197,9 @@ else:
 LEAD_OWNER_NAME = os.getenv("LEAD_OWNER_NAME", "Наталья Ильина").strip() or "Наталья Ильина"
 LEAD_OWNER_PHONE = os.getenv("LEAD_OWNER_PHONE", "+79021932923").strip() or "+79021932923"
 LEAD_OWNER_VK_ID = _env_int("LEAD_OWNER_VK_ID", 112655584)
+MANAGER_TOURVISOR_URL = os.getenv("MANAGER_TOURVISOR_URL", "https://pro.tourvisor.ru/").strip()
+MANAGER_SLETAT_URL = os.getenv("MANAGER_SLETAT_URL", "https://sletat.ru/pro").strip()
+MANAGER_QUIQUO_URL = os.getenv("MANAGER_QUIQUO_URL", "https://qui-quo.ru/").strip()
 VK_ACCESS_TOKEN = os.getenv("VK_ACCESS_TOKEN", "").strip()
 VK_API_VERSION = os.getenv("VK_API_VERSION", "5.199").strip() or "5.199"
 
@@ -3671,7 +3674,11 @@ def _notify_admin(
         + f"📅 {info.get('dates', '?')}\n"
         + f"👥 {_party_text(info)}\n"
         + f"💰 {info.get('budget', '?')} ₽\n"
-        + f"📞 Связь клиента: {phone}"
+        + f"📞 Связь клиента: {phone}\n\n"
+        + "🔎 Подбор менеджеру:\n"
+        + f"Tourvisor PRO: {MANAGER_TOURVISOR_URL}\n"
+        + f"Sletat PRO: {MANAGER_SLETAT_URL}\n"
+        + f"Qui-Quo: {MANAGER_QUIQUO_URL}"
     )
     owner_delivered = send_lead_owner_vk(owner_text)
     if not recipients and not owner_delivered:
