@@ -5,6 +5,7 @@
   const departure = $('departure');
   const REVIEW_COMMAND = 'Проверить заявку';
   const REVIEW_PAYLOAD = { command: 'miniapp_review', version: 1 };
+  const REQUEST_TIMEOUT_MS = 15000;
   const launchParams = location.search.slice(1);
   const params = new URLSearchParams(launchParams);
   let inVK = params.has('sign') && params.has('vk_app_id');
@@ -192,11 +193,15 @@
     if (!inVK || !payload || $('save').disabled) return;
     $('save').disabled = true;
     $('edit').disabled = true;
+    $('review').setAttribute('aria-busy', 'true');
     $('status').textContent = 'Сохраняем параметры…';
 
     try {
+      if (navigator.onLine === false) {
+        throw new Error('Нет подключения к интернету. Проверьте сеть и повторите.');
+      }
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
+      const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       let response;
       try {
         response = await fetch('./draft', {
@@ -209,11 +214,12 @@
         clearTimeout(timer);
       }
 
-      const result = await response.json();
+      const result = await response.json().catch(() => ({}));
       if (!response.ok || result.ok !== true) {
         throw new Error(result.authReason ? `${result.error} [${result.authReason}]` : (result.error || 'Не удалось сохранить параметры.'));
       }
 
+      $('review').setAttribute('aria-busy', 'false');
       const groupId = Number(result.groupId);
       if (!Number.isSafeInteger(groupId) || groupId <= 0) throw new Error('Не удалось открыть сообщество.');
 
@@ -255,6 +261,7 @@
         copyReviewCommand();
       }
     } catch (error) {
+      $('review').setAttribute('aria-busy', 'false');
       $('status').textContent = error.name === 'AbortError'
         ? 'Ответ задержался. Повторите попытку: одинаковые параметры не создадут дубль.'
         : (error.message || 'Ошибка соединения. Повторите попытку.');
