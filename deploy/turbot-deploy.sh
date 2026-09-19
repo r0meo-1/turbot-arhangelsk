@@ -113,6 +113,7 @@ PY
   }
   trap rollback_bundle ERR
 
+  ensure_backup_and_restore_drill
   "$venv/pip" install --requirement "$repo/requirements.txt"
   cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
   systemctl daemon-reload
@@ -140,6 +141,32 @@ PY
 
   echo "TurBot bundle did not become healthy" >&2
   return 1
+}
+
+ensure_backup_and_restore_drill() {
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "Production backup safety requires sqlite3" >&2
+    return 1
+  fi
+
+  chmod 755 "$repo/scripts/backup.sh" "$repo/scripts/restore-drill.sh"
+
+  cat > /etc/cron.d/turbot-backup <<CRON
+# TurBot — nightly verified SQLite online backup.
+0 3 * * * root $repo/scripts/backup.sh >> /var/log/turbot-backup.log 2>&1
+CRON
+  chmod 644 /etc/cron.d/turbot-backup
+
+  if ! systemctl is-active --quiet cron; then
+    systemctl enable --now cron
+  fi
+
+  APP_DIR="$repo" BACKUP_DIR="$repo/backups" KEEP_DAYS=7 \
+    "$repo/scripts/backup.sh"
+  APP_DIR="$repo" BACKUP_DIR="$repo/backups" MAX_BACKUP_AGE_SECONDS=86400 \
+    "$repo/scripts/restore-drill.sh"
+
+  echo "Production backup schedule and isolated restore drill: ok"
 }
 
 
