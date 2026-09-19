@@ -2553,3 +2553,22 @@ def test_agentdesk_pairing_token_is_derived_and_admin_only_helper(monkeypatch):
     assert sent[-1][0] == bot.ADMIN_ID
     assert token in sent[-1][1]
     assert bot.BOT_TOKEN not in sent[-1][1]
+
+
+def test_privacy_page_is_final_and_uses_verified_operator(client):
+    response = client.get("/privacy")
+    assert response.status_code == 200
+    text = response.get_data(as_text=True)
+    assert "ИП Замятина Мария Андреевна" in text
+    assert "ОГРНИП 311293232600026" in text
+    assert "ЧЕРНОВИК / ШАБЛОН" not in text
+    assert "[указать" not in text
+
+
+def test_global_security_headers_on_health_and_privacy(client):
+    for path in ("/health", "/privacy"):
+        response = client.get(path)
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+        assert "camera=()" in response.headers["Permissions-Policy"]
+        assert "microphone=()" in response.headers["Permissions-Policy"]
