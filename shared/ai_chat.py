@@ -20,6 +20,8 @@ from shared.ai_guardrails import (
 
 logger = logging.getLogger("turbot.shared.ai_chat")
 
+_ASSISTANT_PREFIX = "ИИ-помощник: "
+
 
 @dataclass(frozen=True)
 class AIChatReply:
@@ -152,7 +154,7 @@ def generate_ai_chat_reply(
             )
 
         return AIChatReply(
-            text=content,
+            text=f"{_ASSISTANT_PREFIX}{content}",
             used_external_model=True,
             handoff_required=False,
         )
