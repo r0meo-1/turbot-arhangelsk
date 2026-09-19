@@ -576,6 +576,12 @@ ADMIN_HELP = (
 _admin_reply_to: Dict[int, int] = {}  # admin_chat_id → client_chat_id
 _last_lead_client_id: Optional[int] = None
 CB_ADMIN_REPLY_PREFIX = "ar:"
+CB_AI_LEAD_PREFIX = "aiq:"
+AI_LEAD_QUICK_QUESTIONS = {
+    "packing": "Что взять с собой в эту поездку?",
+    "hotel": "На что обратить внимание при выборе отеля для этой поездки?",
+    "prep": "Что важно учесть при подготовке к этой поездке?",
+}
 
 # ---------------------------------------------------------------------------
 # Groq client (created once at startup)
@@ -2217,6 +2223,17 @@ def kb_contact_methods() -> str:
         [_inline_btn(CONTACT_VK_TEXT, CB_CONTACT_VK)],
             [_inline_btn(BACK_BUTTON_TEXT, CB_BACK)],
             [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],
+    ])
+
+
+def kb_ai_lead_assist() -> str:
+    """Post-lead AI shortcuts; callback payloads map only to fixed safe questions."""
+    return inline_keyboard([
+        [
+            _inline_btn("🧳 Что взять?", f"{CB_AI_LEAD_PREFIX}packing"),
+            _inline_btn("🏨 Как выбрать отель?", f"{CB_AI_LEAD_PREFIX}hotel"),
+        ],
+        [_inline_btn("📋 Что учесть перед поездкой?", f"{CB_AI_LEAD_PREFIX}prep")],
     ])
 
 
@@ -3929,16 +3946,18 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: до {_esc(info.get('budget', '?'))} ₽ на человека\n"
         f"📞 Связь: {_esc(phone)}\n\n"
-        "Спасибо, что выбрали нас 🌺"
-        + (
-            "\n\n🤖 Есть вопрос по поездке? Напишите: "
-            "<code>/ask ваш вопрос</code>"
-            if AI_LEAD_ASSIST_ENABLED
-            else ""
-        ),
+        "Спасибо, что выбрали нас 🌺",
         reply_markup=hide_keyboard(),
         parse_mode="HTML",
     )
+    if AI_LEAD_ASSIST_ENABLED:
+        send_message(
+            chat_id,
+            "🤖 <b>ИИ-помощник</b> может подсказать по подготовке к поездке. "
+            "Выберите вопрос ниже или напишите <code>/ask ваш вопрос</code>.",
+            reply_markup=kb_ai_lead_assist(),
+            parse_mode="HTML",
+        )
 
 
 def _format_lead_notify_text(
@@ -4673,6 +4692,18 @@ def _process_callback(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Некорректная кнопка ответа.")
             return
         _admin_start_reply(chat_id, client_id)
+        return
+
+    # Post-lead AI shortcuts work without an active FSM session. The callback
+    # payload contains only a short key; the model receives the fixed question
+    # plus the same minimized saved-trip context as /ask.
+    if cb_data.startswith(CB_AI_LEAD_PREFIX):
+        question_key = cb_data[len(CB_AI_LEAD_PREFIX):]
+        question = AI_LEAD_QUICK_QUESTIONS.get(question_key)
+        if not question:
+            send_message(chat_id, "Эта кнопка устарела. Напишите /ask ваш вопрос.")
+            return
+        _handle_lead_assist(chat_id, question)
         return
 
     # Navigation callbacks work from any dialog state.
