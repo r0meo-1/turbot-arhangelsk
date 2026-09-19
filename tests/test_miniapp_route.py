@@ -11,12 +11,14 @@ BOT_TOKEN = "123456789:test_bot_token_for_route"
 ORIGIN = "https://r0meo-1.github.io"
 
 
-def _signed_init_data(user_id=88001):
+def _signed_init_data(user_id=88001, start_param=None):
     fields = {
         "auth_date": str(int(time.time())),
         "query_id": "AAHdF6IQAAAAAN0XohDhrOrc",
         "user": json.dumps({"id": user_id, "first_name": "Roma", "username": "tester"}, separators=(",", ":")),
     }
+    if start_param is not None:
+        fields["start_param"] = start_param
     check = "\n".join(f"{key}={fields[key]}" for key in sorted(fields))
     secret = hmac.new(b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256).digest()
     fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
@@ -92,3 +94,25 @@ def test_menu_miniapp_rejects_tampered_init_data(monkeypatch):
         headers={"Origin": ORIGIN},
     )
     assert response.status_code == 401
+
+
+def test_menu_miniapp_uses_signed_start_param_for_attribution(monkeypatch):
+    chat_id = 88009
+    monkeypatch.setattr(bot, "BOT_TOKEN", BOT_TOKEN)
+    monkeypatch.setattr(bot, "MINI_APP_ORIGIN", ORIGIN)
+    monkeypatch.setattr(bot, "_touch_user", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "set_consent", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "_mark_dirty", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "save_state", lambda: None)
+    monkeypatch.setattr(bot, "send_message", lambda *args, **kwargs: None)
+    bot.user_data.pop(chat_id, None)
+
+    response = bot.app.test_client().post(
+        "/miniapp/submit",
+        json={"initData": _signed_init_data(chat_id, "Video_Pain"), "payload": _payload()},
+        headers={"Origin": ORIGIN},
+    )
+
+    assert response.status_code == 200
+    assert bot.user_data[chat_id]["source_tag"] == "video_pain"
+    bot.user_data.pop(chat_id, None)
