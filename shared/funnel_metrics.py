@@ -18,6 +18,18 @@ def _safe_token(value: Any, fallback: str, max_len: int) -> str:
     return (token or fallback)[:max_len]
 
 
+def _safe_source(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if (
+        "@" in raw
+        or "http://" in raw
+        or "https://" in raw
+        or re.search(r"\d{7,}", raw)
+    ):
+        return "redacted"
+    return _safe_token(raw, "direct", 64)
+
+
 def init_schema(cur: Any) -> None:
     cur.execute(
         """
@@ -52,7 +64,7 @@ def record(
 ) -> None:
     """Store one bounded event. No user identifier or free-form text is accepted."""
     channel_key = _safe_token(channel, "unknown", 24)
-    source_key = _safe_token(source, "direct", 64)
+    source_key = _safe_source(source)
     stage_key = _safe_token(stage, "unknown", 24)
     outcome_key = _safe_token(outcome, "unknown", 24)
     if stage_key not in _ALLOWED_STAGES or outcome_key not in _ALLOWED_OUTCOMES:
