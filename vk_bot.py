@@ -1838,10 +1838,32 @@ def _welcome_text(first_name: str = "") -> str:
     return f"{head}\n\n{WELCOME_BODY}"
 
 
-def handle_start(user_id: int, first_name: str = "") -> None:
+def _safe_source_tag(value: Any) -> str:
+    """Return a bounded campaign tag without letting malformed VK ref break the bot."""
+    try:
+        return normalise_source_tag(value)
+    except MiniAppValidationError:
+        return ""
+
+
+def _first_touch_source_tag(user_id: int, incoming: Any = "") -> str:
+    """Preserve the first valid campaign tag for the active lead."""
+    with _lock:
+        previous = (user_data.get(user_id) or {}).get("source_tag")
+    return _safe_source_tag(previous) or _safe_source_tag(incoming)
+
+
+def handle_start(
+    user_id: int, first_name: str = "", source_tag: str = ""
+) -> None:
+    source_tag = _first_touch_source_tag(user_id, source_tag)
     if CONSENT_MODE == "strict" and not has_consent(user_id):
         with _lock:
-            user_data[user_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+            user_data[user_id] = {
+                "state": STATE_CONSENT,
+                "source_tag": source_tag or None,
+                "updated_at": int(time.time()),
+            }
         _mark_dirty(user_id)
         send_message(user_id, _welcome_text(first_name))
         send_message(user_id, _consent_text(), keyboard=_consent_keyboard())
@@ -1849,7 +1871,11 @@ def handle_start(user_id: int, first_name: str = "") -> None:
 
     if CONSENT_MODE == "soft" and not has_consent(user_id):
         with _lock:
-            user_data[user_id] = {"state": STATE_CONSENT, "updated_at": int(time.time())}
+            user_data[user_id] = {
+                "state": STATE_CONSENT,
+                "source_tag": source_tag or None,
+                "updated_at": int(time.time()),
+            }
         _mark_dirty(user_id)
         send_message(
             user_id,
@@ -1858,12 +1884,19 @@ def handle_start(user_id: int, first_name: str = "") -> None:
         )
         return
 
-    _begin_destination(user_id, first_name)
+    _begin_destination(user_id, first_name, source_tag=source_tag)
 
 
-def _begin_destination(user_id: int, first_name: str = "") -> None:
+def _begin_destination(
+    user_id: int, first_name: str = "", source_tag: str = ""
+) -> None:
+    source_tag = _first_touch_source_tag(user_id, source_tag)
     with _lock:
-        user_data[user_id] = {"state": STATE_DESTINATION, "updated_at": int(time.time())}
+        user_data[user_id] = {
+            "state": STATE_DESTINATION,
+            "source_tag": source_tag or None,
+            "updated_at": int(time.time()),
+        }
     _mark_dirty(user_id)
     name = f", {first_name}" if first_name else ""
     send_message(
@@ -2008,7 +2041,11 @@ def _step_consent(user_id: int, text: str, message: Dict[str, Any], info: Dict[s
     first_name = message.get("_user_name", "")
     if text in (START_BUTTON_TEXT, CONSENT_YES_TEXT, "Начать подбор"):
         set_consent(user_id)
-        _begin_destination(user_id, first_name)
+        _begin_destination(
+            user_id,
+            first_name,
+            source_tag=str(info.get("source_tag") or ""),
+        )
         return
     if CONSENT_MODE == "strict" and text == CONSENT_NO_TEXT:
         with _lock:
@@ -3276,7 +3313,8 @@ def _notify_admin_telegram(
         f"От: {client_name or 'без имени'}\n"
         f"💬 Диалог: {vk_chat_link}\n"
         f"👤 Профиль: {vk_profile_link}\n\n"
-        f"📍 Направление: {info.get('destination', '?')}\n"
+        + (f"📊 Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
+        + f"📍 Направление: {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
         + f"📅 Даты: {info.get('dates', '?')}\n"
         + (f"🌙 Ночи: {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
@@ -3314,7 +3352,8 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             ADMIN_ID,
             "🔔 Новая заявка (VK)!\n\n"
             f"От: {client_name or 'без имени'} (ID: {user_id})\n"
-            f"📍 {info.get('destination', '?')}\n"
+            + (f"📊 Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
+            + f"📍 {info.get('destination', '?')}\n"
             + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
             + f"📅 {info.get('dates', '?')}\n"
             + (f"🌙 {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
@@ -3680,6 +3719,7 @@ def _process_message(message: Dict[str, Any]) -> None:
     if not user_id:
         return
     text = (msg.get("text") or "").strip()
+    incoming_source_tag = _safe_source_tag(msg.get("ref"))
     try:
         button_payload = json.loads(msg.get("payload") or "{}")
     except (TypeError, ValueError):
@@ -3706,6 +3746,8 @@ def _process_message(message: Dict[str, Any]) -> None:
             all_users[user_id]["consent_at"] = meta["consent_at"]
         session_open = user_id in user_data
         if session_open:
+            if incoming_source_tag and not user_data[user_id].get("source_tag"):
+                user_data[user_id]["source_tag"] = incoming_source_tag
             user_data[user_id]["updated_at"] = int(time.time())
     _mark_dirty(user_id, session=session_open)
 
@@ -3753,14 +3795,21 @@ def _process_message(message: Dict[str, Any]) -> None:
             return
         if command == "export":
             with _db_cursor() as cur:
-                cur.execute("SELECT chat_id, destination, dates, people, budget, phone FROM leads ORDER BY created_at DESC LIMIT 50")
+                cur.execute(
+                    "SELECT chat_id, destination, dates, people, budget, source_tag, phone "
+                    "FROM leads ORDER BY created_at DESC LIMIT 50"
+                )
                 rows = cur.fetchall()
             if not rows:
                 send_message(user_id, "Нет завершённых заявок для экспорта.")
                 return
             lines = [f"📋 Экспорт ({len(rows)}):\n"]
-            for i, (cid, dest, dates, people, budget, phone) in enumerate(rows, 1):
-                lines.append(f"{i}. {dest or '?'} | {dates or '?'} | {people or '?'} чел | {budget or '?'}₽ | {phone}")
+            for i, (cid, dest, dates, people, budget, source_tag, phone) in enumerate(rows, 1):
+                source = source_tag or "organic"
+                lines.append(
+                    f"{i}. {dest or '?'} | {dates or '?'} | {people or '?'} чел | "
+                    f"{budget or '?'}₽ | src={source} | {phone}"
+                )
             text = "\n".join(lines)
             while text:
                 send_message(user_id, text[:4000])
@@ -3787,7 +3836,7 @@ def _process_message(message: Dict[str, Any]) -> None:
             return
 
     if command == "start":
-        handle_start(user_id, name)
+        handle_start(user_id, name, source_tag=incoming_source_tag)
         return
     if command == "help":
         send_message(user_id, USER_HELP)
@@ -3896,7 +3945,11 @@ def _process_message(message: Dict[str, Any]) -> None:
     if user_id in user_data:
         handle_dialog(user_id, text, msg)
     else:
-        if has_completed_lead(user_id):
+        if incoming_source_tag:
+            # vk.me?...ref=<campaign> arrives on message_new. Treat that
+            # explicit referral as a fresh acquisition entry point.
+            handle_start(user_id, name, source_tag=incoming_source_tag)
+        elif has_completed_lead(user_id):
             # A manager now owns this conversation. Do not interrupt a normal
             # reply such as "спасибо" with the bot's repeat-selection prompt.
             # The explicit "Начать" command above still starts a new request.
@@ -3969,6 +4022,9 @@ def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
         previous = user_data.get(user_id)
         if previous and previous.get("_completing"):
             raise MiniAppValidationError("Draft completion in progress")
+        source_tag = _safe_source_tag((previous or {}).get("source_tag"))
+        if source_tag:
+            info["source_tag"] = source_tag
 
         info["updated_at"] = int(time.time())
         _save_miniapp_snapshot(user_id, info)
