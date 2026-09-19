@@ -47,6 +47,7 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM miniapp_drafts")
         cur.execute("DELETE FROM users")
         cur.execute("DELETE FROM leads")
+        cur.execute("DELETE FROM acquisition_funnel_events")
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: None)
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
     monkeypatch.setattr(bot, "save_state", lambda: None)
@@ -171,6 +172,8 @@ def test_vk_referral_message_starts_attributed_flow(client):
     assert response.status_code == 200
     assert bot.user_data[user_id]["state"] == bot.STATE_CONSENT
     assert bot.user_data[user_id]["source_tag"] == "video_vs"
+    funnel = bot._funnel_health()
+    assert funnel["channels"]["vk"]["video_vs"]["start"]["opened"] == 1
 
 
 def test_vk_miniapp_preserves_chat_campaign_source():
@@ -312,6 +315,8 @@ def test_health_endpoint(client):
     assert data["revision"]
     assert data["mdt_delivery"]["available"] is True
     assert data["mdt_delivery"]["total"] == 0
+    assert data["acquisition_funnel"]["available"] is True
+    assert "channels" in data["acquisition_funnel"]
     assert data["ai_selection"]["mode"] == bot.AI_MODE
     assert data["ai_selection"]["ready"] is bot.selection_ai_provider.ready
     assert data["ai_selection"]["model"] == (bot.selection_ai_provider.model or None)
