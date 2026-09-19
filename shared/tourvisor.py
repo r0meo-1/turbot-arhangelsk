@@ -306,7 +306,10 @@ def search_tours(
         if departure_id is None:
             return SearchResult(error="Этот город вылета пока не найден в Tourvisor")
 
-        countries = caller("GET", "countries", {"departureId": departure_id})
+        country_params: Dict[str, Any] = {"departureId": departure_id}
+        if info.get("direct_only"):
+            country_params["onlyDirect"] = True
+        countries = caller("GET", "countries", country_params)
         country_id = _find_named_id(countries, str(info.get("destination") or ""))
         if country_id is None:
             return SearchResult(error="Это направление пока не найдено в Tourvisor")
@@ -321,6 +324,7 @@ def search_tours(
             "adults": adults,
             "currency": "RUB",
             "onlyCharter": False,
+            "onlyDirect": bool(info.get("direct_only")),
         }
         if child_ages:
             params["childs"] = child_ages
