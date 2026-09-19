@@ -59,6 +59,7 @@ from shared.log_privacy import correlation_id as _log_correlation
 from shared import tutu as _tutu
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
+from shared.ai_provider import build_selection_provider
 from shared.ai_chat import generate_ai_chat_reply as _generate_ai_chat_reply
 from shared import mdt as mdt_shared
 from shared import travelpayouts_links as _travelpayouts_links
@@ -128,6 +129,9 @@ BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
 ADMIN_ID          = _env_int("ADMIN_ID", 0)
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+REGCLOUD_API_KEY  = os.getenv("REGCLOUD_API_KEY", "")
+REGCLOUD_BASE_URL = os.getenv("REGCLOUD_BASE_URL", "")
+REGCLOUD_MODEL    = os.getenv("REGCLOUD_MODEL", "")
 # External AI is opt-in. If AI_MODE is absent, deterministic templates win.
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 AI_CHAT_ENABLED   = os.getenv("AI_CHAT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
@@ -556,6 +560,14 @@ CB_ADMIN_REPLY_PREFIX = "ar:"
 # ---------------------------------------------------------------------------
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+selection_ai_provider = build_selection_provider(
+    AI_MODE,
+    groq_api_key=GROQ_API_KEY,
+    groq_model=GROQ_MODEL,
+    regcloud_api_key=REGCLOUD_API_KEY,
+    regcloud_base_url=REGCLOUD_BASE_URL,
+    regcloud_model=REGCLOUD_MODEL,
+)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP session with retries for Telegram API calls
@@ -2208,15 +2220,15 @@ def hide_keyboard() -> str:
     return json.dumps({"remove_keyboard": True})
 
 def generate_ai_selection(destination: str, dates: str, people: str, budget: str) -> str:
-    """Generate an AI tour blurb for the client (template or Groq)."""
+    """Generate an AI tour blurb for the client (template/Groq/REG.RU Cloud)."""
     return _shared_generate_ai(
         destination,
         dates,
         people,
         budget,
         ai_mode=AI_MODE,
-        groq_client=groq_client,
-        groq_model=GROQ_MODEL,
+        groq_client=selection_ai_provider.client,
+        groq_model=selection_ai_provider.model,
         log=logger,
     )
 
