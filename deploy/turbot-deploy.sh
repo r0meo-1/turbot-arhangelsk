@@ -211,7 +211,8 @@ apply_stdin_config() {
   if [[ "$marker" != "TURBOT_DEPLOY_CONFIG_V1" \
         && "$marker" != "TURBOT_DEPLOY_CONFIG_V2" \
         && "$marker" != "TURBOT_DEPLOY_CONFIG_V3" \
-        && "$marker" != "TURBOT_DEPLOY_CONFIG_V4" ]]; then
+        && "$marker" != "TURBOT_DEPLOY_CONFIG_V4" \
+        && "$marker" != "TURBOT_DEPLOY_CONFIG_V5" ]]; then
     echo "Unsupported deploy payload" >&2
     return 1
   fi
@@ -238,6 +239,7 @@ markers = {
     "TURBOT_DEPLOY_CONFIG_V2": 4,
     "TURBOT_DEPLOY_CONFIG_V3": 6,
     "TURBOT_DEPLOY_CONFIG_V4": 7,
+    "TURBOT_DEPLOY_CONFIG_V5": 9,
 }
 if not lines or lines[0] not in markers:
     raise SystemExit("Invalid deploy payload")
@@ -256,21 +258,23 @@ def decode(index: int) -> str:
 
 app_id = decode(1)
 secret = decode(2)
-mdt_api_key = decode(3) if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"} else ""
-travelata_username = decode(4) if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"} else ""
-travelata_password = decode(5) if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"} else ""
-travelpayouts_api_token = decode(6) if marker == "TURBOT_DEPLOY_CONFIG_V4" else ""
+mdt_api_key = decode(3) if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} else ""
+travelata_username = decode(4) if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} else ""
+travelata_password = decode(5) if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} else ""
+travelpayouts_api_token = decode(6) if marker in {"TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} else ""
+sletat_login = decode(7) if marker == "TURBOT_DEPLOY_CONFIG_V5" else ""
+sletat_password = decode(8) if marker == "TURBOT_DEPLOY_CONFIG_V5" else ""
 
 if not app_id.isdigit():
     raise SystemExit("Invalid VK Mini App ID")
 if not secret or "\n" in secret or "\r" in secret:
     raise SystemExit("Invalid VK Mini App secret")
-if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"} and (
+if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} and (
     not mdt_api_key or "\n" in mdt_api_key or "\r" in mdt_api_key
 ):
     raise SystemExit("Invalid MDT API key")
 
-if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"}:
+if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"}:
     has_user = bool(travelata_username)
     has_password = bool(travelata_password)
     if has_user != has_password:
@@ -280,6 +284,14 @@ if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"}:
 
 if travelpayouts_api_token and ("\n" in travelpayouts_api_token or "\r" in travelpayouts_api_token):
     raise SystemExit("Invalid Travelpayouts API token")
+
+if marker == "TURBOT_DEPLOY_CONFIG_V5":
+    has_sletat_login = bool(sletat_login)
+    has_sletat_password = bool(sletat_password)
+    if has_sletat_login != has_sletat_password:
+        raise SystemExit("Sletat credentials must be supplied as a complete pair")
+    if any("\n" in value or "\r" in value for value in (sletat_login, sletat_password)):
+        raise SystemExit("Invalid Sletat credentials")
 
 env_path = Path("/opt/turbot/.env")
 if not env_path.exists():
@@ -294,7 +306,7 @@ values = {
     "VK_MINI_APP_ID": app_id,
     "VK_MINI_APP_SECRET": quote_env(secret),
 }
-if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"}:
+if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"}:
     values.update(
         {
             "MDT_API_KEY": quote_env(mdt_api_key),
@@ -310,7 +322,7 @@ if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPL
 # production credentials". This lets normal deploys run before API approval
 # and protects manually installed credentials if GitHub secrets are absent.
 travelata_supplied = bool(travelata_username and travelata_password)
-if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"} and travelata_supplied:
+if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} and travelata_supplied:
     values.update(
         {
             "TRAVELATA_USERNAME": quote_env(travelata_username),
@@ -324,8 +336,22 @@ if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"} and travelat
 # deploy before Booking.com access is approved; an empty GitHub secret never
 # deletes a token installed directly on the production host.
 travelpayouts_supplied = bool(travelpayouts_api_token)
-if marker == "TURBOT_DEPLOY_CONFIG_V4" and travelpayouts_supplied:
+if marker in {"TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} and travelpayouts_supplied:
     values["TRAVELPAYOUTS_API_TOKEN"] = quote_env(travelpayouts_api_token)
+
+# V5 adds Sletat as another optional complete credential pair. Empty GitHub
+# secrets preserve existing server values so a routine deploy can never erase
+# a manually installed or previously approved provider credential.
+sletat_supplied = bool(sletat_login and sletat_password)
+if marker == "TURBOT_DEPLOY_CONFIG_V5" and sletat_supplied:
+    values.update(
+        {
+            "SLETAT_LOGIN": quote_env(sletat_login),
+            "SLETAT_PASSWORD": quote_env(sletat_password),
+            "VK_SLETAT_ENABLED": "true",
+            "TOUR_PROVIDER_ORDER": quote_env("sletat,travelata,tourvisor"),
+        }
+    )
 
 src = env_path.read_text(encoding="utf-8").splitlines()
 out = []
@@ -353,18 +379,23 @@ os.chmod(tmp, 0o600)
 os.replace(tmp, env_path)
 
 print("VK Mini App configuration installed")
-if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"}:
+if marker in {"TURBOT_DEPLOY_CONFIG_V2", "TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"}:
     print("MDT production configuration installed")
-if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"}:
+if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"}:
     if travelata_supplied:
         print("Travelata production configuration installed")
     else:
         print("Travelata deploy credentials not supplied; existing server values preserved")
-if marker == "TURBOT_DEPLOY_CONFIG_V4":
+if marker in {"TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"}:
     if travelpayouts_supplied:
         print("Travelpayouts production configuration installed")
     else:
         print("Travelpayouts deploy token not supplied; existing server value preserved")
+if marker == "TURBOT_DEPLOY_CONFIG_V5":
+    if sletat_supplied:
+        print("Sletat production configuration installed")
+    else:
+        print("Sletat deploy credentials not supplied; existing server values preserved")
 PY
   then
     rm -f "$payload"
