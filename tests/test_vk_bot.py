@@ -47,6 +47,7 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM miniapp_drafts")
         cur.execute("DELETE FROM users")
         cur.execute("DELETE FROM leads")
+        cur.execute("DELETE FROM ops_metric_events")
         cur.execute("DELETE FROM acquisition_funnel_events")
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: None)
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
@@ -137,6 +138,127 @@ def test_miniapp_attribution_survives_session_and_lead():
             "SELECT source, vk_ref, vk_platform FROM leads WHERE chat_id=43"
         ).fetchone()
     assert tuple(row) == ("vk_mini_app", "community_messages", "desktop_web")
+
+
+def test_provider_runtime_health_is_30_day_aggregate_without_pii():
+    now = int(time.time())
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'sletat', 'timeout', ?)",
+            (now,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'travelata', 'success', ?)",
+            (now,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'travelata', 'fallback', ?)",
+            (now,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'tourvisor', 'http_error', ?)",
+            (now - 31 * 86400,),
+        )
+
+    snapshot = bot._provider_runtime_health(now)
+
+    assert snapshot["available"] is True
+    assert snapshot["window_seconds"] == 30 * 86400
+    assert snapshot["subjects"] == {
+        "sletat": {"timeout": 1},
+        "travelata": {"fallback": 1, "success": 1},
+    }
+    raw = json.dumps(snapshot, ensure_ascii=False)
+    for secret in (
+        "+79991234567",
+        "roman@example.com",
+        "https://vendor.example/api?token=secret",
+        "password=secret",
+    ):
+        assert secret not in raw
+
+
+def test_provider_runtime_retention_deletes_old_events(monkeypatch):
+    now = int(time.time())
+    monkeypatch.setattr(bot, "OPS_METRICS_RETENTION_DAYS", 90)
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'sletat', 'timeout', ?)",
+            (now - 91 * 86400,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'sletat', 'success', ?)",
+            (now - 10 * 86400,),
+        )
+
+    assert bot.cleanup_ops_metric_events(now) == 1
+    with bot._db_cursor() as cur:
+        remaining = cur.execute(
+            "SELECT subject, outcome FROM ops_metric_events"
+        ).fetchall()
+    assert [tuple(row) for row in remaining] == [("sletat", "success")]
+
+
+def test_vk_health_exposes_provider_runtime_without_customer_fields(client):
+    now = int(time.time())
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'tourvisor', 'empty', ?)",
+            (now,),
+        )
+
+    response = client.get("/vk/health")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["provider_runtime"]["subjects"]["tourvisor"]["empty"] == 1
+    raw = response.get_data(as_text=True)
+    for forbidden in ("chat_id", "phone", "username", "payload", "token", "password"):
+        assert forbidden not in raw
+
+
+def test_admin_providers_includes_recent_safe_runtime_counts(client, monkeypatch):
+    sent = []
+    now = int(time.time())
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'travelata', 'http_error', ?)",
+            (now,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'travelata', 'fallback', ?)",
+            (now,),
+        )
+
+    monkeypatch.setattr(
+        bot._provider_status,
+        "format_report",
+        lambda: "🧭 Провайдеры туров\nАвтопоиск: 🟡 ограничен",
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda uid, text, **kwargs: sent.append((uid, text)),
+    )
+
+    response = _post(client, bot.ADMIN_ID, "providers")
+
+    assert response.status_code == 200
+    body = "\n".join(text for _, text in sent)
+    assert "Провайдеры туров" in body
+    assert "Провайдеры · 30 дней" in body
+    assert "travelata: 2" in body
+    assert "http_error: 1" in body
+    assert "fallback: 1" in body
 
 
 def test_vk_campaign_ref_is_first_touch_and_persists(client):
