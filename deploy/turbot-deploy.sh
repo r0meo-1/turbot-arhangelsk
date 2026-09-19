@@ -183,6 +183,16 @@ apply_stdin_config() {
     exit $?
   fi
 
+  if [[ "$marker" == "TURBOT_BACKUP_DRILL_V1" ]]; then
+    if IFS= read -r _unexpected; then
+      echo "Unexpected backup drill marker payload" >&2
+      return 1
+    fi
+    ensure_backup_and_restore_drill
+    CONFIG_APPLIED=1
+    return 0
+  fi
+
   if [[ "$marker" == "TURBOT_VK_CALLBACK_APP_PAYLOAD_V1" ]]; then
     # This marker performs one narrowly scoped VK API mutation. It accepts no
     # payload data and uses only the protected production .env on the server.
