@@ -407,12 +407,6 @@ def _deliver_lead(lead_id: int) -> bool:
 
     now = int(time.time())
     attempts = int(row[1] or 0) + 1
-    _bot.record_funnel_event(
-        "website",
-        _funnel_source(payload),
-        "manager",
-        "delivered" if success else "failed",
-    )
     with _bot._db_cursor(commit=True) as cur:
         if success:
             cur.execute(
@@ -505,6 +499,12 @@ def _deliver_owner_notification(lead_id: int) -> bool:
 
     now = int(time.time())
     attempts = int(row[1] or 0) + 1
+    _bot.record_funnel_event(
+        "website",
+        _funnel_source(payload),
+        "manager",
+        "delivered" if success else "failed",
+    )
     with _bot._db_cursor(commit=True) as cur:
         if success:
             cur.execute(
