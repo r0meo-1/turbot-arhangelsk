@@ -4043,6 +4043,16 @@ def _process_message(message: Dict[str, Any]) -> None:
 
     # Admin commands
     if user_id == ADMIN_ID:
+        if text_lower in ("воронка", "funnel"):
+            send_message(
+                user_id,
+                _funnel_metrics.format_report(
+                    _funnel_health(),
+                    channels=["vk"],
+                    max_sources=10,
+                ),
+            )
+            return
         if command == "help":
             send_message(user_id, USER_HELP)
             return
