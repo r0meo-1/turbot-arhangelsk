@@ -316,6 +316,12 @@ def test_health_endpoint(client):
     assert "travelpayouts_stats" in data
     assert "configured" in data["travelpayouts_stats"]
     assert "status" in data["travelpayouts_stats"]
+    assert data["ai_selection"]["mode"] == bot.AI_MODE
+    assert data["ai_selection"]["ready"] is bot.selection_ai_provider.ready
+    assert data["ai_selection"]["model"] == (bot.selection_ai_provider.model or None)
+    raw = resp.get_data(as_text=True)
+    assert "REGCLOUD_API_KEY" not in raw
+    assert "REGCLOUD_BASE_URL" not in raw
 
 
 def test_health_travelpayouts_stats_never_exposes_token(client, monkeypatch):

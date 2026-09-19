@@ -4189,6 +4189,11 @@ def health() -> Any:
         "revision": _version.REVISION,
         "uptime_seconds": _version.uptime_seconds(),
         "mdt_delivery": _mdt_delivery_health(),
+        "ai_selection": {
+            "mode": AI_MODE,
+            "ready": selection_ai_provider.ready,
+            "model": selection_ai_provider.model or None,
+        },
     })
 
 
