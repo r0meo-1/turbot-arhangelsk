@@ -100,6 +100,9 @@ def _booking_configuration_code(exc):
 
 
 def validate_vk_trip(payload):
+    # Privacy consent and service-terms acceptance are separate user actions.
+    if not isinstance(payload, dict) or payload.get("termsAccepted") is not True:
+        raise MiniAppValidationError("terms acceptance is required")
     # JSON numbers must really be integers; do not silently truncate fractions.
     if isinstance(payload, dict):
         for key in ("version", "nights", "adults", "children", "budgetMaxRub"):
@@ -115,7 +118,7 @@ def validate_vk_trip(payload):
     else:
         normalized_payload = payload
     info = validate_trip_request(normalized_payload)
-    info.update(source="vk_mini_app")
+    info.update(source="vk_mini_app", terms_accepted=True)
     return info
 
 
