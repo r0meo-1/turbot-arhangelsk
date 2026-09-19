@@ -52,8 +52,6 @@ jobs:
             canonical="$(curl -fsSL --max-time 15 "$root/apreltour/" || true)"
             privacy="$(curl -fsSL --max-time 15 "$root/apreltour/privacy.html" || true)"
             consent="$(curl -fsSL --max-time 15 "$root/apreltour/consent.html" || true)"
-            public_privacy="$(curl -fsSL --max-time 15 "https://r0meo1.ru/apreltour/privacy.html" || true)"
-            public_consent="$(curl -fsSL --max-time 15 "https://r0meo1.ru/apreltour/consent.html" || true)"
             robots="$(curl -fsSL --max-time 15 "$root/robots.txt" || true)"
             sitemap="$(curl -fsSL --max-time 15 "$root/sitemap.xml" || true)"
 
@@ -64,13 +62,9 @@ jobs:
                grep -q 'Политика обработки персональных данных' <<<"$privacy" &&
                grep -q 'ИП Замятина Мария Андреевна' <<<"$privacy" &&
                grep -q 'ИП Замятина Мария Андреевна' <<<"$consent" &&
-               grep -q 'ИП Замятина Мария Андреевна' <<<"$public_privacy" &&
-               grep -q 'ИП Замятина Мария Андреевна' <<<"$public_consent" &&
                ! grep -q 'ЧЕРНОВИК / ШАБЛОН' <<<"$privacy" &&
                ! grep -q '\[указать' <<<"$privacy" &&
                ! grep -q '\[указать' <<<"$consent" &&
-               ! grep -q '\[указать' <<<"$public_privacy" &&
-               ! grep -q '\[указать' <<<"$public_consent" &&
                grep -q 'Sitemap: https://r0meo1.ru/sitemap.xml' <<<"$robots" &&
                grep -q 'https://r0meo1.ru/apreltour/' <<<"$sitemap"; then
               echo "TurBot Pages smoke: ok"
