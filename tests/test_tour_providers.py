@@ -121,6 +121,24 @@ class FakeSletatSession:
                     "IsError": False,
                 }
             })
+        if url.endswith("/ActualizePrice"):
+            actual = [None] * 40
+            actual[12] = "True"
+            actual[13] = 0
+            actual[19] = 225500
+            actual[21] = "RUB"
+            return FakeResponse({
+                "ActualizePriceResult": {
+                    "Data": {
+                        "isError": False,
+                        "isFound": True,
+                        "buyOnlineAvailabilityStatus": 1,
+                        "randomNumber": 83120,
+                        "data": actual,
+                    },
+                    "IsError": False,
+                }
+            })
         if url.endswith("/GetTours") and int(params.get("updateResult") or 0) == 1:
             return FakeResponse({
                 "GetToursResult": {
@@ -275,6 +293,8 @@ def test_router_prefers_configured_sletat_even_with_legacy_order(monkeypatch):
     assert settings.enabled_names()[0] == "sletat"
     assert provider == "sletat"
     assert result.offers == [expected]
+    assert result.offers[0].provider == "sletat"
+    assert result.offers[0].provider_search_id == 11
 
 
 def test_router_falls_through_from_travelata_to_tourvisor(monkeypatch):
@@ -314,6 +334,8 @@ def test_router_falls_through_from_travelata_to_tourvisor(monkeypatch):
 
     assert provider == "tourvisor"
     assert result.offers == [expected]
+    assert result.offers[0].provider == "tourvisor"
+    assert result.offers[0].provider_search_id == 7
 
 
 def test_router_has_no_fake_offer_when_no_provider_is_configured():
@@ -329,3 +351,63 @@ def test_router_has_no_fake_offer_when_no_provider_is_configured():
     assert provider == ""
     assert result.offers == []
     assert "не настроен" in result.error.lower()
+
+
+
+def test_sletat_actualize_price_uses_offer_provenance():
+    session = FakeSletatSession()
+    settings = sletat.SletatSettings(
+        enabled=True,
+        login="agency",
+        password="secret",
+    )
+    offer = {
+        "tour_id": "sletat:4:1792097464",
+        "provider": "sletat",
+        "provider_search_id": 321,
+        "price": 219000,
+        "fuel_charge": 0,
+        "currency": "RUB",
+    }
+
+    actual = sletat.actualize_tour(settings, session, offer)
+
+    assert actual["confirmed"] is True
+    assert actual["status"] == "available"
+    assert actual["total_price"] == 225500
+    assert actual["currency"] == "RUB"
+    assert "Места в отеле есть" in actual["hotel_status"]
+
+    call = next(call for call in session.calls if call[0].endswith("/ActualizePrice"))
+    params = call[1]["params"]
+    assert params["requestId"] == 321
+    assert params["sourceId"] == "4"
+    assert params["offerId"] == "1792097464"
+    assert params["currencyAlias"] == "RUB"
+    assert params["showcase"] == 0
+    assert params["detailed"] == 1
+    assert params["login"] == "agency"
+    assert params["password"] == "secret"
+
+
+def test_sletat_actualize_refuses_offer_without_search_provenance():
+    session = FakeSletatSession()
+    settings = sletat.SletatSettings(
+        enabled=True,
+        login="agency",
+        password="secret",
+    )
+
+    actual = sletat.actualize_tour(
+        settings,
+        session,
+        {
+            "tour_id": "sletat:4:1792097464",
+            "price": 219000,
+            "currency": "RUB",
+        },
+    )
+
+    assert actual["confirmed"] is False
+    assert actual["status"] == "unknown"
+    assert not any(call[0].endswith("/ActualizePrice") for call in session.calls)
