@@ -909,6 +909,27 @@ def test_vk_admin_funnel_command_is_aggregate(client, monkeypatch):
     assert "Старты формы сайта" not in body
 
 
+def test_vk_admin_providers_command_is_safe(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        bot._provider_status,
+        "format_report",
+        lambda: "🧭 Провайдеры туров\nАвтопоиск: 🔴 недоступен",
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda uid, text, **kwargs: sent.append((uid, text)),
+    )
+
+    response = _post(client, bot.ADMIN_ID, "провайдеры")
+
+    assert response.status_code == 200
+    assert len(sent) == 1
+    assert sent[0][0] == bot.ADMIN_ID
+    assert "Провайдеры туров" in sent[0][1]
+
+
 def test_admin_crm_status_is_pii_free(client, monkeypatch):
     monkeypatch.setattr(bot, "MDT_ENABLED", True)
     monkeypatch.setattr(bot, "MDT_MODE", "preorder")

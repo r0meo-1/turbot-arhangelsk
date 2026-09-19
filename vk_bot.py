@@ -69,6 +69,7 @@ from shared import tour_providers as _tour_providers
 from shared import version as _version
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
+from shared import provider_status as _provider_status
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -4070,6 +4071,9 @@ def _process_message(message: Dict[str, Any]) -> None:
                     max_sources=10,
                 ),
             )
+            return
+        if text_lower in ("провайдеры", "providers"):
+            send_message(user_id, _provider_status.format_report())
             return
         if command == "help":
             send_message(user_id, USER_HELP)

@@ -68,6 +68,7 @@ from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
+from shared import provider_status as _provider_status
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
@@ -557,6 +558,7 @@ ADMIN_HELP = (
     "/restart — сбросить все активные сессии\n"
     "/analytics — общая аналитика (заявки, направления, партнёры)\n"
     "/funnel — источники → лиды → доставка менеджеру за 30 дней\n"
+    "/providers — статус Sletat / Travelata / Tourvisor\n"
     "/partners [дни] [reload] — партнёрские переходы, брони и доход\n"
     "/export — экспорт завершённых заявок\n"
     "/followup — напоминания незавершившим\n"
@@ -2610,6 +2612,11 @@ def _admin_funnel(chat_id: int, arg: str) -> bool:
     return True
 
 
+def _admin_providers(chat_id: int, arg: str) -> bool:
+    send_message(chat_id, _provider_status.format_report())
+    return True
+
+
 def _admin_ai_stats(chat_id: int, arg: str) -> bool:
     metrics = ai_chat_metrics_snapshot()
     if not metrics:
@@ -3169,6 +3176,7 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/stats":        _admin_stats,
     "/analytics":    _admin_analytics,
     "/funnel":       _admin_funnel,
+    "/providers":    _admin_providers,
     "/partners":     _admin_partners,
     "/export":       _admin_export,
     "/restart":      _admin_restart,
