@@ -42,6 +42,7 @@ _RATE_WINDOW_SECONDS = max(60, int(os.getenv("WEBSITE_LEAD_RATE_WINDOW_SECONDS",
 _WORKER_ENABLED = os.getenv("WEBSITE_LEAD_WORKER_ENABLED", "true").lower().strip() in {
     "1", "true", "yes", "on"
 }
+_AGENT_EXTENSION_TOKEN = os.getenv("AGENT_EXTENSION_TOKEN", "").strip()
 
 _rate_lock = threading.Lock()
 _rate_hits: Dict[str, List[float]] = {}
@@ -116,6 +117,41 @@ def _origin() -> str:
 
 def _origin_allowed() -> bool:
     return _origin() in _ALLOWED_ORIGINS
+
+
+def _agent_origin() -> str:
+    return request.headers.get("Origin", "").strip().rstrip("/")
+
+
+def _agent_extension_origin_allowed() -> bool:
+    origin = _agent_origin()
+    return origin.startswith(("chrome-extension://", "extension://", "edge-extension://"))
+
+
+def _agent_json_response(body: Dict[str, Any], status: int = 200) -> Response:
+    response = jsonify(body)
+    response.status_code = status
+    origin = _agent_origin()
+    if _agent_extension_origin_allowed():
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Vary"] = "Origin"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Max-Age"] = "600"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _agent_extension_authorized() -> bool:
+    if not _AGENT_EXTENSION_TOKEN:
+        return False
+    raw = request.headers.get("Authorization", "").strip()
+    scheme, _, value = raw.partition(" ")
+    return (
+        scheme.casefold() == "bearer"
+        and bool(value)
+        and secrets.compare_digest(value.strip(), _AGENT_EXTENSION_TOKEN)
+    )
 
 
 def _json_response(body: Dict[str, Any], status: int = 200) -> Response:
@@ -320,6 +356,22 @@ def _owner_notification_text(lead_id: int, payload: Dict[str, Any]) -> str:
             payload.get("utm_campaign", ""),
         ) if value
     )
+    candidates = payload.get("agent_candidates") or []
+    candidate_lines = []
+    for index, candidate in enumerate(candidates[:10], 1):
+        if not isinstance(candidate, dict):
+            continue
+        title = str(candidate.get("title") or "Тур").strip()
+        url = str(candidate.get("url") or "").strip()
+        selection = str(candidate.get("selection") or "").strip()
+        detail = " · ".join(value for value in (title, selection[:240], url) if value)
+        if detail:
+            candidate_lines.append(f"{index}. {detail}")
+    candidate_block = (
+        "\n\n📌 Кандидаты из Agent Desk:\n" + "\n".join(candidate_lines)
+        if candidate_lines else ""
+    )
+
     return (
         f"🌐 Новая заявка с сайта\n"
         f"👩‍💼 Владелец: {_bot.LEAD_OWNER_NAME}\n"
@@ -336,6 +388,7 @@ def _owner_notification_text(lead_id: int, payload: Dict[str, Any]) -> str:
         + f"Tourvisor PRO: {_bot.MANAGER_TOURVISOR_URL}\n"
         + f"Sletat PRO: {_bot.MANAGER_SLETAT_URL}\n"
         + f"Qui-Quo: {_bot.MANAGER_QUIQUO_URL}"
+        + candidate_block
     )
 
 
@@ -540,6 +593,66 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
             if row:
                 return int(row[0]), True
             raise exc
+
+
+if "agent_extension_lead" not in app.view_functions:
+
+    @app.route("/agent-extension/lead", methods=["POST", "OPTIONS"])
+    def agent_extension_lead() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        if _bot.DEMO_MODE:
+            return _agent_json_response({"ok": False, "error": "leads_disabled"}, 503)
+        if not request.is_json:
+            return _agent_json_response({"ok": False, "error": "json_required"}, 415)
+        if not _rate_allowed("agent:" + _client_key()):
+            return _agent_json_response({"ok": False, "error": "rate_limited"}, 429)
+
+        raw = request.get_json(silent=True)
+        payload, error = _validate_payload(raw)
+        if error:
+            return _agent_json_response({"ok": False, "error": error}, 400)
+        assert payload is not None
+
+        candidates = []
+        for item in (raw.get("candidates") or [])[:10]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                title = _safe_text(item.get("title"), 180)
+                url = _safe_text(item.get("url"), 1000)
+                selection = _safe_text(item.get("selection"), 1200)
+            except ValueError:
+                continue
+            if title or url or selection:
+                candidates.append(
+                    {"title": title, "url": url, "selection": selection}
+                )
+
+        payload["agent_candidates"] = candidates
+        payload["utm_source"] = "agent_extension"
+        payload["utm_medium"] = "browser_sidepanel"
+        payload["utm_content"] = _safe_text(raw.get("active_service"), 80)
+
+        lead_id, duplicate = _store_lead(payload)
+        if not duplicate:
+            _kick_delivery(lead_id, payload)
+        return _agent_json_response(
+            {
+                "ok": True,
+                "leadId": lead_id,
+                "status": "accepted",
+                "duplicate": duplicate,
+            },
+            200 if duplicate else 202,
+        )
 
 
 if "website_lead" not in app.view_functions:
