@@ -20,10 +20,12 @@ def generate_ai_selection(
     ai_mode: str = "template",
     groq_client: Any = None,
     groq_model: str = "openai/gpt-oss-120b",
+    regcloud_client: Any = None,
+    regcloud_model: str = "gemma-4-26b-a4b-it",
     timeout: float = 20.0,
     log: Optional[logging.Logger] = None,
 ) -> str:
-    """Generate a tour blurb via Groq or fall back to templates."""
+    """Generate a tour blurb via an opt-in provider or templates."""
     log = log or logger
     mode = (ai_mode or "template").lower().strip()
 
@@ -31,12 +33,14 @@ def generate_ai_selection(
         log.info("Template selection generated for '%s'", destination)
         return template_selection(destination, dates, people, budget)
 
-    if mode != "groq":
+    if mode not in ("groq", "regcloud"):
         log.warning("Unknown AI mode '%s' — using template fallback", mode)
         return template_selection(destination, dates, people, budget)
 
-    if not groq_client:
-        log.warning("Groq client unavailable — using template fallback")
+    provider_client = groq_client if mode == "groq" else regcloud_client
+    provider_model = groq_model if mode == "groq" else regcloud_model
+    if not provider_client:
+        log.warning("%s client unavailable — using template fallback", mode)
         return template_selection(destination, dates, people, budget)
 
     try:
@@ -56,8 +60,8 @@ def generate_ai_selection(
             "- Что обычно полезно взять с собой\n\n"
             "Не называй конкретные отели и не добавляй непроверенные коммерческие факты."
         )
-        response = groq_client.chat.completions.create(
-            model=groq_model,
+        response = provider_client.chat.completions.create(
+            model=provider_model,
             messages=[
                 {"role": "system", "content": TRAVEL_ASSISTANT_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},

@@ -32,6 +32,10 @@ try:
     from groq import Groq
 except ImportError:  # groq may not be installed in all environments
     Groq = None  # type: ignore
+try:
+    from openai import OpenAI
+except ImportError:  # openai may not be installed in all environments
+    OpenAI = None  # type: ignore
 
 from shared.constants import (
     STATE_BUDGET,
@@ -118,6 +122,9 @@ VK_API_BASE          = "https://api.vk.com/method/"
 
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+REGCLOUD_API_KEY  = os.getenv("REGCLOUD_API_KEY", "")
+REGCLOUD_BASE_URL = os.getenv("REGCLOUD_BASE_URL", "https://ai.reg.cloud/v1").rstrip("/")
+REGCLOUD_MODEL    = os.getenv("REGCLOUD_MODEL", "gemma-4-26b-a4b-it")
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 PORT              = _env_int("VK_PORT", _env_int("PORT", 5100))
 DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", os.getenv("DATABASE_PATH", "vk_bot_state.sqlite"))
@@ -448,6 +455,10 @@ HINT_START = "Чтобы подобрать тур, напишите «Нача�
 # ---------------------------------------------------------------------------
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY and Groq else None
+regcloud_client = (
+    OpenAI(api_key=REGCLOUD_API_KEY, base_url=REGCLOUD_BASE_URL)
+    if REGCLOUD_API_KEY and OpenAI else None
+)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP session
@@ -1651,6 +1662,8 @@ def generate_ai_selection(destination: str, dates: str, people: str, budget: str
         ai_mode=AI_MODE,
         groq_client=groq_client,
         groq_model=GROQ_MODEL,
+        regcloud_client=regcloud_client,
+        regcloud_model=REGCLOUD_MODEL,
         log=logger,
     )
 

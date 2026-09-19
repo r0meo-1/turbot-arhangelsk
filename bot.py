@@ -21,6 +21,10 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from groq import Groq
+try:
+    from openai import OpenAI
+except ImportError:  # openai may not be installed in every test environment
+    OpenAI = None  # type: ignore
 
 from shared.constants import (
     STATE_BUDGET,
@@ -128,6 +132,9 @@ BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
 ADMIN_ID          = _env_int("ADMIN_ID", 0)
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+REGCLOUD_API_KEY  = os.getenv("REGCLOUD_API_KEY", "")
+REGCLOUD_BASE_URL = os.getenv("REGCLOUD_BASE_URL", "https://ai.reg.cloud/v1").rstrip("/")
+REGCLOUD_MODEL    = os.getenv("REGCLOUD_MODEL", "gemma-4-26b-a4b-it")
 # External AI is opt-in. If AI_MODE is absent, deterministic templates win.
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 AI_CHAT_ENABLED   = os.getenv("AI_CHAT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
@@ -556,6 +563,10 @@ CB_ADMIN_REPLY_PREFIX = "ar:"
 # ---------------------------------------------------------------------------
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+regcloud_client = (
+    OpenAI(api_key=REGCLOUD_API_KEY, base_url=REGCLOUD_BASE_URL)
+    if REGCLOUD_API_KEY and OpenAI else None
+)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP session with retries for Telegram API calls
@@ -2217,6 +2228,8 @@ def generate_ai_selection(destination: str, dates: str, people: str, budget: str
         ai_mode=AI_MODE,
         groq_client=groq_client,
         groq_model=GROQ_MODEL,
+        regcloud_client=regcloud_client,
+        regcloud_model=REGCLOUD_MODEL,
         log=logger,
     )
 
