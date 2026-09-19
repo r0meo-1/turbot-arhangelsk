@@ -79,7 +79,10 @@ def _init_schema() -> None:
                 owner_status TEXT NOT NULL DEFAULT 'pending',
                 owner_attempts INTEGER NOT NULL DEFAULT 0,
                 owner_next_retry_at INTEGER,
-                owner_notified_at INTEGER
+                owner_notified_at INTEGER,
+                crm_status TEXT NOT NULL DEFAULT 'new',
+                crm_note TEXT NOT NULL DEFAULT '',
+                crm_updated_at INTEGER
             )
             """
         )
@@ -90,6 +93,9 @@ def _init_schema() -> None:
             "owner_attempts": "INTEGER NOT NULL DEFAULT 0",
             "owner_next_retry_at": "INTEGER",
             "owner_notified_at": "INTEGER",
+            "crm_status": "TEXT NOT NULL DEFAULT 'new'",
+            "crm_note": "TEXT NOT NULL DEFAULT ''",
+            "crm_updated_at": "INTEGER",
         }
         for name, ddl in migrations.items():
             if name not in columns:
@@ -135,7 +141,7 @@ def _agent_json_response(body: Dict[str, Any], status: int = 200) -> Response:
     if _agent_extension_origin_allowed():
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
-        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         response.headers["Access-Control-Max-Age"] = "600"
     response.headers["Cache-Control"] = "no-store"
@@ -593,6 +599,117 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
             if row:
                 return int(row[0]), True
             raise exc
+
+
+if "agent_extension_leads" not in app.view_functions:
+
+    @app.route("/agent-extension/leads", methods=["GET", "OPTIONS"])
+    def agent_extension_leads() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+
+        try:
+            limit = max(1, min(int(request.args.get("limit", "30")), 100))
+        except (TypeError, ValueError):
+            limit = 30
+
+        with _bot._db_cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, phone, destination, origin, dates, people, budget,
+                       created_at, owner_status, crm_status, crm_note, crm_updated_at,
+                       mdt_payload
+                FROM website_leads
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+        leads = []
+        for row in rows:
+            candidates = []
+            try:
+                stored = json.loads(row[13] or "{}")
+                candidates = stored.get("agent_candidates") or []
+            except (TypeError, ValueError, json.JSONDecodeError):
+                candidates = []
+            leads.append({
+                "id": int(row[0]),
+                "name": str(row[1] or ""),
+                "phone": str(row[2] or ""),
+                "destination": str(row[3] or ""),
+                "origin": str(row[4] or ""),
+                "dates": str(row[5] or ""),
+                "people": str(row[6] or ""),
+                "budget": int(row[7] or 0),
+                "createdAt": int(row[8] or 0),
+                "ownerStatus": str(row[9] or ""),
+                "status": str(row[10] or "new"),
+                "note": str(row[11] or ""),
+                "updatedAt": int(row[12] or 0),
+                "candidateCount": len(candidates) if isinstance(candidates, list) else 0,
+            })
+        return _agent_json_response({"ok": True, "leads": leads})
+
+
+if "agent_extension_status" not in app.view_functions:
+
+    @app.route("/agent-extension/status", methods=["POST", "OPTIONS"])
+    def agent_extension_status() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        if not request.is_json:
+            return _agent_json_response({"ok": False, "error": "json_required"}, 415)
+
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+        try:
+            lead_id = int(raw.get("leadId") or 0)
+        except (TypeError, ValueError):
+            lead_id = 0
+        status = str(raw.get("status") or "").strip().lower()
+        allowed = {"new", "working", "waiting", "won", "lost"}
+        if lead_id <= 0 or status not in allowed:
+            return _agent_json_response({"ok": False, "error": "invalid_status"}, 400)
+        try:
+            note = _safe_text(raw.get("note"), 500)
+        except ValueError:
+            return _agent_json_response({"ok": False, "error": "note_too_long"}, 400)
+
+        now = int(time.time())
+        with _bot._db_cursor(commit=True) as cur:
+            cur.execute(
+                """
+                UPDATE website_leads
+                SET crm_status=?, crm_note=?, crm_updated_at=?
+                WHERE id=?
+                """,
+                (status, note, now, lead_id),
+            )
+            changed = int(cur.rowcount or 0)
+        if not changed:
+            return _agent_json_response({"ok": False, "error": "lead_not_found"}, 404)
+        return _agent_json_response({
+            "ok": True,
+            "leadId": lead_id,
+            "status": status,
+            "updatedAt": now,
+        })
 
 
 if "agent_extension_lead" not in app.view_functions:
