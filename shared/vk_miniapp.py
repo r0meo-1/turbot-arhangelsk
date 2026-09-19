@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import hmac
+import os
 import time
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
@@ -133,9 +134,26 @@ def create_blueprint(save_draft, settings):
     def index():
         return send_from_directory(static, "index.html")
 
+    @bp.get("/vk/miniapp/legal.json")
+    def legal_config():
+        return jsonify(
+            operatorName=os.getenv("DATA_OPERATOR_NAME", "ТА «АПРЕЛЬ тур»").strip() or "ТА «АПРЕЛЬ тур»",
+            privacyContact=os.getenv(
+                "DATA_OPERATOR_CONTACT",
+                "сообщения сообщества «Апрель Тур» во ВКонтакте",
+            ).strip() or "сообщения сообщества «Апрель Тур» во ВКонтакте",
+            projectUrl=os.getenv(
+                "PUBLIC_PROJECT_URL",
+                "https://r0meo1.ru/apreltour/",
+            ).strip() or "https://r0meo1.ru/apreltour/",
+        )
+
     @bp.get("/vk/miniapp/<name>")
     def asset(name):
-        if name not in ("app.js", "styles.css", "vk-bridge.js", "privacy.html"):
+        if name not in (
+            "app.js", "styles.css", "vk-bridge.js", "legal.js",
+            "privacy.html", "consent.html", "terms.html", "moderation.html",
+        ):
             return jsonify(ok=False), 404
         return send_from_directory(static, name)
 
