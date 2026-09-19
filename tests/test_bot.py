@@ -48,6 +48,7 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM leads")
         cur.execute("DELETE FROM partner_clicks")
         cur.execute("DELETE FROM ai_chat_metrics")
+        cur.execute("DELETE FROM acquisition_funnel_events")
     bot._seen_update_ids.clear()
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
@@ -313,6 +314,8 @@ def test_health_endpoint(client):
     assert "bot_token_configured" not in data
     assert data["mdt_retry"]["available"] is True
     assert data["mdt_retry"]["pending"] == 0
+    assert data["acquisition_funnel"]["available"] is True
+    assert "channels" in data["acquisition_funnel"]
     assert "travelpayouts_stats" in data
     assert "configured" in data["travelpayouts_stats"]
     assert "status" in data["travelpayouts_stats"]
@@ -2496,6 +2499,13 @@ def test_campaign_source_survives_restart_completion_and_manager_handoff(client,
     ]
     assert lead_msgs
     assert "video_pain" in lead_msgs[-1]["text"]
+
+    funnel = bot._funnel_health()
+    source = funnel["channels"]["telegram"]["video_pain"]
+    assert source["start"]["opened"] >= 1
+    assert source["lead"]["accepted"] == 1
+    assert source["manager"]["delivered"] == 1
+    assert source["summary"]["lead_to_manager_pct"] == 100.0
 
 
 
