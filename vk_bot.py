@@ -74,6 +74,7 @@ from shared.validation import (
 )
 from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
+from shared.log_privacy import correlation_id as _log_correlation
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared import mdt as mdt_shared
 
@@ -805,7 +806,7 @@ def _load_miniapp_snapshot(chat_id: int) -> Optional[Dict[str, Any]]:
     try:
         payload = json.loads(row[0])
     except (TypeError, ValueError):
-        logger.warning("Invalid Mini App snapshot for chat_id=%s", chat_id)
+        logger.warning("Invalid Mini App snapshot for %s", _log_correlation(chat_id, namespace="vk-user"))
         return None
     if not isinstance(payload, dict):
         return None
@@ -984,12 +985,12 @@ def _notify_ops_alert(message: str, *, alert_key: str) -> bool:
             delivered = delivered or resp.status_code == 200
             if resp.status_code != 200:
                 logger.warning(
-                    "VK ops alert failed for Telegram chat %s: HTTP %s",
-                    recipient,
+                    "VK ops alert failed for Telegram manager %s: HTTP %s",
+                    _log_correlation(recipient, namespace="tg-manager"),
                     resp.status_code,
                 )
         except Exception as exc:
-            logger.warning("VK ops alert failed for Telegram chat %s: %s", recipient, exc)
+            logger.warning("VK ops alert failed for Telegram manager %s: %s", _log_correlation(recipient, namespace="tg-manager"), exc)
     return delivered
 
 
@@ -3433,14 +3434,14 @@ def _notify_admin_telegram(
                 timeout=HTTP_TIMEOUT,
             )
             if resp.status_code == 200:
-                logger.info("VK lead from %s delivered to Telegram chat %s", user_id, recipient)
+                logger.info("VK lead from %s delivered to Telegram manager %s", _log_correlation(user_id, namespace="vk-user"), _log_correlation(recipient, namespace="tg-manager"))
             else:
                 logger.error(
                     "Telegram notify failed for %s→%s: %s",
-                    user_id, recipient, resp.text[:200],
+                    _log_correlation(user_id, namespace="vk-user"), _log_correlation(recipient, namespace="tg-manager"), resp.text[:200],
                 )
         except Exception as exc:
-            logger.error("Telegram notify error for VK lead %s: %s", user_id, exc)
+            logger.error("Telegram notify error for VK lead %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
 
 def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
