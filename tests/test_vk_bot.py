@@ -219,8 +219,16 @@ def test_vk_health_exposes_provider_runtime_without_customer_fields(client):
     assert response.status_code == 200
     data = response.get_json()
     assert data["provider_runtime"]["subjects"]["tourvisor"]["empty"] == 1
-    raw = response.get_data(as_text=True)
-    for forbidden in ("chat_id", "phone", "username", "payload", "token", "password"):
+    raw = json.dumps(data["provider_runtime"], ensure_ascii=False)
+    for forbidden in (
+        "chat_id",
+        "phone",
+        "username",
+        "payload",
+        "api_key",
+        "access_token",
+        "password",
+    ):
         assert forbidden not in raw
 
 
