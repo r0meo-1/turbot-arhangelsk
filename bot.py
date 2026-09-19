@@ -4259,6 +4259,11 @@ def health() -> Any:
         "bot_mode": BOT_MODE,
         "mdt_retry": _mdt_retry_health(now),
         "travelpayouts_stats": _travelpayouts_stats.health_snapshot(now=now),
+        "ai_selection": {
+            "mode": AI_MODE,
+            "ready": selection_ai_provider.ready,
+            "model": selection_ai_provider.model or None,
+        },
     })
     # 503 rather than 200-with-a-sad-field: monitoring reads status codes, and
     # a body nobody parses is how the last two outages stayed invisible.
