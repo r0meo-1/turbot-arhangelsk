@@ -2725,3 +2725,104 @@ def test_health_exposes_lead_assist_flag_without_provider_secret(client, monkeyp
     raw = response.get_data(as_text=True)
     assert "REGCLOUD_API_KEY" not in raw
     assert "REGCLOUD_BASE_URL" not in raw
+
+
+def test_plain_post_lead_question_uses_ai_without_starting_new_funnel(client, monkeypatch):
+    chat_id = 99104
+    bot.save_lead(
+        chat_id,
+        {
+            "destination": "Таиланд",
+            "origin": "Москва",
+            "dates": "2027-01-19",
+            "nights": 10,
+            "people": "2",
+            "budget": 270000,
+            "budget_scope": "total",
+        },
+        "+79991234567",
+    )
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    called = []
+    monkeypatch.setattr(
+        bot,
+        "_handle_lead_assist",
+        lambda cid, question: called.append((cid, question)) or True,
+    )
+
+    response = _post(client, chat_id, "Что взять с собой в Таиланд?")
+
+    assert response.status_code == 200
+    assert called == [(chat_id, "Что взять с собой в Таиланд?")]
+    assert chat_id not in bot.user_data
+
+
+def test_plain_post_lead_change_request_goes_to_manager_not_model(client, monkeypatch):
+    chat_id = 99105
+    bot.save_lead(
+        chat_id,
+        {
+            "destination": "Таиланд",
+            "origin": "Москва",
+            "dates": "2027-01-19",
+            "people": "2",
+            "budget": 270000,
+        },
+        "+79991234567",
+    )
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    escalated = []
+    model_calls = []
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "_notify_lead_assist_handoff",
+        lambda cid, question, reason: escalated.append((cid, question, reason)),
+    )
+    monkeypatch.setattr(
+        bot,
+        "_handle_lead_assist",
+        lambda *args, **kwargs: model_calls.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text)) or _OkResp(),
+    )
+
+    response = _post(client, chat_id, "Хочу поменять даты на февраль")
+
+    assert response.status_code == 200
+    assert model_calls == []
+    assert escalated == [
+        (chat_id, "Хочу поменять даты на февраль", "customer_requested_manager_or_lead_change")
+    ]
+    assert any("Передал это менеджеру" in text for _, text in sent)
+
+
+def test_plain_post_lead_thanks_is_cheap_deterministic_reply(client, monkeypatch):
+    chat_id = 99106
+    bot.save_lead(
+        chat_id,
+        {"destination": "Таиланд", "people": "2", "budget": 270000},
+        "+79991234567",
+    )
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    model_calls = []
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "_handle_lead_assist",
+        lambda *args, **kwargs: model_calls.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text)) or _OkResp(),
+    )
+
+    response = _post(client, chat_id, "Спасибо")
+
+    assert response.status_code == 200
+    assert model_calls == []
+    assert any("Заявка уже у менеджера" in text for _, text in sent)
