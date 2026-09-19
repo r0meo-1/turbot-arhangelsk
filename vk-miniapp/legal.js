@@ -1,7 +1,7 @@
 (async () => {
   const fallback = {
     operatorName: 'ТА «АПРЕЛЬ тур»',
-    privacyContact: 'сообщения сообщества «Апрель Тур» во ВКонтакте',
+    privacyContact: 'Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584',
     projectUrl: 'https://r0meo1.ru/apreltour/'
   };
   let config = fallback;
