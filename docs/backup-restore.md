@@ -57,7 +57,16 @@ Do not overwrite a running database.
    sudo test ! -f /opt/turbot/vk_bot_state.sqlite || \
      sudo cp -a /opt/turbot/vk_bot_state.sqlite /opt/turbot/incident/vk_bot_state.failed.sqlite
    ```
-5. Copy the selected verified backup to a temporary restore name, run `PRAGMA integrity_check`, then atomically replace the failed live file.
+5. Restore the selected **main** backup through a temporary file, verify it again, then replace the failed live file:
+   ```bash
+   BACKUP=/opt/turbot/backups/bot_state_YYYYMMDD_HHMMSS.sqlite
+   sudo install -m 600 -o turbot -g turbot "$BACKUP" /opt/turbot/bot_state.sqlite.restore
+   test "$(sudo sqlite3 /opt/turbot/bot_state.sqlite.restore 'PRAGMA integrity_check;')" = "ok"
+   sudo mv -f /opt/turbot/bot_state.sqlite.restore /opt/turbot/bot_state.sqlite
+   ```
+   If the VK database exists, repeat the same procedure with the selected
+   `vk_bot_state_*.sqlite` backup and
+   `/opt/turbot/vk_bot_state.sqlite.restore`.
 6. Restore ownership and permissions:
    ```bash
    sudo chown turbot:turbot /opt/turbot/bot_state.sqlite
