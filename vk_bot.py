@@ -2691,6 +2691,76 @@ def _budget_summary(info: Dict[str, Any]) -> str:
     return f"{prefix}{amount} ₽{suffix}"
 
 
+def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
+    with _lock:
+        live = user_data.get(user_id)
+        selected = dict((live or {}).get("selected_tour") or {})
+        if (
+            live is None
+            or live.get("state") != STATE_REVIEW
+            or str(selected.get("tour_id") or "") != str(tour_id or "")
+        ):
+            return
+
+    actual = _tour_providers.actualize_offer(
+        _tour_provider_settings(), http_session, selected, log=logger,
+    )
+
+    with _lock:
+        live = user_data.get(user_id)
+        current = dict((live or {}).get("selected_tour") or {})
+        if (
+            live is None
+            or live.get("state") != STATE_REVIEW
+            or str(current.get("tour_id") or "") != str(tour_id or "")
+        ):
+            return
+
+        confirmed = bool(actual.get("confirmed"))
+        total_price = int(actual.get("total_price") or 0)
+        if confirmed and total_price > 0:
+            current["price"] = total_price
+            current["fuel_charge"] = 0
+            current["currency"] = str(actual.get("currency") or current.get("currency") or "RUB")
+        current["actualization_status"] = str(actual.get("status") or "unknown")
+        current["actualization_confirmed"] = confirmed
+        current["actualized_at"] = str(actual.get("actualized_at") or "")
+        live["selected_tour"] = current
+
+        if confirmed and total_price > 0:
+            for key in ("_tour_offers", "_tour_offers_base"):
+                pool = list(live.get(key) or [])
+                for item in pool:
+                    if str(item.get("tour_id") or "") == str(tour_id or ""):
+                        item["price"] = current["price"]
+                        item["fuel_charge"] = 0
+                        item["currency"] = current["currency"]
+                        item["actualization_status"] = current["actualization_status"]
+                        item["actualization_confirmed"] = True
+                        item["actualized_at"] = current["actualized_at"]
+                live[key] = pool
+
+    if actual.get("confirmed"):
+        intro = "✅ Слетать.ру перепроверил выбранный тур."
+        price_line = f"\n💰 Актуализированная цена: {_compact_tour_price(current)} за тур"
+    elif actual.get("status") == "unavailable":
+        intro = "⚠️ При актуализации предложение не подтвердилось."
+        price_line = "\nМенеджер сможет проверить ближайшую альтернативу."
+    else:
+        intro = "ℹ️ Автоматически подтвердить наличие сейчас не удалось."
+        price_line = "\nЦена и наличие остаются предварительными до проверки менеджером."
+
+    send_message(
+        user_id,
+        f"{intro}\n\n{_selected_tour_summary({'selected_tour': current})}\n\n"
+        f"{actual['flight_status']}\n"
+        f"{actual['hotel_status']}"
+        f"{price_line}\n\n"
+        "Можно передать этот вариант Наталье для финальной проверки 👇",
+        keyboard=_selected_tour_keyboard(),
+    )
+
+
 def _select_tour(user_id: int, number: int) -> None:
     with _lock:
         live = user_data.get(user_id)
@@ -2703,13 +2773,36 @@ def _select_tour(user_id: int, number: int) -> None:
     if offer is None:
         send_message(user_id, "Этот вариант уже недоступен. Запустите поиск ещё раз.", keyboard=_review_keyboard())
         return
-    actual = _tourvisor.actualize_tour(offer)
+
+    provider = str(offer.get("provider") or "").lower()
+    if provider == "sletat" and offer.get("provider_search_id"):
+        send_message(
+            user_id,
+            f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
+            "⏳ Перепроверяю цену и наличие в Слетать.ру…",
+            keyboard=_hide_keyboard(),
+        )
+        if SYNC_COMPLETION:
+            _actualize_selected_tour_worker(user_id, str(offer.get("tour_id") or ""))
+        else:
+            threading.Thread(
+                target=_actualize_selected_tour_worker,
+                args=(user_id, str(offer.get("tour_id") or "")),
+                daemon=True,
+                name=f"vk-tour-actualize-{user_id}",
+            ).start()
+        return
+
+    actual = _tour_providers.actualize_offer(
+        _tour_provider_settings(), http_session, offer, log=logger,
+    )
     send_message(
         user_id,
         f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
-        f"⚡ {actual['flight_status']}\n"
-        f"🏨 {actual['hotel_status']}\n\n"
-        "Отправьте заявку менеджеру кнопкой ниже или изучите отель подробнее 👇",
+        f"{actual['flight_status']}\n"
+        f"{actual['hotel_status']}\n\n"
+        "Цена и наличие предварительные до проверки менеджером. "
+        "Можно передать вариант Наталье 👇",
         keyboard=_selected_tour_keyboard(),
     )
 
