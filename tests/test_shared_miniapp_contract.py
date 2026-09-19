@@ -56,3 +56,12 @@ def test_campaign_source_tag_is_canonical_and_bounded():
             pass
         else:
             raise AssertionError(f"unsafe source tag must be rejected: {value!r}")
+
+
+def test_shared_contract_accepts_free_text_destination_and_departure():
+    info = validate_trip_request(_payload(
+        destination="Ко Чанг, Таиланд",
+        departure="Казань",
+    ))
+    assert info["destination"] == "Ко Чанг, Таиланд"
+    assert info["origin"] == "Казань"
