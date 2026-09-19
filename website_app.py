@@ -74,13 +74,32 @@ def _init_schema() -> None:
                 mdt_attempts INTEGER NOT NULL DEFAULT 0,
                 mdt_next_retry_at INTEGER,
                 mdt_synced_at INTEGER,
-                mdt_payload TEXT NOT NULL
+                mdt_payload TEXT NOT NULL,
+                owner_status TEXT NOT NULL DEFAULT 'pending',
+                owner_attempts INTEGER NOT NULL DEFAULT 0,
+                owner_next_retry_at INTEGER,
+                owner_notified_at INTEGER
             )
             """
         )
+        cur.execute("PRAGMA table_info(website_leads)")
+        columns = {str(row[1]) for row in cur.fetchall()}
+        migrations = {
+            "owner_status": "TEXT NOT NULL DEFAULT 'pending'",
+            "owner_attempts": "INTEGER NOT NULL DEFAULT 0",
+            "owner_next_retry_at": "INTEGER",
+            "owner_notified_at": "INTEGER",
+        }
+        for name, ddl in migrations.items():
+            if name not in columns:
+                cur.execute(f"ALTER TABLE website_leads ADD COLUMN {name} {ddl}")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_website_leads_mdt_retry "
             "ON website_leads(mdt_status, mdt_next_retry_at)"
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_website_leads_owner_retry "
+            "ON website_leads(owner_status, owner_next_retry_at)"
         )
 
 
@@ -293,6 +312,82 @@ def _deliver_lead(lead_id: int) -> bool:
     return success
 
 
+def _owner_notification_text(lead_id: int, payload: Dict[str, Any]) -> str:
+    utm = "/".join(
+        value for value in (
+            payload.get("utm_source", ""),
+            payload.get("utm_medium", ""),
+            payload.get("utm_campaign", ""),
+        ) if value
+    )
+    return (
+        f"🌐 Новая заявка с сайта\n"
+        f"👩‍💼 Владелец: {_bot.LEAD_OWNER_NAME}\n"
+        f"ID: web-lead-{int(lead_id)}\n"
+        f"Клиент: {payload['name']}\n"
+        f"Телефон: {payload['phone']}\n"
+        f"Направление: {payload['destination']}\n"
+        f"Вылет: {payload['origin']}\n"
+        f"Даты: {payload['dates']}\n"
+        f"Людей: {payload['people']}\n"
+        f"Бюджет: {int(payload['budget'])} ₽"
+        + (f"\nUTM: {utm}" if utm else "")
+        + "\n\n🔎 Подбор менеджеру:\n"
+        + f"Tourvisor PRO: {_bot.MANAGER_TOURVISOR_URL}\n"
+        + f"Sletat PRO: {_bot.MANAGER_SLETAT_URL}\n"
+        + f"Qui-Quo: {_bot.MANAGER_QUIQUO_URL}"
+    )
+
+
+def _deliver_owner_notification(lead_id: int) -> bool:
+    with _bot._db_cursor() as cur:
+        cur.execute(
+            "SELECT owner_status, owner_attempts, mdt_payload FROM website_leads WHERE id=?",
+            (int(lead_id),),
+        )
+        row = cur.fetchone()
+    if not row:
+        return False
+    if row[0] == "synced":
+        return True
+
+    try:
+        payload = json.loads(row[2])
+        success = bool(_bot.send_lead_owner_vk(_owner_notification_text(lead_id, payload)))
+    except Exception as exc:
+        logger.warning(
+            "Website lead VK owner notification failed for lead %s: %s",
+            lead_id,
+            type(exc).__name__,
+        )
+        success = False
+
+    now = int(time.time())
+    attempts = int(row[1] or 0) + 1
+    with _bot._db_cursor(commit=True) as cur:
+        if success:
+            cur.execute(
+                """
+                UPDATE website_leads
+                SET owner_status='synced', owner_attempts=?,
+                    owner_next_retry_at=NULL, owner_notified_at=?
+                WHERE id=?
+                """,
+                (attempts, now, int(lead_id)),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE website_leads
+                SET owner_status='pending', owner_attempts=?,
+                    owner_next_retry_at=?
+                WHERE id=?
+                """,
+                (attempts, now + _retry_delay(attempts), int(lead_id)),
+            )
+    return success
+
+
 def _notify_managers(lead_id: int, payload: Dict[str, Any]) -> None:
     utm = "/".join(
         value for value in (
@@ -315,27 +410,6 @@ def _notify_managers(lead_id: int, payload: Dict[str, Any]) -> None:
     if utm:
         lines.append(f"UTM: {html.escape(utm)}")
     text = "\n".join(lines)
-    owner_text = (
-        f"🌐 Новая заявка с сайта\n"
-        f"👩‍💼 Владелец: {_bot.LEAD_OWNER_NAME}\n"
-        f"ID: web-lead-{int(lead_id)}\n"
-        f"Клиент: {payload['name']}\n"
-        f"Телефон: {payload['phone']}\n"
-        f"Направление: {payload['destination']}\n"
-        f"Вылет: {payload['origin']}\n"
-        f"Даты: {payload['dates']}\n"
-        f"Людей: {payload['people']}\n"
-        f"Бюджет: {int(payload['budget'])} ₽"
-        + (f"\nUTM: {utm}" if utm else "")
-        + "\n\n🔎 Подбор менеджеру:\n"
-        + f"Tourvisor PRO: {_bot.MANAGER_TOURVISOR_URL}\n"
-        + f"Sletat PRO: {_bot.MANAGER_SLETAT_URL}\n"
-        + f"Qui-Quo: {_bot.MANAGER_QUIQUO_URL}"
-    )
-    try:
-        _bot.send_lead_owner_vk(owner_text)
-    except Exception as exc:
-        logger.warning("Website lead VK owner notification failed: %s", type(exc).__name__)
     for chat_id in _bot.LEAD_NOTIFY_IDS:
         try:
             _bot.send_message(chat_id, text)
@@ -344,6 +418,7 @@ def _notify_managers(lead_id: int, payload: Dict[str, Any]) -> None:
 
 
 def _process_new_lead(lead_id: int, payload: Dict[str, Any]) -> None:
+    _deliver_owner_notification(lead_id)
     _notify_managers(lead_id, payload)
     _deliver_lead(lead_id)
 
@@ -369,22 +444,38 @@ def _cleanup_old_leads() -> None:
 def _retry_worker() -> None:
     while True:
         try:
-            if _bot.MDT_ENABLED and not _bot.DEMO_MODE:
+            if not _bot.DEMO_MODE:
                 now = int(time.time())
                 with _bot._db_cursor() as cur:
                     cur.execute(
                         """
                         SELECT id FROM website_leads
-                        WHERE mdt_status='pending'
-                          AND COALESCE(mdt_next_retry_at, 0) <= ?
+                        WHERE owner_status='pending'
+                          AND COALESCE(owner_next_retry_at, 0) <= ?
                         ORDER BY id
                         LIMIT ?
                         """,
                         (now, int(_bot.MDT_RETRY_BATCH_SIZE)),
                     )
-                    due = [int(row[0]) for row in cur.fetchall()]
-                for lead_id in due:
-                    _deliver_lead(lead_id)
+                    owner_due = [int(row[0]) for row in cur.fetchall()]
+                for lead_id in owner_due:
+                    _deliver_owner_notification(lead_id)
+
+                if _bot.MDT_ENABLED:
+                    with _bot._db_cursor() as cur:
+                        cur.execute(
+                            """
+                            SELECT id FROM website_leads
+                            WHERE mdt_status='pending'
+                              AND COALESCE(mdt_next_retry_at, 0) <= ?
+                            ORDER BY id
+                            LIMIT ?
+                            """,
+                            (now, int(_bot.MDT_RETRY_BATCH_SIZE)),
+                        )
+                        mdt_due = [int(row[0]) for row in cur.fetchall()]
+                    for lead_id in mdt_due:
+                        _deliver_lead(lead_id)
                 _cleanup_old_leads()
         except Exception as exc:
             logger.warning("Website lead retry worker error: %s", type(exc).__name__)
@@ -404,7 +495,7 @@ def _start_worker_once() -> None:
             daemon=True,
             name="website-mdt-retry",
         ).start()
-        logger.info("Website MDT retry worker started")
+        logger.info("Website lead delivery retry worker started")
 
 
 def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
