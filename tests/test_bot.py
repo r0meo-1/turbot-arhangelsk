@@ -2572,3 +2572,8 @@ def test_global_security_headers_on_health_and_privacy(client):
         assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
         assert "camera=()" in response.headers["Permissions-Policy"]
         assert "microphone=()" in response.headers["Permissions-Policy"]
+        assert response.headers["Strict-Transport-Security"] == "max-age=31536000"
+        csp = response.headers["Content-Security-Policy-Report-Only"]
+        assert "default-src 'self'" in csp
+        assert "object-src 'none'" in csp
+        assert "frame-ancestors" not in csp
