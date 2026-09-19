@@ -6,6 +6,37 @@ const fieldIds = ["name","phone","destination","origin","dates","people","budget
 
 const $ = (id) => document.getElementById(id);
 
+const SENSITIVE_QUERY_KEYS = new Set([
+  "token", "accesstoken", "authtoken", "auth", "authorization",
+  "session", "sessionid", "key", "apikey", "secret", "clientsecret",
+  "password", "passwd", "signature", "sign", "code",
+  "authorizationcode", "oauthcode"
+]);
+
+function normalizeQueryKey(key) {
+  return String(key || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function sanitizeCandidateUrl(value) {
+  if (!value) return "";
+  let parsed;
+  try {
+    parsed = new URL(String(value));
+  } catch (_) {
+    return "";
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return "";
+  if (!parsed.hostname || parsed.username || parsed.password) return "";
+
+  parsed.hash = "";
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (SENSITIVE_QUERY_KEYS.has(normalizeQueryKey(key))) {
+      parsed.searchParams.delete(key);
+    }
+  }
+  return parsed.toString();
+}
+
 async function load() {
   const state = await chrome.storage.local.get({
     draft: {},
@@ -48,7 +79,7 @@ function renderCandidates(candidates) {
     const title = document.createElement("strong");
     title.textContent = item.title || "Тур";
     const url = document.createElement("small");
-    url.textContent = item.url || "";
+    url.textContent = sanitizeCandidateUrl(item.url) || "";
     const text = document.createElement("p");
     text.textContent = item.selection || "";
     const remove = document.createElement("button");
@@ -76,7 +107,7 @@ async function captureCurrentPage() {
   candidates.unshift({
     id: crypto.randomUUID(),
     title: tab.title || "Тур",
-    url: tab.url,
+    url: sanitizeCandidateUrl(tab.url),
     selection: "",
     createdAt: Date.now()
   });
@@ -123,6 +154,8 @@ async function sendLead() {
     requestId,
     active_service: activeService,
     candidates: (state.candidates || []).slice(0, 10)
+      .filter((item) => item && typeof item === "object")
+      .map((item) => ({ ...item, url: sanitizeCandidateUrl(item.url) }))
   };
 
   $("send").disabled = true;

@@ -22,6 +22,7 @@ import threading
 import time
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import Response, jsonify, request
 
@@ -121,6 +122,57 @@ def _safe_text(value: Any, max_len: int) -> str:
         raise ValueError("too_long")
     return text
 
+
+
+_SENSITIVE_CANDIDATE_QUERY_KEYS = {
+    "token", "accesstoken", "authtoken", "auth", "authorization",
+    "session", "sessionid", "key", "apikey", "secret", "clientsecret",
+    "password", "passwd", "signature", "sign", "code",
+    "authorizationcode", "oauthcode",
+}
+
+
+def _normalized_query_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _sanitize_candidate_url(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 1000:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+        hostname = parsed.hostname
+        username = parsed.username
+        password = parsed.password
+        pairs = parse_qsl(parsed.query, keep_blank_values=True, max_num_fields=100)
+    except (TypeError, ValueError):
+        return ""
+    if parsed.scheme.casefold() not in {"http", "https"} or not hostname:
+        return ""
+    if username is not None or password is not None:
+        return ""
+
+    filtered = [
+        (key, val)
+        for key, val in pairs
+        if _normalized_query_key(key) not in _SENSITIVE_CANDIDATE_QUERY_KEYS
+    ]
+    return urlunsplit((
+        parsed.scheme.casefold(),
+        parsed.netloc,
+        parsed.path,
+        urlencode(filtered, doseq=True),
+        "",
+    ))
+
+
+def _csv_safe_cell(value: Any) -> str:
+    text = "" if value is None else str(value)
+    significant = text.lstrip()
+    if significant and significant[0] in "=+-@":
+        return "'" + text
+    return text
 
 def _origin() -> str:
     return request.headers.get("Origin", "").strip().rstrip("/")
@@ -711,16 +763,16 @@ if "agent_extension_export" not in app.view_functions:
         for row in rows:
             writer.writerow([
                 int(row[0]),
-                str(row[1] or ""),
-                str(row[2] or ""),
-                str(row[3] or ""),
-                str(row[4] or ""),
-                str(row[5] or ""),
-                str(row[6] or ""),
+                _csv_safe_cell(row[1]),
+                _csv_safe_cell(row[2]),
+                _csv_safe_cell(row[3]),
+                _csv_safe_cell(row[4]),
+                _csv_safe_cell(row[5]),
+                _csv_safe_cell(row[6]),
                 int(row[7] or 0),
-                str(row[8] or "new"),
-                str(row[9] or ""),
-                str(row[10] or ""),
+                _csv_safe_cell(row[8] or "new"),
+                _csv_safe_cell(row[9]),
+                _csv_safe_cell(row[10]),
                 int(row[11] or 0),
                 int(row[12] or 0),
             ])
@@ -826,7 +878,8 @@ if "agent_extension_lead" not in app.view_functions:
                 continue
             try:
                 title = _safe_text(item.get("title"), 180)
-                url = _safe_text(item.get("url"), 1000)
+                raw_url = _safe_text(item.get("url"), 1000)
+                url = _sanitize_candidate_url(raw_url)
                 selection = _safe_text(item.get("selection"), 1200)
             except ValueError:
                 continue
