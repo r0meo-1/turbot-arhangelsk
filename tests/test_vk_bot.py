@@ -61,11 +61,13 @@ def client():
     return bot.app.test_client()
 
 
-def _vk_message(user_id, text=None):
+def _vk_message(user_id, text=None, ref=None):
     """Build a minimal VK message_new event."""
     msg = {"peer_id": user_id, "from_id": user_id}
     if text is not None:
         msg["text"] = text
+    if ref is not None:
+        msg["ref"] = ref
     return {
         "type": "message_new",
         "object": {"message": msg},
@@ -74,9 +76,9 @@ def _vk_message(user_id, text=None):
     }
 
 
-def _post(client, user_id, text=None):
+def _post(client, user_id, text=None, ref=None):
     return client.post("/vk/webhook",
-                       json=_vk_message(user_id, text),
+                       json=_vk_message(user_id, text, ref=ref),
                        content_type="application/json")
 
 
@@ -134,6 +136,106 @@ def test_miniapp_attribution_survives_session_and_lead():
             "SELECT source, vk_ref, vk_platform FROM leads WHERE chat_id=43"
         ).fetchone()
     assert tuple(row) == ("vk_mini_app", "community_messages", "desktop_web")
+
+
+def test_vk_campaign_ref_is_first_touch_and_persists(client):
+    user_id = 47
+
+    _post(client, user_id, "Начать", ref="Video_Pain")
+    assert bot.user_data[user_id]["source_tag"] == "video_pain"
+
+    # Re-entry from another campaign while the lead is active must not rewrite
+    # the original acquisition source.
+    _post(client, user_id, "Начать", ref="Video_Dream")
+    assert bot.user_data[user_id]["source_tag"] == "video_pain"
+
+    bot.set_session(user_id, bot.user_data[user_id])
+    assert bot.get_session(user_id)["source_tag"] == "video_pain"
+
+    info = dict(bot.user_data[user_id])
+    info.update(destination="Вьетнам", dates="1-10 февраля", people="2", budget=270000)
+    lead_id = bot.save_lead(user_id, info, "vk:47", first_name="Roma")
+    assert lead_id > 0
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT source_tag FROM leads WHERE id = ?", (lead_id,)
+        ).fetchone()
+    assert row[0] == "video_pain"
+
+
+def test_vk_referral_message_starts_attributed_flow(client):
+    user_id = 48
+
+    response = _post(client, user_id, "Привет", ref="video_vs")
+
+    assert response.status_code == 200
+    assert bot.user_data[user_id]["state"] == bot.STATE_CONSENT
+    assert bot.user_data[user_id]["source_tag"] == "video_vs"
+
+
+def test_vk_miniapp_preserves_chat_campaign_source():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    user_id = 49
+    bot.user_data[user_id] = {
+        "state": bot.STATE_DESTINATION,
+        "source_tag": "video_pain",
+        "updated_at": int(time.time()),
+    }
+    raw = dict(
+        type="trip_request",
+        version=2,
+        destination="Таиланд",
+        departure="Архангельск",
+        date=(date.today() + timedelta(days=30)).isoformat(),
+        nights=10,
+        adults=2,
+        children=0,
+        childrenAges=[],
+        budgetMaxRub=270000,
+        consent=True, termsAccepted=True,
+    )
+    info = validate_vk_trip(raw)
+    info.update(vk_ref="community_messages", vk_platform="desktop_web")
+
+    bot._save_miniapp_draft(user_id, info)
+
+    saved = bot.get_session(user_id)
+    assert saved["source_tag"] == "video_pain"
+    assert saved["vk_ref"] == "community_messages"
+
+
+def test_vk_manager_notification_includes_campaign_source(monkeypatch):
+    sent = []
+
+    class Response:
+        status_code = 200
+        text = "ok"
+
+    monkeypatch.setenv("BOT_TOKEN", "test-token")
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [777])
+    monkeypatch.setattr(
+        bot.http_session,
+        "post",
+        lambda url, json, timeout: sent.append(json) or Response(),
+    )
+
+    bot._notify_admin_telegram(
+        50,
+        {
+            "source_tag": "video_dream",
+            "destination": "Вьетнам",
+            "dates": "1-10 февраля",
+            "people": "2",
+            "budget": 270000,
+        },
+        "vk:50",
+        "Roma",
+    )
+
+    assert sent
+    assert "Источник: video_dream" in sent[0]["text"]
 
 
 def test_miniapp_draft_ignores_stale_memory_after_persistent_cancel():
