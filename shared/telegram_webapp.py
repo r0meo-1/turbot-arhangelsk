@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 import time
 from datetime import date
 from typing import Any, Dict
@@ -18,6 +19,21 @@ from urllib.parse import parse_qsl
 
 class MiniAppValidationError(ValueError):
     """Raised when Telegram identity or the submitted trip payload is invalid."""
+
+
+_SOURCE_TAG_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def normalise_source_tag(value: Any) -> str:
+    """Return a canonical campaign tag or reject unsafe/unbounded input."""
+    if value is None or value == "":
+        return ""
+    if not isinstance(value, str):
+        raise MiniAppValidationError("source tag is invalid")
+    value = value.strip()
+    if not _SOURCE_TAG_RE.fullmatch(value):
+        raise MiniAppValidationError("source tag is invalid")
+    return value.lower()
 
 
 def validate_init_data(init_data: str, bot_token: str, *, max_age: int = 3600) -> Dict[str, Any]:
@@ -64,6 +80,9 @@ def validate_init_data(init_data: str, bot_token: str, *, max_age: int = 3600) -
     if user_id <= 0:
         raise MiniAppValidationError("user id is invalid")
     user["id"] = user_id
+    source_tag = normalise_source_tag(pairs.get("start_param"))
+    if source_tag:
+        user["_source_tag"] = source_tag
     return user
 
 
