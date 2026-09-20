@@ -2887,8 +2887,27 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
     parts.append(f"💰 {_compact_tour_price(offer)} за тур")
     if offer.get("operator"):
         parts.append(f"Туроператор: {offer['operator']}")
+    provider = str(offer.get("provider") or "").strip().lower()
+    provider_label = {
+        "sletat": "Слетать.ру",
+        "tourvisor": "Tourvisor",
+        "travelata": "Travelata",
+    }.get(provider)
+    if provider_label:
+        parts.append(f"Провайдер: {provider_label}")
     if offer.get("tour_id"):
         parts.append(f"ID предложения: {offer['tour_id']}")
+    actualization_status = str(offer.get("actualization_status") or "").strip().lower()
+    if actualization_status:
+        if offer.get("actualization_confirmed"):
+            actualization_line = "✅ Актуализация: цена и перелёт подтверждены провайдером"
+        elif actualization_status == "unavailable":
+            actualization_line = "🔴 Актуализация: предложение не подтвердилось"
+        else:
+            actualization_line = "🟡 Актуализация: требуется финальная проверка менеджером"
+        if offer.get("actualized_at"):
+            actualization_line += f" ({offer['actualized_at']})"
+        parts.append(actualization_line)
     return "\n".join(parts)
 
 
@@ -2953,8 +2972,14 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
                         item["actualized_at"] = current["actualized_at"]
                 live[key] = pool
 
+    provider = str(current.get("provider") or "").strip().lower()
+    provider_label = {
+        "sletat": "Слетать.ру",
+        "tourvisor": "Tourvisor",
+        "travelata": "Провайдер",
+    }.get(provider, "Провайдер")
     if actual.get("confirmed"):
-        intro = "✅ Слетать.ру перепроверил выбранный тур."
+        intro = f"✅ {provider_label} перепроверил выбранный тур."
         price_line = f"\n💰 Актуализированная цена: {_compact_tour_price(current)} за тур"
     elif actual.get("status") == "unavailable":
         intro = "⚠️ При актуализации предложение не подтвердилось."
@@ -2988,11 +3013,16 @@ def _select_tour(user_id: int, number: int) -> None:
         return
 
     provider = str(offer.get("provider") or "").lower()
-    if provider == "sletat" and offer.get("provider_search_id"):
+    can_live_actualize = (
+        (provider == "sletat" and bool(offer.get("provider_search_id")))
+        or (provider == "tourvisor" and bool(offer.get("tour_id")))
+    )
+    if can_live_actualize:
+        provider_label = "Слетать.ру" if provider == "sletat" else "Tourvisor"
         send_message(
             user_id,
             f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
-            "⏳ Перепроверяю цену и наличие в Слетать.ру…",
+            f"⏳ Перепроверяю цену и наличие в {provider_label}…",
             keyboard=_hide_keyboard(),
         )
         if SYNC_COMPLETION:

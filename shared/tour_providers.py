@@ -175,4 +175,8 @@ def actualize_offer(
     provider = str(offer.get("provider") or "").strip().lower()
     if provider == "sletat":
         return _sletat.actualize_tour(settings.sletat, session, offer, log=log)
+    if provider == "tourvisor":
+        return _tourvisor.actualize_tour_live(
+            settings.tourvisor, session, offer, log=log
+        )
     return _tourvisor.actualize_tour(offer)

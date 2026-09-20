@@ -460,6 +460,48 @@ def test_sletat_actualize_price_uses_offer_provenance():
     assert params["password"] == "secret"
 
 
+def test_router_uses_live_tourvisor_actualization(monkeypatch):
+    seen = {}
+    expected = {
+        "status": "available",
+        "confirmed": True,
+        "flight_status": "🟢 Места на выбранном перелёте есть",
+        "hotel_status": "🟡 Наличие номера подтверждает менеджер перед оформлением",
+        "total_price": 205000,
+        "currency": "RUB",
+        "actualized_at": "18:00",
+        "provider": "tourvisor",
+    }
+
+    def fake_actualize(settings, session, offer, **kwargs):
+        seen["settings"] = settings
+        seen["session"] = session
+        seen["offer"] = offer
+        return expected
+
+    monkeypatch.setattr(
+        tour_providers._tourvisor, "actualize_tour_live", fake_actualize
+    )
+    settings = tour_providers.ProviderSettings(
+        tourvisor=tourvisor.TourvisorSettings(enabled=True, token="token")
+    )
+    session = FakeSession()
+    offer = {
+        "provider": "tourvisor",
+        "tour_id": "tour-77",
+        "price": 198000,
+        "fuel_charge": 5000,
+        "currency": "RUB",
+    }
+
+    actual = tour_providers.actualize_offer(settings, session, offer)
+
+    assert actual == expected
+    assert seen["settings"] is settings.tourvisor
+    assert seen["session"] is session
+    assert seen["offer"] is offer
+
+
 def test_sletat_actualize_refuses_offer_without_search_provenance():
     session = FakeSletatSession()
     settings = sletat.SletatSettings(
