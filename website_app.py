@@ -20,7 +20,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -28,6 +28,21 @@ from flask import Response, jsonify, request
 
 import bot as _bot
 from shared import mdt as mdt_shared
+from shared import travel_crm_adapter as _travel_crm_adapter
+from shared import travel_crm_store as _travel_crm_store
+from shared.travel_crm import (
+    Activity,
+    ActivityType,
+    BookingOutcome,
+    ManagerTask,
+    OutcomeStatus,
+    Quote,
+    QuoteReaction,
+    QuoteReactionEvent,
+    TaskStatus,
+    TaskType,
+    timeline_to_dict,
+)
 
 app = _bot.app
 logger = logging.getLogger("turbot.website")
@@ -114,6 +129,7 @@ def _init_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_website_leads_owner_retry "
             "ON website_leads(owner_status, owner_next_retry_at)"
         )
+        _travel_crm_store.init_schema(cur)
 
 
 def _funnel_source(payload: Dict[str, Any]) -> str:
@@ -579,6 +595,18 @@ def _cleanup_old_leads() -> None:
         return
     cutoff = int(time.time()) - days * 86400
     with _bot._db_cursor(commit=True) as cur:
+        lead_ids = [
+            int(row[0])
+            for row in cur.execute(
+                "SELECT id FROM website_leads WHERE created_at < ?",
+                (cutoff,),
+            ).fetchall()
+        ]
+        _travel_crm_store.delete_for_lead_ids(
+            cur.connection,
+            lead_ids,
+            channel="website",
+        )
         cur.execute("DELETE FROM website_leads WHERE created_at < ?", (cutoff,))
 
 
@@ -672,6 +700,28 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
                 ),
             )
             lead_id = int(cur.lastrowid)
+            try:
+                crm_request = _travel_crm_adapter.trip_request_from_lead(
+                    lead_id=lead_id,
+                    info=payload,
+                    channel="website",
+                )
+                _travel_crm_store.upsert_request(
+                    cur.connection,
+                    crm_request,
+                    lead_id=lead_id,
+                )
+                _travel_crm_store.ensure_initial_task(
+                    cur.connection,
+                    crm_request.request_id,
+                    datetime.utcnow(),
+                )
+            except Exception as crm_exc:
+                logger.warning(
+                    "CRM mirror skipped for website lead %s: %s",
+                    lead_id,
+                    type(crm_exc).__name__,
+                )
         except Exception as exc:
             # sqlite3.IntegrityError is deliberately not imported just for this
             # branch.  Verify the unique request key before treating the error
