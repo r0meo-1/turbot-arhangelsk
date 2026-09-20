@@ -317,6 +317,76 @@ def test_direct_only_is_forwarded_to_tourvisor():
 
 
 
+def test_actualize_live_uses_current_flight_price_and_availability():
+    seen = {}
+
+    def request_fn(method, path, params=None):
+        seen["method"] = method
+        seen["path"] = path
+        seen["params"] = params
+        return {
+            "flights": [{
+                "isDefault": True,
+                "forward": [{"noPlaces": False, "onDemand": False}],
+                "backward": [{"noPlaces": False, "onDemand": False}],
+                "price": {"value": 200000, "currency": "RUB"},
+                "fuelCharge": {"value": 5000, "currency": "RUB"},
+            }],
+            "info": {"surcharges": [{"name": "service", "value": 1000}]},
+        }
+
+    actual = tourvisor.actualize_tour_live(
+        tourvisor.TourvisorSettings(enabled=True, token="token"),
+        None,
+        {
+            "tour_id": "tour-77",
+            "price": 190000,
+            "fuel_charge": 0,
+            "currency": "RUB",
+        },
+        request_fn=request_fn,
+    )
+
+    assert seen == {
+        "method": "GET",
+        "path": "tours/tour-77/flights",
+        "params": {"currency": "RUB"},
+    }
+    assert actual["confirmed"] is True
+    assert actual["status"] == "available"
+    assert actual["total_price"] == 205000
+    assert actual["currency"] == "RUB"
+    assert actual["provider"] == "tourvisor"
+    assert "Места" in actual["flight_status"]
+    assert actual["surcharges"] == [{"name": "service", "value": 1000}]
+
+
+def test_actualize_live_marks_no_flight_places_unavailable():
+    actual = tourvisor.actualize_tour_live(
+        tourvisor.TourvisorSettings(enabled=True, token="token"),
+        None,
+        {
+            "tour_id": "tour-88",
+            "price": 190000,
+            "fuel_charge": 0,
+            "currency": "RUB",
+        },
+        request_fn=lambda *args, **kwargs: {
+            "flights": [{
+                "isDefault": True,
+                "forward": [{"noPlaces": True, "onDemand": False}],
+                "backward": [],
+                "price": {"value": 190000, "currency": "RUB"},
+                "fuelCharge": {"value": 0, "currency": "RUB"},
+            }]
+        },
+    )
+
+    assert actual["confirmed"] is False
+    assert actual["status"] == "unavailable"
+    assert "нет мест" in actual["flight_status"].lower()
+
+
 def test_actualize_fallback_never_fabricates_availability():
     actual = tourvisor.actualize_tour({
         "price": 180000,
