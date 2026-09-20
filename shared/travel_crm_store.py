@@ -18,6 +18,7 @@ from shared.travel_crm import (
     ActivityType,
     Attribution,
     BookingOutcome,
+    BudgetScope,
     BudgetType,
     Child,
     LeadTimeline,
@@ -139,6 +140,7 @@ def _request_from_payload(payload: dict[str, Any]) -> TripRequest:
         adults=int(payload["adults"]),
         children=tuple(Child(int(item["age"])) for item in payload.get("children") or ()),
         departure_airport=str(payload.get("departure_airport") or ""),
+        dates_text=str(payload.get("dates_text") or ""),
         date_from=str(payload.get("date_from") or ""),
         date_to=str(payload.get("date_to") or ""),
         flexible_dates=bool(payload.get("flexible_dates")),
@@ -147,6 +149,8 @@ def _request_from_payload(payload: dict[str, Any]) -> TripRequest:
         budget_amount=payload.get("budget_amount"),
         budget_currency=str(payload.get("budget_currency") or "RUB"),
         budget_type=BudgetType(str(payload.get("budget_type") or BudgetType.TARGET.value)),
+        budget_scope=BudgetScope(str(payload.get("budget_scope") or BudgetScope.TOTAL.value)),
+        direct_only=bool(payload.get("direct_only")),
         meal_plans=tuple(str(x) for x in payload.get("meal_plans") or ()),
         primary_destination=str(payload.get("primary_destination") or ""),
         alternative_destinations=tuple(
@@ -165,6 +169,7 @@ def _request_from_payload(payload: dict[str, Any]) -> TripRequest:
         attribution=Attribution(
             source_tag=str(attribution.get("source_tag") or ""),
             channel=str(attribution.get("channel") or ""),
+            source=str(attribution.get("source") or ""),
             referrer=str(attribution.get("referrer") or ""),
             campaign=str(attribution.get("campaign") or ""),
         ),
