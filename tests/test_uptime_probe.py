@@ -188,6 +188,78 @@ def test_report_only_redirect_diagnostic_does_not_page_uptime():
     assert payload["diagnostic_results"][0]["error"] == "redirect_not_https"
 
 
+def test_whitelabel_hygiene_requires_same_https_host_and_no_mixed_active_content():
+    spec = EndpointSpec(
+        "travel_whitelabel_hygiene",
+        "https://travel.example.invalid/",
+        "whitelabel_hygiene",
+        "travel.example.invalid",
+    )
+
+    good = probe_endpoint(
+        spec,
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b'<html><link href="http://example.invalid/info"><img src="/logo.png"></html>',
+            final_url="https://travel.example.invalid/",
+        ),
+    )
+    assert good.ok is True
+
+    mixed = probe_endpoint(
+        spec,
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b'<html><script src="http://cdn.example.invalid/app.js"></script></html>',
+            final_url="https://travel.example.invalid/",
+        ),
+    )
+    assert mixed.ok is False
+    assert mixed.error == "mixed_content"
+
+    wrong_host = probe_endpoint(
+        spec,
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b"<html>provider page</html>",
+            final_url="https://provider.example.invalid/",
+        ),
+    )
+    assert wrong_host.ok is False
+    assert wrong_host.error == "final_host_mismatch"
+
+
+def test_whitelabel_hygiene_is_report_only():
+    diagnostic = EndpointSpec(
+        "travel_whitelabel_hygiene",
+        "https://travel.example.invalid/",
+        "whitelabel_hygiene",
+        "travel.example.invalid",
+    )
+    payload = run(
+        endpoints=(),
+        diagnostic_endpoints=(diagnostic,),
+        tls_hosts=(),
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b'<img src="http://cdn.example.invalid/legacy.png">',
+            final_url="https://travel.example.invalid/",
+        ),
+    )
+
+    assert payload["ok"] is True
+    assert payload["diagnostic_results"][0]["ok"] is False
+    assert payload["diagnostic_results"][0]["error"] == "mixed_content"
+
+
 def test_tls_probe_reports_safe_expiry_metadata():
     now = datetime(2030, 1, 1, tzinfo=timezone.utc)
     expires = now + timedelta(days=45)
