@@ -1,6 +1,13 @@
 import json
+from datetime import datetime, timedelta, timezone
 
-from deploy.uptime_probe import EndpointSpec, probe_endpoint, run
+from deploy.uptime_probe import (
+    EndpointSpec,
+    TLSSpec,
+    probe_endpoint,
+    probe_tls_certificate,
+    run,
+)
 
 
 class FakeResponse:
@@ -74,6 +81,7 @@ def test_run_summary_never_echoes_response_body():
     )
     payload = run(
         endpoints,
+        tls_hosts=(),
         attempts=1,
         delay=0,
         timeout=1,
@@ -100,3 +108,75 @@ def test_vk_health_probe_rejects_wrong_platform():
     )
     assert result.ok is False
     assert result.error == "unexpected_platform"
+
+
+
+def test_tls_probe_reports_safe_expiry_metadata():
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    expires = now + timedelta(days=45)
+    certificate = {
+        "notAfter": expires.strftime("%b %d %H:%M:%S %Y GMT"),
+        "subject": ((("commonName", "private-certificate-label"),),),
+    }
+    spec = TLSSpec("bot_tls", "bot.example.invalid", min_days_remaining=21)
+
+    result = probe_tls_certificate(
+        spec,
+        attempts=1,
+        delay=0,
+        timeout=1,
+        cert_loader=lambda _spec, timeout: certificate,
+        now=now,
+    )
+
+    assert result.ok is True
+    assert result.days_remaining == 45.0
+    assert result.expires_at.startswith("2030-02-15T")
+    assert "private-certificate-label" not in repr(result)
+
+
+def test_tls_probe_fails_before_certificate_expiry_window():
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    expires = now + timedelta(days=10)
+    certificate = {
+        "notAfter": expires.strftime("%b %d %H:%M:%S %Y GMT"),
+    }
+    spec = TLSSpec("site_tls", "example.invalid", min_days_remaining=21)
+
+    result = probe_tls_certificate(
+        spec,
+        attempts=2,
+        delay=0,
+        timeout=1,
+        cert_loader=lambda _spec, timeout: certificate,
+        sleeper=lambda _seconds: None,
+        now=now,
+    )
+
+    assert result.ok is False
+    assert result.attempts == 2
+    assert result.error == "certificate_expiring"
+    assert result.days_remaining is None
+
+
+def test_run_includes_tls_summary_without_certificate_body():
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    expires = now + timedelta(days=30)
+    secret_marker = "CN=Private Internal Label"
+    certificate = {
+        "notAfter": expires.strftime("%b %d %H:%M:%S %Y GMT"),
+        "subject": ((("commonName", secret_marker),),),
+    }
+
+    payload = run(
+        endpoints=(),
+        tls_hosts=(TLSSpec("travel_tls", "travel.example.invalid"),),
+        attempts=1,
+        delay=0,
+        timeout=1,
+        cert_loader=lambda _spec, timeout: certificate,
+    )
+
+    assert payload["ok"] is True
+    assert payload["tls_results"][0]["days_remaining"] == 30.0
+    assert secret_marker not in json.dumps(payload, ensure_ascii=False)
