@@ -997,7 +997,54 @@ def _agent_parse_datetime(value: Any) -> datetime:
     if not raw:
         return datetime.utcnow()
     parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().astimezone(tz=None).replace(tzinfo=None)
     return parsed
+
+
+def _agent_crm_client_summary(cur: Any, request_id: str) -> Dict[str, Any]:
+    row = cur.execute(
+        """
+        SELECT lead_id, channel
+        FROM crm_trip_requests
+        WHERE request_id=?
+        """,
+        (request_id,),
+    ).fetchone()
+    if not row or row[0] is None:
+        return {"leadId": None, "name": "", "phone": "", "username": ""}
+
+    lead_id = int(row[0])
+    channel = str(row[1] or "")
+    if channel == "website":
+        lead = cur.execute(
+            "SELECT name, phone FROM website_leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+        if not lead:
+            return {"leadId": lead_id, "name": "", "phone": "", "username": ""}
+        return {
+            "leadId": lead_id,
+            "name": str(lead[0] or ""),
+            "phone": str(lead[1] or ""),
+            "username": "",
+        }
+
+    if channel in {"telegram", "vk"}:
+        lead = cur.execute(
+            "SELECT first_name, phone, username FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+        if not lead:
+            return {"leadId": lead_id, "name": "", "phone": "", "username": ""}
+        return {
+            "leadId": lead_id,
+            "name": str(lead[0] or ""),
+            "phone": str(lead[1] or ""),
+            "username": str(lead[2] or ""),
+        }
+
+    return {"leadId": lead_id, "name": "", "phone": "", "username": ""}
 
 
 if "agent_extension_crm_today" not in app.view_functions:
@@ -1011,8 +1058,9 @@ if "agent_extension_crm_today" not in app.view_functions:
             return denied
 
         now = datetime.utcnow()
+        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
         with _bot._db_cursor() as cur:
-            tasks = _travel_crm_store.due_tasks(cur.connection, now)
+            tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)
             items = []
             for task in tasks[:100]:
                 timeline = _travel_crm_store.load_timeline(
@@ -1037,6 +1085,7 @@ if "agent_extension_crm_today" not in app.view_functions:
                     "childAges": [child.age for child in trip.children],
                     "budget": trip.budget_amount,
                     "budgetScope": trip.budget_scope.value,
+                    "client": _agent_crm_client_summary(cur, task.request_id),
                 })
         return _agent_json_response({"ok": True, "tasks": items})
 
@@ -1064,9 +1113,12 @@ if "agent_extension_crm_timeline" not in app.view_functions:
             return _agent_json_response(
                 {"ok": False, "error": "request_not_found"}, 404
             )
+        payload = timeline_to_dict(timeline)
+        with _bot._db_cursor() as cur:
+            payload["client"] = _agent_crm_client_summary(cur, request_id)
         return _agent_json_response({
             "ok": True,
-            "timeline": timeline_to_dict(timeline),
+            "timeline": payload,
         })
 
 
@@ -1301,6 +1353,75 @@ if "agent_extension_crm_activity" not in app.view_functions:
             "ok": True,
             "activityId": activity.activity_id,
             "requestId": request_id,
+        })
+
+
+if "agent_extension_crm_outcome" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/outcome", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_outcome() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        denied = _agent_crm_guard()
+        if denied is not None:
+            return denied
+        if not request.is_json:
+            return _agent_json_response({"ok": False, "error": "json_required"}, 415)
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+
+        request_id = str(raw.get("requestId") or "").strip()
+        try:
+            status = OutcomeStatus(str(raw.get("status") or "").strip().lower())
+            reason = _safe_text(raw.get("reason"), 500)
+        except ValueError:
+            return _agent_json_response(
+                {"ok": False, "error": "invalid_outcome"}, 400
+            )
+        if not request_id:
+            return _agent_json_response(
+                {"ok": False, "error": "invalid_request_id"}, 400
+            )
+
+        now = datetime.utcnow()
+        with _bot._db_cursor(commit=True) as cur:
+            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+                return _agent_json_response(
+                    {"ok": False, "error": "request_not_found"}, 404
+                )
+            _travel_crm_store.set_outcome(
+                cur.connection,
+                request_id,
+                BookingOutcome(status=status, reason=reason, decided_at=now),
+            )
+            _travel_crm_store.append_activity(
+                cur.connection,
+                Activity(
+                    activity_id="activity-" + secrets.token_hex(10),
+                    request_id=request_id,
+                    type=ActivityType.STATUS_CHANGE,
+                    summary=(
+                        f"Результат: {status.value}"
+                        + (f" · {reason}" if reason else "")
+                    ),
+                    created_at=now,
+                ),
+            )
+            if status in {OutcomeStatus.WON, OutcomeStatus.LOST}:
+                cur.execute(
+                    "UPDATE crm_tasks SET status=? WHERE request_id=? AND status=?",
+                    (
+                        TaskStatus.DONE.value,
+                        request_id,
+                        TaskStatus.TODO.value,
+                    ),
+                )
+
+        return _agent_json_response({
+            "ok": True,
+            "requestId": request_id,
+            "status": status.value,
         })
 
 
