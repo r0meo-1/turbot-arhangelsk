@@ -150,6 +150,11 @@ def test_provider_runtime_health_is_30_day_aggregate_without_pii():
         )
         cur.execute(
             "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'sletat', 'search_request', ?)",
+            (now,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
             "VALUES ('provider', 'travelata', 'success', ?)",
             (now,),
         )
@@ -195,10 +200,12 @@ def test_sletat_monthly_usage_counts_search_attempts_not_fallback(monkeypatch):
             "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
             "VALUES ('provider', 'sletat', ?, ?)",
             [
+                ("search_request", september + 60),
                 ("success", september + 60),
                 ("fallback", september + 60),
+                ("search_request", now - 60),
                 ("timeout", now - 60),
-                ("success", august),
+                ("search_request", august),
             ],
         )
 
