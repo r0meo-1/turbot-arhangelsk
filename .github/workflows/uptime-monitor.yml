@@ -1,0 +1,124 @@
+name: External Uptime Monitor
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: turbot-external-uptime
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Probe public production endpoints
+        id: probe
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          python deploy/uptime_probe.py \
+            --attempts 3 \
+            --delay 5 \
+            --timeout 15 \
+            --json-out /tmp/uptime-result.json || status=$?
+
+          if [[ "$status" -eq 0 ]]; then
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "### TurBot external uptime probe"
+            echo
+            echo '```json'
+            cat /tmp/uptime-result.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Manage incident issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE_FAILED: ${{ steps.probe.outputs.failed }}
+        run: |
+          set -Eeuo pipefail
+          title="[uptime] TurBot production incident"
+          open_issue="$(
+            gh issue list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --search 'in:title "[uptime] TurBot production incident"' \
+              --json number,title \
+              --jq '.[] | select(.title == "[uptime] TurBot production incident") | .number' \
+              | head -n1
+          )"
+
+          checked_at="$(python - <<'PY'
+          import json
+          with open('/tmp/uptime-result.json', encoding='utf-8') as fh:
+              print(json.load(fh)['checked_at'])
+          PY
+          )"
+          run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          if [[ "$PROBE_FAILED" == "true" ]]; then
+            if [[ -z "$open_issue" ]]; then
+              body="$(mktemp)"
+              {
+                echo "External TurBot uptime probe confirmed a production failure after retries."
+                echo
+                echo "- Detected: $checked_at"
+                echo "- Monitor: GitHub Actions, external to the TurBot VPS"
+                echo "- Run: $run_url"
+                echo
+                echo "Probe summary:"
+                echo '```json'
+                cat /tmp/uptime-result.json
+                echo '```'
+                echo
+                echo "This issue contains only public endpoint status and coarse failure classes. No customer data or secrets are collected."
+              } > "$body"
+              gh issue create \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "$title" \
+                --body-file "$body"
+            fi
+          elif [[ -n "$open_issue" ]]; then
+            recovery="$(mktemp)"
+            {
+              echo "Recovery confirmed by the external monitor."
+              echo
+              echo "- Recovered: $checked_at"
+              echo "- Run: $run_url"
+              echo
+              echo "Probe summary:"
+              echo '```json'
+              cat /tmp/uptime-result.json
+              echo '```'
+            } > "$recovery"
+            gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body-file "$recovery"
+            gh issue close "$open_issue" --repo "$GITHUB_REPOSITORY" --reason completed
+          fi
+
+      - name: Fail run on confirmed outage
+        if: steps.probe.outputs.failed == 'true'
+        run: |
+          echo "Confirmed production outage; incident issue is open." >&2
+          exit 1

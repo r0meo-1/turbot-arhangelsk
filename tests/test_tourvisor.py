@@ -1,8 +1,17 @@
 """Unit tests for the Tourvisor adapter; no test touches the real API."""
 
+import base64
+import json
 from datetime import date
 
 from shared import tourvisor
+
+
+def _jwt(exp):
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": exp}).encode()
+    ).decode().rstrip("=")
+    return f"header.{payload}.signature"
 
 
 def test_exact_trip_dates_become_departure_and_nights():
@@ -321,3 +330,39 @@ def test_actualize_fallback_never_fabricates_availability():
     assert "требует актуальной проверки" in actual["flight_status"]
     assert "требует актуальной проверки" in actual["hotel_status"]
     assert "есть" not in actual["flight_status"].lower()
+
+
+
+def test_jwt_status_reports_expiry_without_exposing_token():
+    expired = _jwt(100)
+    valid = _jwt(500)
+
+    assert tourvisor.jwt_status(expired, now=200) == {
+        "status": "expired",
+        "expires_in_seconds": 0,
+    }
+    assert tourvisor.jwt_status(valid, now=200) == {
+        "status": "valid",
+        "expires_in_seconds": 300,
+    }
+    assert tourvisor.jwt_status("", now=200)["status"] == "absent"
+
+
+def test_expired_jwt_never_calls_tourvisor_api():
+    expired = _jwt(100)
+    result = tourvisor.search_tours(
+        tourvisor.TourvisorSettings(enabled=True, token=expired),
+        session=None,
+        info={
+            "destination": "Турция",
+            "origin": "Москва",
+            "dates": "15-22 сентября 2030",
+            "people": "2",
+        },
+        request_fn=lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("expired JWT must not hit Tourvisor")
+        ),
+    )
+
+    assert result.offers == []
+    assert "JWT истёк" in result.error

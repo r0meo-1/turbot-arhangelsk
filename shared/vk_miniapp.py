@@ -136,6 +136,15 @@ def create_blueprint(save_draft, settings):
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+        )
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+        response.headers["Content-Security-Policy-Report-Only"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; connect-src 'self'; object-src 'none'; "
+            "base-uri 'self'; form-action 'self'"
+        )
         return response
 
     @bp.get("/vk/miniapp/")

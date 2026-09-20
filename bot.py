@@ -59,11 +59,16 @@ from shared.log_privacy import correlation_id as _log_correlation
 from shared import tutu as _tutu
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
+from shared.ai_provider import build_selection_provider
 from shared.ai_chat import generate_ai_chat_reply as _generate_ai_chat_reply
+from shared.ai_guardrails import redact_external_ai_text
 from shared import mdt as mdt_shared
 from shared import travelpayouts_links as _travelpayouts_links
 from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
+from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
+from shared import funnel_metrics as _funnel_metrics
+from shared import provider_status as _provider_status
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
@@ -128,6 +133,9 @@ BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
 ADMIN_ID          = _env_int("ADMIN_ID", 0)
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+REGCLOUD_API_KEY  = os.getenv("REGCLOUD_API_KEY", "")
+REGCLOUD_BASE_URL = os.getenv("REGCLOUD_BASE_URL", "")
+REGCLOUD_MODEL    = os.getenv("REGCLOUD_MODEL", "")
 # External AI is opt-in. If AI_MODE is absent, deterministic templates win.
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 AI_CHAT_ENABLED   = os.getenv("AI_CHAT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
@@ -144,6 +152,19 @@ GROQ_ZDR_CONFIRMED = os.getenv("GROQ_ZDR_CONFIRMED", "false").lower().strip() in
 )
 AI_CHAT_MAX_CHARS = max(100, min(8000, _env_int("AI_CHAT_MAX_CHARS", 2000)))
 AI_CHAT_TIMEOUT_SECONDS = max(3, min(30, _env_int("AI_CHAT_TIMEOUT_SECONDS", 15)))
+# Customer-facing lead assistant is deliberately narrower than the closed /ai
+# beta: it is invoked explicitly with /ask or "ИИ:", uses only non-PII trip
+# fields as context, and inherits the same deterministic safety guardrails.
+AI_LEAD_ASSIST_ENABLED = os.getenv(
+    "AI_LEAD_ASSIST_ENABLED",
+    "false",
+).lower().strip() in ("1", "true", "yes")
+AI_LEAD_ASSIST_MAX_CHARS = max(
+    100, min(2000, _env_int("AI_LEAD_ASSIST_MAX_CHARS", 800))
+)
+AI_LEAD_ASSIST_WINDOW_HOURS = max(
+    1, min(24 * 365, _env_int("AI_LEAD_ASSIST_WINDOW_HOURS", 24 * 30))
+)
 PORT                 = _env_int("PORT", 5000)
 STATE_FILE           = os.getenv("STATE_FILE", "bot_state.json")
 DATABASE_PATH        = os.getenv("DATABASE_PATH", "bot_state.sqlite")
@@ -328,6 +349,10 @@ DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
 # but they still need a bounded lifetime so the SQLite file cannot grow forever.
 # 0 disables event cleanup.
 PARTNER_ANALYTICS_RETENTION_DAYS = _env_int("PARTNER_ANALYTICS_RETENTION_DAYS", 365)
+FUNNEL_ANALYTICS_RETENTION_DAYS = _env_int("FUNNEL_ANALYTICS_RETENTION_DAYS", 365)
+# Operational counters never contain customer text/IDs, but they are event rows
+# and still need bounded storage. Public health uses a 30-day window.
+OPS_METRICS_RETENTION_DAYS = _env_int("OPS_METRICS_RETENTION_DAYS", 90)
 # soft (default): no hard «Согласен» gate — short notice + flexible contact.
 # strict: classic consent buttons before any questions (old behaviour).
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -422,6 +447,7 @@ USER_HELP = (
     "<b>Команды</b>\n"
     "/start — начать подбор\n"
     "/cancel — отменить заявку\n"
+    "/ask вопрос — спросить ИИ-помощника по текущей/последней заявке\n"
     "/privacy — обработка персональных данных\n"
     "/delete — удалить мои данные\n"
     "/help — эта справка\n\n"
@@ -497,6 +523,7 @@ BOT_COMMANDS = [
     {"command": "start", "description": "🌴 Начать подбор тура"},
     {"command": "help", "description": "ℹ️ Справка и контакты"},
     {"command": "cancel", "description": "❌ Отменить заявку"},
+    {"command": "ask", "description": "🤖 Вопрос ИИ по поездке"},
     {"command": "privacy", "description": "🔒 Персональные данные"},
     {"command": "delete", "description": "🗑 Удалить мои данные"},
 ]
@@ -533,6 +560,8 @@ ADMIN_HELP = (
     "/stats — статистика\n"
     "/restart — сбросить все активные сессии\n"
     "/analytics — общая аналитика (заявки, направления, партнёры)\n"
+    "/funnel — источники → лиды → доставка менеджеру за 30 дней\n"
+    "/providers — статус Sletat / Travelata / Tourvisor\n"
     "/partners [дни] [reload] — партнёрские переходы, брони и доход\n"
     "/export — экспорт завершённых заявок\n"
     "/followup — напоминания незавершившим\n"
@@ -550,12 +579,26 @@ ADMIN_HELP = (
 _admin_reply_to: Dict[int, int] = {}  # admin_chat_id → client_chat_id
 _last_lead_client_id: Optional[int] = None
 CB_ADMIN_REPLY_PREFIX = "ar:"
+CB_AI_LEAD_PREFIX = "aiq:"
+AI_LEAD_QUICK_QUESTIONS = {
+    "packing": "Что взять с собой в эту поездку?",
+    "hotel": "На что обратить внимание при выборе отеля для этой поездки?",
+    "prep": "Что важно учесть при подготовке к этой поездке?",
+}
 
 # ---------------------------------------------------------------------------
 # Groq client (created once at startup)
 # ---------------------------------------------------------------------------
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+selection_ai_provider = build_selection_provider(
+    AI_MODE,
+    groq_api_key=GROQ_API_KEY,
+    groq_model=GROQ_MODEL,
+    regcloud_api_key=REGCLOUD_API_KEY,
+    regcloud_base_url=REGCLOUD_BASE_URL,
+    regcloud_model=REGCLOUD_MODEL,
+)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP session with retries for Telegram API calls
@@ -747,6 +790,8 @@ def init_db() -> None:
             cur.execute("ALTER TABLE leads ADD COLUMN mdt_synced_at INTEGER")
         if "mdt_payload" not in _lead_cols:
             cur.execute("ALTER TABLE leads ADD COLUMN mdt_payload TEXT")
+        if "manager_notified_at" not in _lead_cols:
+            cur.execute("ALTER TABLE leads ADD COLUMN manager_notified_at INTEGER")
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)"
         )
@@ -755,6 +800,22 @@ def init_db() -> None:
         )
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)"
+        )
+        _funnel_metrics.init_schema(cur)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ops_metric_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ops_metric_events_created_at "
+            "ON ops_metric_events(created_at)"
         )
         # Anonymous partner-click analytics. Deliberately no chat_id, username,
         # phone, Telegram payload, or affiliate URL is stored here.
@@ -792,10 +853,20 @@ def init_db() -> None:
         cur.execute("PRAGMA journal_mode=WAL")
 
 
-def _ai_chat_metric_key(reply: Any) -> str:
-    """Map an AI reply to a bounded aggregate outcome with no user content."""
-    reason = re.sub(r"[^a-z0-9_]+", "_", str(getattr(reply, "reason", "") or "").lower())
-    reason = reason.strip("_")[:64] or "none"
+def _safe_ai_metric_label(value: Any, *, default: str, limit: int) -> str:
+    return (
+        re.sub(r"[^a-z0-9_]+", "_", str(value or default).lower()).strip("_")[:limit]
+        or default
+    )
+
+
+def _ai_chat_outcome_label(reply: Any) -> str:
+    """Return one coarse AI outcome without prompt, response or customer data."""
+    reason = _safe_ai_metric_label(
+        getattr(reply, "reason", "") or "none",
+        default="none",
+        limit=64,
+    )
     if bool(getattr(reply, "handoff_required", False)):
         return f"handoff_{reason}"
     if bool(getattr(reply, "used_external_model", False)):
@@ -803,9 +874,18 @@ def _ai_chat_metric_key(reply: Any) -> str:
     return f"fallback_{reason}"
 
 
-def record_ai_chat_outcome(reply: Any) -> None:
-    """Increment privacy-minimized beta telemetry; never store prompt/response text."""
-    outcome = _ai_chat_metric_key(reply)
+def _ai_chat_metric_key(reply: Any, *, source: str = "beta") -> str:
+    """Map an AI reply to a bounded aggregate outcome with no user content."""
+    source_key = _safe_ai_metric_label(source, default="beta", limit=32)
+    outcome = _ai_chat_outcome_label(reply)
+    return outcome if source_key == "beta" else f"{source_key}_{outcome}"
+
+
+def record_ai_chat_outcome(reply: Any, *, source: str = "beta") -> None:
+    """Increment privacy-minimized AI telemetry; never store prompt/response text."""
+    source_key = _safe_ai_metric_label(source, default="beta", limit=32)
+    outcome_label = _ai_chat_outcome_label(reply)
+    outcome = outcome_label if source_key == "beta" else f"{source_key}_{outcome_label}"
     try:
         with _db_cursor(commit=True) as cur:
             cur.execute(
@@ -821,6 +901,7 @@ def record_ai_chat_outcome(reply: Any) -> None:
     except sqlite3.Error as exc:
         # Metrics are observational only and must never break a chat response.
         logger.warning("Could not store AI beta metric: %s", exc)
+    _record_ops_metric("ai", source_key, outcome_label)
 
 
 def ai_chat_metrics_snapshot() -> Dict[str, int]:
@@ -1419,7 +1500,12 @@ def _start_timeout_worker() -> None:
 
 def _start_retention_worker() -> None:
     """Start a daemon that periodically enforces personal/event retention."""
-    if DATA_RETENTION_DAYS <= 0 and PARTNER_ANALYTICS_RETENTION_DAYS <= 0:
+    if (
+        DATA_RETENTION_DAYS <= 0
+        and PARTNER_ANALYTICS_RETENTION_DAYS <= 0
+        and FUNNEL_ANALYTICS_RETENTION_DAYS <= 0
+        and OPS_METRICS_RETENTION_DAYS <= 0
+    ):
         logger.info("Data retention cleanup is disabled")
         return
 
@@ -1428,15 +1514,22 @@ def _start_retention_worker() -> None:
             try:
                 cleanup_expired_data()
                 cleanup_partner_clicks()
+                _funnel_metrics.cleanup(
+                    _db_cursor, FUNNEL_ANALYTICS_RETENTION_DAYS
+                )
+                cleanup_ops_metric_events()
             except Exception as exc:
                 logger.error("Error in retention worker: %s", exc)
             time.sleep(6 * 3600)  # re-check four times a day
 
     threading.Thread(target=_worker, daemon=True, name="data-retention").start()
     logger.info(
-        "Data retention worker started (personal=%s days, partner_events=%s days)",
+        "Data retention worker started "
+        "(personal=%s days, partner_events=%s days, funnel_events=%s days, ops_events=%s days)",
         DATA_RETENTION_DAYS,
         PARTNER_ANALYTICS_RETENTION_DAYS,
+        FUNNEL_ANALYTICS_RETENTION_DAYS,
+        OPS_METRICS_RETENTION_DAYS,
     )
 
 # ---------------------------------------------------------------------------
@@ -1971,6 +2064,141 @@ def _mdt_retry_health(now: Optional[float] = None) -> Dict[str, Any]:
     }
 
 
+def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day Telegram and website manager-delivery aggregates."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    channels: Dict[str, Any] = {}
+    try:
+        with _db_cursor() as cur:
+            cur.execute(
+                "SELECT created_at, manager_notified_at FROM leads WHERE created_at >= ?",
+                (cutoff,),
+            )
+            channels["telegram"] = lead_delivery_snapshot(
+                cur.fetchall(), window_seconds=window
+            )
+            try:
+                cur.execute(
+                    "SELECT created_at, owner_notified_at FROM website_leads WHERE created_at >= ?",
+                    (cutoff,),
+                )
+                website_rows = cur.fetchall()
+            except sqlite3.OperationalError:
+                website_rows = []
+            channels["website"] = lead_delivery_snapshot(
+                website_rows, window_seconds=window
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read lead-delivery aggregates: %s", exc)
+        return {"available": False, "window_seconds": window, "channels": {}}
+    return {"available": True, "window_seconds": window, "channels": channels}
+
+
+def record_funnel_event(
+    channel: str,
+    source: str,
+    stage: str,
+    outcome: str,
+) -> None:
+    """Persist privacy-minimized acquisition telemetry without customer identity."""
+    try:
+        _funnel_metrics.record(
+            _db_cursor,
+            channel,
+            source or "direct",
+            stage,
+            outcome,
+        )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist acquisition funnel event: %s", exc)
+
+
+def _funnel_health(now: Optional[float] = None) -> Dict[str, Any]:
+    try:
+        return _funnel_metrics.snapshot(_db_cursor, now=now)
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read acquisition funnel: %s", exc)
+        return {
+            "available": False,
+            "window_seconds": 30 * 86400,
+            "events": 0,
+            "channels": {},
+        }
+
+
+def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
+    """Persist one bounded operational event without customer data."""
+    safe = (
+        str(category or "unknown")[:40],
+        str(subject or "unknown")[:40],
+        str(outcome or "unknown")[:64],
+    )
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (*safe, int(time.time())),
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist operational counter: %s", exc)
+
+
+def cleanup_ops_metric_events(now: Optional[float] = None) -> int:
+    """Delete old anonymous operational events; return deleted row count."""
+    if OPS_METRICS_RETENTION_DAYS <= 0:
+        return 0
+    current = int(time.time() if now is None else now)
+    cutoff = current - OPS_METRICS_RETENTION_DAYS * 86400
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute("DELETE FROM ops_metric_events WHERE created_at < ?", (cutoff,))
+            return int(cur.rowcount or 0)
+    except sqlite3.Error as exc:
+        logger.warning("Could not clean operational counters: %s", exc)
+        return 0
+
+
+def _ai_runtime_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day AI outcomes by fixed entrypoint without customer content."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT subject, outcome, COUNT(*) "
+                "FROM ops_metric_events "
+                "WHERE category = 'ai' AND created_at >= ? "
+                "GROUP BY subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read AI runtime counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
+
+
+def _ops_event_health(now: Optional[float] = None) -> Dict[str, Any]:
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT category || ':' || subject, outcome, COUNT(*) "
+                "FROM ops_metric_events WHERE created_at >= ? "
+                "GROUP BY category, subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read operational counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
+
+
 def _alert_stale_mdt_retry_queue(now: Optional[float] = None) -> bool:
     """Alert the admin when the Telegram MDT retry queue is persistently stale."""
     if MDT_RETRY_ALERT_AFTER_SECONDS <= 0:
@@ -2058,6 +2286,17 @@ def kb_contact_methods() -> str:
         [_inline_btn(CONTACT_VK_TEXT, CB_CONTACT_VK)],
             [_inline_btn(BACK_BUTTON_TEXT, CB_BACK)],
             [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],
+    ])
+
+
+def kb_ai_lead_assist() -> str:
+    """Post-lead AI shortcuts; callback payloads map only to fixed safe questions."""
+    return inline_keyboard([
+        [
+            _inline_btn("🧳 Что взять?", f"{CB_AI_LEAD_PREFIX}packing"),
+            _inline_btn("🏨 Как выбрать отель?", f"{CB_AI_LEAD_PREFIX}hotel"),
+        ],
+        [_inline_btn("📋 Что учесть перед поездкой?", f"{CB_AI_LEAD_PREFIX}prep")],
     ])
 
 
@@ -2208,17 +2447,154 @@ def hide_keyboard() -> str:
     return json.dumps({"remove_keyboard": True})
 
 def generate_ai_selection(destination: str, dates: str, people: str, budget: str) -> str:
-    """Generate an AI tour blurb for the client (template or Groq)."""
+    """Generate an AI tour blurb for the client (template/Groq/REG.RU Cloud)."""
     return _shared_generate_ai(
         destination,
         dates,
         people,
         budget,
         ai_mode=AI_MODE,
-        groq_client=groq_client,
-        groq_model=GROQ_MODEL,
+        groq_client=selection_ai_provider.client,
+        groq_model=selection_ai_provider.model,
         log=logger,
     )
+
+
+def _format_lead_assist_context(info: Dict[str, Any]) -> str:
+    """Build a non-PII trip context for the lead assistant."""
+    lines: List[str] = []
+    fields = (
+        ("Направление", info.get("destination")),
+        ("Город вылета", info.get("origin")),
+        ("Даты", info.get("dates")),
+        ("Ночей", info.get("nights")),
+        ("Туристов", info.get("people")),
+    )
+    for label, value in fields:
+        if value not in (None, ""):
+            lines.append(f"{label}: {value}")
+    budget = info.get("budget")
+    if budget not in (None, ""):
+        scope = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
+        lines.append(f"Бюджет: {budget} ₽ {scope}")
+    if info.get("direct_only"):
+        lines.append("Перелёт: предпочитается прямой")
+    return "\n".join(lines)
+
+
+def _latest_lead_assist_context(chat_id: int) -> Optional[Dict[str, Any]]:
+    """Return recent structured lead data without contact/name fields."""
+    cutoff = int(time.time()) - AI_LEAD_ASSIST_WINDOW_HOURS * 3600
+    with _db_cursor() as cur:
+        row = cur.execute(
+            """
+            SELECT destination, origin, dates, nights, people, kids, infants,
+                   budget, budget_scope, direct_only, created_at
+            FROM leads
+            WHERE chat_id = ? AND created_at >= ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (chat_id, cutoff),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _notify_lead_assist_handoff(
+    chat_id: int,
+    question: str,
+    reason: str,
+    info: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Tell the human owner when the guarded AI refuses or escalates a question."""
+    global _last_lead_client_id
+    safe_question = redact_external_ai_text(question).strip()[:1200] or "(пустой вопрос)"
+    reason_label = (reason or "human_required")[:80]
+    trip_context = _format_lead_assist_context(info or {}).strip()
+    context_block = (
+        f"\n\nПараметры поездки:\n{trip_context}"
+        if trip_context
+        else ""
+    )
+    record_funnel_event(
+        "telegram",
+        str((info or {}).get("source_tag") or "direct"),
+        "ai_handoff",
+        "escalated",
+    )
+    manager_text = (
+        "🤖→👩‍💼 Вопрос клиента требует менеджера\n"
+        f"Telegram ID: {chat_id}\n"
+        f"Причина: {reason_label}\n\n"
+        f"Вопрос: {safe_question}"
+        f"{context_block}\n\n"
+        f"Ответить в Telegram: /send {chat_id}"
+    )
+    send_lead_owner_vk(manager_text)
+    with _lock:
+        _last_lead_client_id = chat_id
+    reply_kb = kb_admin_reply(chat_id)
+    for recipient in LEAD_NOTIFY_IDS:
+        send_message(recipient, manager_text, reply_markup=reply_kb)
+
+
+def _handle_lead_assist(
+    chat_id: int,
+    question: str,
+    *,
+    entrypoint: str = "generic",
+) -> bool:
+    """Answer a lead-assist question without mutating funnel state."""
+    if not AI_LEAD_ASSIST_ENABLED:
+        send_message(
+            chat_id,
+            "ИИ-помощник сейчас отключён. По заявке ответит менеджер «АПРЕЛЬ тур».",
+        )
+        return True
+
+    question = str(question or "").strip()
+    if not question:
+        send_message(
+            chat_id,
+            "🤖 Напишите вопрос после команды /ask. Например:\n"
+            "/ask Что взять с собой в Таиланд?",
+        )
+        return True
+    if len(question) > AI_LEAD_ASSIST_MAX_CHARS:
+        send_message(
+            chat_id,
+            f"🤖 Вопрос слишком длинный. Максимум {AI_LEAD_ASSIST_MAX_CHARS} символов.",
+        )
+        return True
+
+    with _lock:
+        current = dict(user_data.get(chat_id) or {})
+    info = current or _latest_lead_assist_context(chat_id)
+    if not info:
+        send_message(
+            chat_id,
+            "Сначала заполните параметры поездки через /start, "
+            "тогда ИИ сможет отвечать с учётом вашей заявки.",
+        )
+        return True
+
+    send_typing(chat_id)
+    reply = _generate_ai_chat_reply(
+        question,
+        enabled=True,
+        groq_client=selection_ai_provider.client if selection_ai_provider.ready else None,
+        groq_model=selection_ai_provider.model,
+        verified_context=_format_lead_assist_context(info),
+        timeout=float(AI_CHAT_TIMEOUT_SECONDS),
+        log=logger,
+    )
+    entrypoint_key = _safe_ai_metric_label(entrypoint, default="generic", limit=16)
+    metric_source = "lead_assist" if entrypoint_key == "generic" else f"lead_{entrypoint_key}"
+    record_ai_chat_outcome(reply, source=metric_source)
+    send_message(chat_id, f"🤖 {reply.text}")
+    if reply.handoff_required or reply.reason in {"provider_unavailable", "provider_error"}:
+        _notify_lead_assist_handoff(chat_id, question, reply.reason, info=info)
+    return True
 
 
 def _ai_beta_allowed(chat_id: int) -> bool:
@@ -2310,15 +2686,47 @@ def _admin_stats(chat_id: int, arg: str) -> bool:
     return True
 
 
+def _admin_funnel(chat_id: int, arg: str) -> bool:
+    data = _funnel_health()
+    send_message(
+        chat_id,
+        _funnel_metrics.format_report(
+            data,
+            channels=["telegram", "website"],
+            max_sources=10,
+        ),
+    )
+    return True
+
+
+def _admin_providers(chat_id: int, arg: str) -> bool:
+    send_message(chat_id, _provider_status.format_report())
+    return True
+
+
 def _admin_ai_stats(chat_id: int, arg: str) -> bool:
     metrics = ai_chat_metrics_snapshot()
-    if not metrics:
-        send_message(chat_id, "🧪 AI beta: статистики пока нет.")
+    runtime = _ai_runtime_health()
+    if not metrics and not runtime.get("subjects"):
+        send_message(chat_id, "🧪 AI: статистики пока нет.")
         return True
+
     total = sum(metrics.values())
+    # Preserve the original first line for operators/scripts that already
+    # recognize it; the recent privacy-safe breakdown is appended below.
     lines = [f"🧪 AI beta: {total} запросов"]
     for outcome, count in metrics.items():
         lines.append(f"• {outcome}: {count}")
+
+    subjects = runtime.get("subjects") or {}
+    if subjects:
+        lines.append("")
+        lines.append("📊 Последние 30 дней:")
+        for source, outcomes in sorted(subjects.items()):
+            source_total = sum(int(v) for v in outcomes.values())
+            lines.append(f"• {source}: {source_total}")
+            for outcome, count in sorted(outcomes.items()):
+                lines.append(f"  - {outcome}: {count}")
     send_message(chat_id, "\n".join(lines))
     return True
 
@@ -2868,6 +3276,8 @@ ADMIN_COMMANDS: Dict[str, Callable[[int, str], bool]] = {
     "/users":        _admin_users,
     "/stats":        _admin_stats,
     "/analytics":    _admin_analytics,
+    "/funnel":       _admin_funnel,
+    "/providers":    _admin_providers,
     "/partners":     _admin_partners,
     "/export":       _admin_export,
     "/restart":      _admin_restart,
@@ -2914,6 +3324,7 @@ def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> No
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
     source_tag = normalise_source_tag(previous_source or source_tag)
+    record_funnel_event("telegram", source_tag or "direct", "start", "opened")
 
     if CONSENT_MODE == "strict" and not has_consent(chat_id):
         with _lock:
@@ -3623,6 +4034,14 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         reply_markup=hide_keyboard(),
         parse_mode="HTML",
     )
+    if AI_LEAD_ASSIST_ENABLED:
+        send_message(
+            chat_id,
+            "🤖 <b>ИИ-помощник</b> может подсказать по подготовке к поездке. "
+            "Выберите вопрос ниже или напишите <code>/ask ваш вопрос</code>.",
+            reply_markup=kb_ai_lead_assist(),
+            parse_mode="HTML",
+        )
 
 
 def _format_lead_notify_text(
@@ -3699,7 +4118,7 @@ def _notify_admin(
     phone: str,
     client_name: Optional[str],
     username: str = "",
-) -> None:
+) -> bool:
     """2. Deliver the saved lead to Natalya in VK and optional ops copies."""
     global _last_lead_client_id
     recipients = LEAD_NOTIFY_IDS
@@ -3728,7 +4147,7 @@ def _notify_admin(
             "Lead from %s saved but manager delivery is unavailable",
             _log_correlation(chat_id, namespace="tg-user"),
         )
-        return
+        return False
 
     with _lock:
         _last_lead_client_id = chat_id
@@ -3737,9 +4156,11 @@ def _notify_admin(
         chat_id, info, phone, client_name, username=username, source_label="Telegram",
     )
     reply_kb = kb_admin_reply(chat_id)
+    delivered = owner_delivered
     for recipient in recipients:
         resp = send_message(recipient, text, parse_mode="HTML", reply_markup=reply_kb)
         if resp is not None and getattr(resp, "status_code", 0) == 200:
+            delivered = True
             logger.info("Lead from %s delivered to Telegram manager %s", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"))
             continue
         # Fallback without HTML if Telegram rejected parse_mode (rare).
@@ -3759,6 +4180,7 @@ def _notify_admin(
             )
             resp2 = send_message(recipient, plain, reply_markup=reply_kb)
             if resp2 is not None and getattr(resp2, "status_code", 0) == 200:
+                delivered = True
                 logger.info(
                     "Lead from %s delivered to manager %s (plain-text fallback)", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"),
                 )
@@ -3766,6 +4188,7 @@ def _notify_admin(
         logger.error(
             "Failed to deliver lead from %s to Telegram manager %s", _log_correlation(chat_id, namespace="tg-user"), _log_correlation(recipient, namespace="tg-manager"),
         )
+    return delivered
 
 
 def _send_ai_blurb(chat_id: int, info: Dict[str, Any]) -> None:
@@ -3888,7 +4311,12 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     # Persist lead before side-effects so export/analytics work even if notify fails.
     try:
         lead_id = save_lead(chat_id, info, phone, first_name=first_name, username=username)
+        _record_ops_metric("lead", "telegram", "accepted")
+        record_funnel_event(
+            "telegram", str(info.get("source_tag") or "direct"), "lead", "accepted"
+        )
     except Exception as exc:
+        _record_ops_metric("lead", "telegram", "save_failure")
         logger.error("Failed to save lead for %s: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
         _alert_admin_error("Failed to save lead", exc)
         with _lock:
@@ -3920,8 +4348,26 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     # 2. Notify bot creator / admins in Telegram. Failure is operationally
     # important, but the customer's already-saved request must remain durable.
     try:
-        _notify_admin(chat_id, info, phone, client_name, username=username or "")
+        manager_delivered = _notify_admin(
+            chat_id, info, phone, client_name, username=username or ""
+        )
+        record_funnel_event(
+            "telegram",
+            str(info.get("source_tag") or "direct"),
+            "manager",
+            "delivered" if manager_delivered else "failed",
+        )
+        if manager_delivered:
+            with _db_cursor(commit=True) as cur:
+                cur.execute(
+                    "UPDATE leads SET manager_notified_at=? "
+                    "WHERE id=? AND manager_notified_at IS NULL",
+                    (int(time.time()), lead_id),
+                )
     except Exception as exc:
+        record_funnel_event(
+            "telegram", str(info.get("source_tag") or "direct"), "manager", "failed"
+        )
         logger.error("Failed to notify manager about saved lead %s: %s", lead_id, exc)
         _alert_admin_error("Failed to notify manager about saved lead", exc)
 
@@ -3962,6 +4408,16 @@ def _global_security_headers(response: Response) -> Response:
     response.headers.setdefault(
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+    )
+    response.headers.setdefault(
+        "Strict-Transport-Security",
+        "max-age=31536000",
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy-Report-Only",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; connect-src 'self'; object-src 'none'; "
+        "base-uri 'self'; form-action 'self'",
     )
     return response
 
@@ -4236,7 +4692,17 @@ def health() -> Any:
         ),
         "bot_mode": BOT_MODE,
         "mdt_retry": _mdt_retry_health(now),
+        "lead_delivery": _lead_delivery_health(now),
+        "ops_events": _ops_event_health(now),
+        "ai_runtime": _ai_runtime_health(now),
+        "acquisition_funnel": _funnel_health(now),
         "travelpayouts_stats": _travelpayouts_stats.health_snapshot(now=now),
+        "ai_selection": {
+            "mode": AI_MODE,
+            "ready": selection_ai_provider.ready,
+            "model": selection_ai_provider.model or None,
+            "lead_assist_enabled": AI_LEAD_ASSIST_ENABLED,
+        },
     })
     # 503 rather than 200-with-a-sad-field: monitoring reads status codes, and
     # a body nobody parses is how the last two outages stayed invisible.
@@ -4311,6 +4777,18 @@ def _process_callback(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Некорректная кнопка ответа.")
             return
         _admin_start_reply(chat_id, client_id)
+        return
+
+    # Post-lead AI shortcuts work without an active FSM session. The callback
+    # payload contains only a short key; the model receives the fixed question
+    # plus the same minimized saved-trip context as /ask.
+    if cb_data.startswith(CB_AI_LEAD_PREFIX):
+        question_key = cb_data[len(CB_AI_LEAD_PREFIX):]
+        question = AI_LEAD_QUICK_QUESTIONS.get(question_key)
+        if not question:
+            send_message(chat_id, "Эта кнопка устарела. Напишите /ask ваш вопрос.")
+            return
+        _handle_lead_assist(chat_id, question, entrypoint="quick")
         return
 
     # Navigation callbacks work from any dialog state.
@@ -4527,6 +5005,19 @@ def _process_update(data: Dict[str, Any]) -> None:
     if (text == "/ai" or text.startswith("/ai ")) and _handle_ai_beta_command(chat_id, text):
         return
 
+    # Explicit customer lead-assist surface. It does not hijack ordinary
+    # manager/client messages: only /ask or an "ИИ:" prefix invokes the model.
+    if text == "/ask" or text.startswith("/ask "):
+        _handle_lead_assist(chat_id, text[4:].strip(), entrypoint="ask")
+        return
+    if text.casefold().startswith("ии:"):
+        _handle_lead_assist(
+            chat_id,
+            text.split(":", 1)[1].strip(),
+            entrypoint="prefix",
+        )
+        return
+
     # --- Admin: pending reply to client, then admin commands ---
     if chat_id == ADMIN_ID or chat_id in LEAD_NOTIFY_IDS:
         if text in ("/cancel_reply", "/cancel_send"):
@@ -4584,6 +5075,8 @@ def _process_update(data: Dict[str, Any]) -> None:
     if chat_id in user_data:
         handle_dialog(chat_id, text, message)
     else:
+        # Ordinary post-lead messages remain human-owned. External AI is only
+        # invoked through the explicit /ask or "ИИ:" surfaces above.
         send_message(chat_id, HINT_START)
 
 

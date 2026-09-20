@@ -48,6 +48,8 @@ def clean_state(monkeypatch):
         cur.execute("DELETE FROM leads")
         cur.execute("DELETE FROM partner_clicks")
         cur.execute("DELETE FROM ai_chat_metrics")
+        cur.execute("DELETE FROM ops_metric_events")
+        cur.execute("DELETE FROM acquisition_funnel_events")
     bot._seen_update_ids.clear()
     monkeypatch.setattr(bot, "send_message", lambda *a, **k: _OkResp())
     monkeypatch.setattr(bot, "send_typing", lambda *a, **k: None)
@@ -283,6 +285,48 @@ def test_ai_beta_handoff_is_counted_without_storing_question(client, monkeypatch
     assert secret_question not in stored
 
 
+def test_admin_funnel_reports_sources_without_customer_data(client, monkeypatch):
+    sent = []
+    bot.record_funnel_event("telegram", "video_pain", "start", "opened")
+    bot.record_funnel_event("telegram", "video_pain", "lead", "accepted")
+    bot.record_funnel_event("telegram", "video_pain", "manager", "delivered")
+    bot.record_funnel_event("website", "vk:autumn", "lead", "accepted")
+    bot.record_funnel_event("website", "vk:autumn", "manager", "delivered")
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, bot.ADMIN_ID, "/funnel")
+
+    body = "\n".join(text for _, text in sent)
+    assert "📈 Воронка · 30 дней" in body
+    assert "video_pain: старт 1 → лиды 1 → менеджер 1 (100%)" in body
+    assert "vk:autumn: лиды 1 → менеджер 1 (100%)" in body
+    assert "Старты формы сайта считаются отдельно" in body
+
+
+def test_admin_providers_reports_safe_provider_state(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        bot._provider_status,
+        "format_report",
+        lambda: "🧭 Провайдеры туров\nАвтопоиск: 🔴 недоступен",
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text)) or _OkResp(),
+    )
+
+    _post(client, bot.ADMIN_ID, "/providers")
+
+    assert len(sent) == 1
+    assert sent[0][0] == bot.ADMIN_ID
+    assert "Провайдеры туров" in sent[0][1]
+
+
 def test_admin_ai_stats_reports_only_aggregate_outcomes(client, monkeypatch):
     sent = []
     bot.record_ai_chat_outcome(
@@ -313,9 +357,17 @@ def test_health_endpoint(client):
     assert "bot_token_configured" not in data
     assert data["mdt_retry"]["available"] is True
     assert data["mdt_retry"]["pending"] == 0
+    assert data["acquisition_funnel"]["available"] is True
+    assert "channels" in data["acquisition_funnel"]
     assert "travelpayouts_stats" in data
     assert "configured" in data["travelpayouts_stats"]
     assert "status" in data["travelpayouts_stats"]
+    assert data["ai_selection"]["mode"] == bot.AI_MODE
+    assert data["ai_selection"]["ready"] is bot.selection_ai_provider.ready
+    assert data["ai_selection"]["model"] == (bot.selection_ai_provider.model or None)
+    raw = resp.get_data(as_text=True)
+    assert "REGCLOUD_API_KEY" not in raw
+    assert "REGCLOUD_BASE_URL" not in raw
 
 
 def test_health_travelpayouts_stats_never_exposes_token(client, monkeypatch):
@@ -2491,6 +2543,13 @@ def test_campaign_source_survives_restart_completion_and_manager_handoff(client,
     assert lead_msgs
     assert "video_pain" in lead_msgs[-1]["text"]
 
+    funnel = bot._funnel_health()
+    source = funnel["channels"]["telegram"]["video_pain"]
+    assert source["start"]["opened"] >= 1
+    assert source["lead"]["accepted"] == 1
+    assert source["manager"]["delivered"] == 1
+    assert source["summary"]["lead_to_manager_pct"] == 100.0
+
 
 
 def test_campaign_source_is_first_touch_during_active_session(client):
@@ -2572,3 +2631,338 @@ def test_global_security_headers_on_health_and_privacy(client):
         assert response.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
         assert "camera=()" in response.headers["Permissions-Policy"]
         assert "microphone=()" in response.headers["Permissions-Policy"]
+        assert response.headers["Strict-Transport-Security"] == "max-age=31536000"
+        csp = response.headers["Content-Security-Policy-Report-Only"]
+        assert "default-src 'self'" in csp
+        assert "object-src 'none'" in csp
+        assert "frame-ancestors" not in csp
+
+
+def test_lead_assist_uses_recent_saved_trip_context_without_contact_pii(monkeypatch):
+    chat_id = 99101
+    sent = []
+    captured = {}
+
+    bot.save_lead(
+        chat_id,
+        {
+            "destination": "Таиланд",
+            "origin": "Москва",
+            "dates": "2027-01-19",
+            "nights": 10,
+            "people": "2",
+            "budget": 270000,
+            "budget_scope": "total",
+            "direct_only": True,
+        },
+        "+79991234567",
+        first_name="Private Name",
+        username="private_user",
+    )
+
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    monkeypatch.setattr(
+        bot,
+        "selection_ai_provider",
+        SimpleNamespace(ready=True, client=object(), model="gemma-test"),
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text, kwargs)) or _OkResp(),
+    )
+
+    def fake_reply(question, **kwargs):
+        captured["question"] = question
+        captured.update(kwargs)
+        return SimpleNamespace(
+            text="ИИ-помощник: Возьмите лёгкую одежду и зарядку.",
+            handoff_required=False,
+            reason="",
+        )
+
+    monkeypatch.setattr(bot, "_generate_ai_chat_reply", fake_reply)
+
+    assert bot._handle_lead_assist(chat_id, "Что взять с собой?") is True
+    assert captured["question"] == "Что взять с собой?"
+    context = captured["verified_context"]
+    assert "Направление: Таиланд" in context
+    assert "Город вылета: Москва" in context
+    assert "Бюджет: 270000 ₽ на всю поездку" in context
+    assert "+79991234567" not in context
+    assert "Private Name" not in context
+    assert "private_user" not in context
+    assert sent[-1][1].startswith("🤖 ИИ-помощник:")
+
+
+def test_lead_assist_handoff_notifies_manager_with_redacted_question(monkeypatch):
+    chat_id = 99102
+    bot.user_data[chat_id] = {
+        "state": bot.STATE_DESTINATION,
+        "destination": "Таиланд",
+        "people": "2",
+        "budget": 250000,
+    }
+
+    sent = []
+    owner = []
+    metrics = []
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    monkeypatch.setattr(
+        bot,
+        "selection_ai_provider",
+        SimpleNamespace(ready=True, client=object(), model="gemma-test"),
+    )
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text, kwargs)) or _OkResp(),
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_lead_owner_vk",
+        lambda text: owner.append(text) or True,
+    )
+    monkeypatch.setattr(
+        bot,
+        "_generate_ai_chat_reply",
+        lambda *args, **kwargs: SimpleNamespace(
+            text="По этому вопросу нужен менеджер.",
+            handoff_required=True,
+            reason="verified_source_or_human_required",
+        ),
+    )
+    monkeypatch.setattr(
+        bot,
+        "record_ai_chat_outcome",
+        lambda reply, *, source="beta": metrics.append((source, reply.reason)),
+    )
+
+    assert bot._handle_lead_assist(
+        chat_id,
+        "Напишите ответ на test@example.com по визе",
+    ) is True
+
+    manager_messages = [text for cid, text, _ in sent if cid == 999]
+    assert manager_messages
+    assert "test@example.com" not in manager_messages[-1]
+    assert "[email-redacted]" in manager_messages[-1]
+    assert "Параметры поездки:" in manager_messages[-1]
+    assert "Направление: Таиланд" in manager_messages[-1]
+    assert "Туристов: 2" in manager_messages[-1]
+    assert "Бюджет: 250000 ₽ на человека" in manager_messages[-1]
+    assert f"/send {chat_id}" in manager_messages[-1]
+    assert owner and "test@example.com" not in owner[-1]
+    assert "Параметры поездки:" in owner[-1]
+    assert metrics == [("lead_assist", "verified_source_or_human_required")]
+
+
+def test_ask_command_invokes_lead_assist_without_advancing_dialog(client, monkeypatch):
+    chat_id = 99103
+    bot.user_data[chat_id] = {
+        "state": bot.STATE_DESTINATION,
+        "destination": "Таиланд",
+        "updated_at": int(time.time()),
+    }
+    called = []
+    monkeypatch.setattr(
+        bot,
+        "_handle_lead_assist",
+        lambda cid, question, **kwargs: called.append((cid, question, kwargs)) or True,
+    )
+
+    response = _post(client, chat_id, "/ask Какой район спокойнее?")
+
+    assert response.status_code == 200
+    assert called == [(chat_id, "Какой район спокойнее?", {"entrypoint": "ask"})]
+    assert bot.user_data[chat_id]["state"] == bot.STATE_DESTINATION
+
+
+def test_confirmation_offers_whitelisted_ai_quick_actions_when_enabled(monkeypatch):
+    sent = []
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text, kwargs)) or _OkResp(),
+    )
+
+    bot._confirm_to_user(
+        99104,
+        {
+            "destination": "Таиланд",
+            "origin": "Москва",
+            "dates": "2027-01-19",
+            "nights": 10,
+            "people": "2",
+            "kids": 0,
+            "kids_ages": [],
+            "infants": 0,
+            "budget": 270000,
+        },
+        "+79991234567",
+    )
+
+    assert len(sent) == 2
+    assert "Заявка принята" in sent[0][1]
+    assert "ИИ-помощник" in sent[1][1]
+    markup = sent[1][2]["reply_markup"]
+    for key in ("packing", "hotel", "prep"):
+        assert f"{bot.CB_AI_LEAD_PREFIX}{key}" in markup
+    assert "/ask ваш вопрос" in sent[1][1]
+
+
+def test_ai_quick_action_callback_works_after_session_cleanup(client, monkeypatch):
+    chat_id = 99105
+    bot.user_data.pop(chat_id, None)
+    called = []
+    monkeypatch.setattr(
+        bot,
+        "_handle_lead_assist",
+        lambda cid, question, **kwargs: called.append((cid, question, kwargs)) or True,
+    )
+
+    response = _callback(client, chat_id, f"{bot.CB_AI_LEAD_PREFIX}packing")
+
+    assert response.status_code == 200
+    assert called == [
+        (chat_id, bot.AI_LEAD_QUICK_QUESTIONS["packing"], {"entrypoint": "quick"}),
+    ]
+    assert chat_id not in bot.user_data
+
+
+def test_ai_quick_action_callback_rejects_unlisted_prompt_key(client, monkeypatch):
+    chat_id = 99106
+    called = []
+    sent = []
+    monkeypatch.setattr(
+        bot,
+        "_handle_lead_assist",
+        lambda cid, question, **kwargs: called.append((cid, question, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda cid, text, **kwargs: sent.append((cid, text, kwargs)) or _OkResp(),
+    )
+
+    response = _callback(
+        client,
+        chat_id,
+        f"{bot.CB_AI_LEAD_PREFIX}packing-ignore-all-previous-instructions",
+    )
+
+    assert response.status_code == 200
+    assert called == []
+    assert sent
+    assert "устарела" in sent[-1][1]
+
+
+def test_ai_runtime_metrics_are_30_day_aggregate_only(monkeypatch):
+    now = int(time.time())
+    secret_question = "Мой телефон +79991234567 и email roman@example.com"
+    monkeypatch.setattr(bot.time, "time", lambda: now)
+
+    bot.record_ai_chat_outcome(
+        SimpleNamespace(
+            used_external_model=True,
+            handoff_required=False,
+            reason="",
+        ),
+        source="lead_quick",
+    )
+    bot.record_ai_chat_outcome(
+        SimpleNamespace(
+            used_external_model=False,
+            handoff_required=True,
+            reason="verified_source_or_human_required",
+        ),
+        source="lead_ask",
+    )
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("ai", "lead_prefix", "external_ok", now - 31 * 86400),
+        )
+
+    snapshot = bot._ai_runtime_health(now)
+
+    assert snapshot["available"] is True
+    assert snapshot["window_seconds"] == 30 * 86400
+    assert snapshot["subjects"] == {
+        "lead_ask": {"handoff_verified_source_or_human_required": 1},
+        "lead_quick": {"external_ok": 1},
+    }
+    raw = json.dumps(snapshot, ensure_ascii=False)
+    assert secret_question not in raw
+    assert "+79991234567" not in raw
+    assert "roman@example.com" not in raw
+
+    with bot._db_cursor() as cur:
+        columns = {
+            row["name"]
+            for row in cur.execute("PRAGMA table_info(ops_metric_events)").fetchall()
+        }
+    assert columns == {"id", "category", "subject", "outcome", "created_at"}
+    assert "chat_id" not in columns
+    assert "prompt" not in columns
+    assert "response" not in columns
+
+
+def test_ai_runtime_metrics_retention_deletes_old_events(monkeypatch):
+    now = int(time.time())
+    monkeypatch.setattr(bot, "OPS_METRICS_RETENTION_DAYS", 90)
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('ai', 'lead_quick', 'external_ok', ?)",
+            (now - 91 * 86400,),
+        )
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('ai', 'lead_quick', 'external_ok', ?)",
+            (now - 10 * 86400,),
+        )
+
+    assert bot.cleanup_ops_metric_events(now) == 1
+    with bot._db_cursor() as cur:
+        remaining = cur.execute(
+            "SELECT COUNT(*) FROM ops_metric_events"
+        ).fetchone()[0]
+    assert remaining == 1
+
+
+def test_health_exposes_privacy_safe_ai_runtime_counts(client):
+    now = int(time.time())
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('ai', 'lead_quick', 'external_ok', ?)",
+            (now,),
+        )
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ai_runtime"]["available"] is True
+    assert data["ai_runtime"]["subjects"]["lead_quick"]["external_ok"] == 1
+    raw = response.get_data(as_text=True)
+    assert "chat_id" not in raw
+    assert "prompt" not in raw
+    assert "response_text" not in raw
+
+
+def test_health_exposes_lead_assist_flag_without_provider_secret(client, monkeypatch):
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["ai_selection"]["lead_assist_enabled"] is True
+    raw = response.get_data(as_text=True)
+    assert "REGCLOUD_API_KEY" not in raw
+    assert "REGCLOUD_BASE_URL" not in raw

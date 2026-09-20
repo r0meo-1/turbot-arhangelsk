@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 from shared import sletat
@@ -353,6 +355,74 @@ def test_router_has_no_fake_offer_when_no_provider_is_configured():
     assert "не настроен" in result.error.lower()
 
 
+def test_router_reports_empty_then_fallback_success_without_payload_data(monkeypatch):
+    outcomes = []
+    monkeypatch.setattr(
+        tour_providers._travelata,
+        "search_tours",
+        lambda *args, **kwargs: tourvisor.SearchResult(error="Подходящих туров не найдено"),
+    )
+    offer = tourvisor.TourOffer(
+        hotel="Safe hotel",
+        category=4,
+        region="Анталья",
+        date="2026-10-16",
+        nights=10,
+        meal="AI",
+        room="",
+        operator="",
+        price=210000,
+    )
+    monkeypatch.setattr(
+        tour_providers._tourvisor,
+        "search_tours",
+        lambda *args, **kwargs: tourvisor.SearchResult(offers=[offer]),
+    )
+    settings = tour_providers.ProviderSettings(
+        order=("travelata", "tourvisor"),
+        travelata=travelata.TravelataSettings(enabled=True, username="u", password="p"),
+        tourvisor=tourvisor.TourvisorSettings(enabled=True, token="token"),
+    )
+
+    result, provider = tour_providers.search_tours(
+        settings, FakeSession(), _info(), on_outcome=lambda name, outcome: outcomes.append((name, outcome))
+    )
+
+    assert provider == "tourvisor"
+    assert result.offers
+    assert outcomes == [
+        ("travelata", "error"),
+        ("tourvisor", "success"),
+        ("tourvisor", "fallback"),
+    ]
+
+
+def test_provider_metrics_failure_never_blocks_search(monkeypatch):
+    expected = tourvisor.TourOffer(
+        hotel="Safe hotel", category=4, region="Анталья", date="2026-10-16",
+        nights=10, meal="AI", room="", operator="", price=210000,
+    )
+    monkeypatch.setattr(
+        tour_providers._tourvisor,
+        "search_tours",
+        lambda *args, **kwargs: tourvisor.SearchResult(offers=[expected]),
+    )
+    settings = tour_providers.ProviderSettings(
+        order=("tourvisor",),
+        tourvisor=tourvisor.TourvisorSettings(enabled=True, token="token"),
+    )
+
+    result, provider = tour_providers.search_tours(
+        settings,
+        FakeSession(),
+        _info(),
+        on_outcome=lambda *_: (_ for _ in ()).throw(RuntimeError("metrics down")),
+    )
+
+    assert provider == "tourvisor"
+    assert result.offers == [expected]
+
+
 
 def test_sletat_actualize_price_uses_offer_provenance():
     session = FakeSletatSession()
@@ -411,3 +481,33 @@ def test_sletat_actualize_refuses_offer_without_search_provenance():
     assert actual["confirmed"] is False
     assert actual["status"] == "unknown"
     assert not any(call[0].endswith("/ActualizePrice") for call in session.calls)
+
+
+
+def test_router_skips_expired_tourvisor_without_calling_it(monkeypatch):
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"exp": 1}).encode()
+    ).decode().rstrip("=")
+    expired = f"header.{payload}.signature"
+    called = []
+
+    monkeypatch.setattr(
+        tour_providers._tourvisor,
+        "search_tours",
+        lambda *args, **kwargs: called.append(True) or tourvisor.SearchResult(),
+    )
+    settings = tour_providers.ProviderSettings(
+        order=("tourvisor",),
+        tourvisor=tourvisor.TourvisorSettings(enabled=True, token=expired),
+    )
+
+    result, provider = tour_providers.search_tours(
+        settings,
+        FakeSession(),
+        _info(),
+    )
+
+    assert settings.enabled_names() == []
+    assert called == []
+    assert provider == ""
+    assert "не настроен" in result.error.lower()

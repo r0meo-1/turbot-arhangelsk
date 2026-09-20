@@ -153,3 +153,9 @@ def test_vk_blueprint_security_headers():
     assert response.headers["X-Content-Type-Options"] == "nosniff"
     assert response.headers["Referrer-Policy"] == "no-referrer"
     assert response.headers["Cache-Control"] == "no-store"
+    assert "camera=()" in response.headers["Permissions-Policy"]
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000"
+    csp = response.headers["Content-Security-Policy-Report-Only"]
+    assert "default-src 'self'" in csp
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors" not in csp

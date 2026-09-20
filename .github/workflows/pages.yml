@@ -57,10 +57,8 @@ jobs:
             canonical="$(fetch_page "$root/apreltour/?rev=$rev")"
             privacy="$(fetch_page "$root/apreltour/privacy.html?rev=$rev")"
             consent="$(fetch_page "$root/apreltour/consent.html?rev=$rev")"
-            public_privacy="$(fetch_page "https://r0meo1.ru/apreltour/privacy.html?rev=$rev")"
-            public_consent="$(fetch_page "https://r0meo1.ru/apreltour/consent.html?rev=$rev")"
-            robots="$(curl -fsSL --max-time 15 "$root/robots.txt" || true)"
-            sitemap="$(curl -fsSL --max-time 15 "$root/sitemap.xml" || true)"
+            robots="$(fetch_page "$root/robots.txt?rev=$rev")"
+            sitemap="$(fetch_page "$root/sitemap.xml?rev=$rev")"
 
             if grep -q 'TurBot × АПРЕЛЬ тур' <<<"$home" &&
                grep -q 'Наталья Ильина' <<<"$canonical" &&
@@ -69,13 +67,9 @@ jobs:
                grep -q 'Политика обработки персональных данных' <<<"$privacy" &&
                grep -q 'ИП Замятина Мария Андреевна' <<<"$privacy" &&
                grep -q 'ИП Замятина Мария Андреевна' <<<"$consent" &&
-               grep -q 'ИП Замятина Мария Андреевна' <<<"$public_privacy" &&
-               grep -q 'ИП Замятина Мария Андреевна' <<<"$public_consent" &&
                ! grep -q 'ЧЕРНОВИК / ШАБЛОН' <<<"$privacy" &&
                ! grep -q '\[указать' <<<"$privacy" &&
                ! grep -q '\[указать' <<<"$consent" &&
-               ! grep -q '\[указать' <<<"$public_privacy" &&
-               ! grep -q '\[указать' <<<"$public_consent" &&
                grep -q 'Sitemap: https://r0meo1.ru/sitemap.xml' <<<"$robots" &&
                grep -q 'https://r0meo1.ru/apreltour/' <<<"$sitemap"; then
               echo "TurBot Pages smoke: ok"
@@ -99,10 +93,12 @@ jobs:
               check page_privacy_title grep -q 'Политика обработки персональных данных' <<<"$privacy"
               check page_privacy_operator grep -q 'ИП Замятина Мария Андреевна' <<<"$privacy"
               check page_consent_operator grep -q 'ИП Замятина Мария Андреевна' <<<"$consent"
-              check custom_privacy_operator grep -q 'ИП Замятина Мария Андреевна' <<<"$public_privacy"
-              check custom_consent_operator grep -q 'ИП Замятина Мария Андреевна' <<<"$public_consent"
-              check custom_privacy_no_placeholder bash -c '! grep -q "\\[указать" <<<"$1"' _ "$public_privacy"
-              check custom_consent_no_placeholder bash -c '! grep -q "\\[указать" <<<"$1"' _ "$public_consent"
+              absent() { ! grep -Fq "$1"; }
+              check page_privacy_no_draft absent 'ЧЕРНОВИК / ШАБЛОН' <<<"$privacy"
+              check page_privacy_no_placeholder absent '[указать' <<<"$privacy"
+              check page_consent_no_placeholder absent '[указать' <<<"$consent"
+              check page_robots_sitemap grep -Fq 'Sitemap: https://r0meo1.ru/sitemap.xml' <<<"$robots"
+              check page_sitemap_canonical grep -Fq 'https://r0meo1.ru/apreltour/' <<<"$sitemap"
               echo "TurBot Pages smoke failed; only boolean diagnostics are shown" >&2
               exit 1
             fi

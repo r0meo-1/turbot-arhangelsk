@@ -113,6 +113,95 @@ except Exception as exc:
 PY
 }
 
+inspect_sletat() {
+  PYTHONPATH="$repo" "$venv/python" - "$env_file" <<'PY'
+import sys
+from urllib.parse import urlparse
+
+import requests
+from dotenv import dotenv_values
+from shared.sletat import _find_id
+
+values = dotenv_values(sys.argv[1])
+login = str(values.get('SLETAT_LOGIN') or '').strip()
+password = str(values.get('SLETAT_PASSWORD') or '').strip()
+flag = str(values.get('VK_SLETAT_ENABLED') or '').strip().lower()
+credentials_set = bool(login and password)
+enabled = flag in {'1', 'true', 'yes', 'on'} if flag else credentials_set
+base_url = str(
+    values.get('SLETAT_BASE_URL')
+    or 'https://module.sletat.ru/Main.svc'
+).strip().rstrip('/')
+host = urlparse(base_url).hostname or 'unknown'
+
+print(
+    'Sletat config: '
+    f'enabled={"yes" if enabled else "no"} '
+    f'credentials={"set" if credentials_set else "unset"} '
+    f'endpoint_host={host}'
+)
+if not enabled or not credentials_set:
+    raise SystemExit(0)
+
+
+def get(method, params=None):
+    query = dict(params or {})
+    query.update(login=login, password=password)
+    response = requests.get(
+        base_url + '/' + method,
+        params=query,
+        headers={'Accept': 'application/json'},
+        timeout=10,
+    )
+    status = response.status_code
+    response.raise_for_status()
+    payload = response.json()
+    wrapper = payload.get(method + 'Result') if isinstance(payload, dict) else None
+    if not isinstance(wrapper, dict):
+        return status, None, 'unexpected'
+    if wrapper.get('IsError'):
+        return status, None, 'api_error'
+    return status, wrapper.get('Data'), 'ok'
+
+
+try:
+    departures_status, departures, departures_state = get('GetDepartCities')
+    if departures_state != 'ok':
+        print(
+            'Sletat API: '
+            f'departures_http={departures_status} state={departures_state} '
+            'origin=skipped countries=skipped'
+        )
+        raise SystemExit(0)
+
+    departure_id = _find_id(departures, 'Архангельск')
+    if departure_id is None:
+        print(
+            'Sletat API: '
+            f'departures_http={departures_status} state=ok '
+            'origin=unresolved countries=skipped'
+        )
+        raise SystemExit(0)
+
+    countries_status, countries, countries_state = get(
+        'GetCountries', {'townFromId': departure_id}
+    )
+    country_id = _find_id(countries, 'Таиланд') if countries_state == 'ok' else None
+    print(
+        'Sletat API: '
+        f'departures_http={departures_status} origin=resolved '
+        f'countries_http={countries_status} state={countries_state} '
+        f'destination={"resolved" if country_id is not None else "unresolved"}'
+    )
+except requests.HTTPError as exc:
+    status = exc.response.status_code if exc.response is not None else 'unknown'
+    print(f'Sletat API: http_error={status}')
+except Exception as exc:
+    # Read-only probe. Never print credentials, query strings, URLs, or response bodies.
+    print(f'Sletat API: probe_error={type(exc).__name__}')
+PY
+}
+
 inspect_travelata() {
   "$venv/python" - "$env_file" <<'PY'
 import sys
@@ -169,15 +258,12 @@ PY
 
 inspect_tourvisor() {
   PYTHONPATH="$repo" "$venv/python" - "$env_file" <<'PY'
-import base64
-import json
 import sys
-import time
 from urllib.parse import urlparse
 
 import requests
 from dotenv import dotenv_values
-from shared.tourvisor import _find_named_id
+from shared.tourvisor import _find_named_id, jwt_status
 
 values = dotenv_values(sys.argv[1])
 token = str(values.get('TOURVISOR_TOKEN') or '').strip()
@@ -189,22 +275,8 @@ base_url = str(
 ).strip().rstrip('/')
 host = urlparse(base_url).hostname or 'unknown'
 
-jwt_exp_status = 'absent'
-if token:
-    try:
-        parts = token.split('.')
-        if len(parts) == 3:
-            payload_raw = parts[1] + '=' * (-len(parts[1]) % 4)
-            payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode('utf-8'))
-            exp = payload.get('exp')
-            if isinstance(exp, (int, float)):
-                jwt_exp_status = 'expired' if float(exp) <= time.time() else 'valid'
-            else:
-                jwt_exp_status = 'not_set'
-        else:
-            jwt_exp_status = 'not_jwt'
-    except Exception:
-        jwt_exp_status = 'unreadable'
+token_state = jwt_status(token)
+jwt_exp_status = token_state['status']
 
 print(
     'Tourvisor config: '
@@ -214,6 +286,9 @@ print(
     f'endpoint_host={host}'
 )
 if not token:
+    raise SystemExit(0)
+if jwt_exp_status == 'expired':
+    print('Tourvisor API: probe=skipped reason=expired_jwt')
     raise SystemExit(0)
 
 headers = {
@@ -317,5 +392,6 @@ curl --fail --silent --show-error --max-time 8 \
 
 echo "VK public health and Mini App routes healthy"
 inspect_callback_settings
+inspect_sletat
 inspect_travelata
 inspect_tourvisor

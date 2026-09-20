@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -18,6 +18,20 @@ from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
 
 logger = logging.getLogger("turbot.shared.tour_providers")
+
+
+def _emit_outcome(
+    callback: Optional[Callable[[str, str], None]],
+    provider: str,
+    outcome: str,
+    log: logging.Logger,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(provider, outcome)
+    except Exception as exc:
+        log.warning("Provider metrics callback failed for %s/%s: %s", provider, outcome, exc)
 
 
 @dataclass
@@ -59,7 +73,11 @@ class ProviderSettings:
                 ):
                     enabled.append(name)
             elif name == "tourvisor":
-                if self.tourvisor.enabled and self.tourvisor.token:
+                if (
+                    self.tourvisor.enabled
+                    and self.tourvisor.token
+                    and not _tourvisor.jwt_expired(self.tourvisor.token)
+                ):
                     enabled.append(name)
         return list(dict.fromkeys(enabled))
 
@@ -74,6 +92,7 @@ def search_tours(
     info: dict,
     *,
     log: Optional[logging.Logger] = None,
+    on_outcome: Optional[Callable[[str, str], None]] = None,
 ) -> Tuple[_tourvisor.SearchResult, str]:
     """Try configured providers in order and return the first useful result.
 
@@ -86,6 +105,7 @@ def search_tours(
     attempted = False
     last_search_id = None
 
+    failed_before_success = False
     for name in settings.enabled_names():
         attempted = True
         if name == "sletat":
@@ -106,12 +126,26 @@ def search_tours(
         if result.search_id is not None:
             last_search_id = result.search_id
         if result.offers:
+            _emit_outcome(on_outcome, name, "success", log)
+            if failed_before_success:
+                _emit_outcome(on_outcome, name, "fallback", log)
             for offer in result.offers:
                 offer.provider = name
                 offer.provider_search_id = result.search_id
             return result, name
         if result.error:
+            lowered = result.error.casefold()
+            if "timeout" in lowered or "таймаут" in lowered:
+                outcome = "timeout"
+            elif any(token in lowered for token in ("http", "status", "401", "403", "429", "500", "502", "503", "504")):
+                outcome = "http_error"
+            else:
+                outcome = "error"
+            _emit_outcome(on_outcome, name, outcome, log)
             errors.append(f"{name}: {result.error}")
+        else:
+            _emit_outcome(on_outcome, name, "empty", log)
+        failed_before_success = True
 
     if not attempted:
         return _tourvisor.SearchResult(

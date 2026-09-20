@@ -67,6 +67,9 @@ from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
+from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
+from shared import funnel_metrics as _funnel_metrics
+from shared import provider_status as _provider_status
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -76,6 +79,7 @@ from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
 from shared.log_privacy import correlation_id as _log_correlation
 from shared.ai import generate_ai_selection as _shared_generate_ai
+from shared.ai_provider import build_selection_provider
 from shared import mdt as mdt_shared
 
 load_dotenv()
@@ -118,6 +122,9 @@ VK_API_BASE          = "https://api.vk.com/method/"
 
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL        = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+REGCLOUD_API_KEY  = os.getenv("REGCLOUD_API_KEY", "")
+REGCLOUD_BASE_URL = os.getenv("REGCLOUD_BASE_URL", "")
+REGCLOUD_MODEL    = os.getenv("REGCLOUD_MODEL", "")
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 PORT              = _env_int("VK_PORT", _env_int("PORT", 5100))
 DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", os.getenv("DATABASE_PATH", "vk_bot_state.sqlite"))
@@ -203,6 +210,8 @@ DATA_OPERATOR_NAME = os.getenv(
     "ТА «АПРЕЛЬ тур»",
 )
 DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
+FUNNEL_ANALYTICS_RETENTION_DAYS = _env_int("FUNNEL_ANALYTICS_RETENTION_DAYS", 365)
+OPS_METRICS_RETENTION_DAYS = _env_int("OPS_METRICS_RETENTION_DAYS", 90)
 # soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
 # strict: classic «Согласен / Отказаться».
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -253,16 +262,7 @@ if TOURVISOR_ENABLED and not TOURVISOR_TOKEN:
 
 
 def _tourvisor_jwt_expired(token: str) -> bool:
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return False
-        payload_raw = parts[1] + "=" * (-len(parts[1]) % 4)
-        payload = json.loads(base64.urlsafe_b64decode(payload_raw).decode("utf-8"))
-        exp = payload.get("exp")
-        return isinstance(exp, (int, float)) and float(exp) <= time.time()
-    except Exception:
-        return False
+    return _tourvisor.jwt_expired(token)
 
 
 if TOURVISOR_ENABLED and _tourvisor_jwt_expired(TOURVISOR_TOKEN):
@@ -336,6 +336,33 @@ def _tour_provider_settings() -> "_tour_providers.ProviderSettings":
 
 
 TOUR_SEARCH_ENABLED = _tour_provider_settings().enabled
+
+
+def _tour_search_health() -> Dict[str, Any]:
+    providers = _tour_provider_settings()
+    tv = _tourvisor.jwt_status(TOURVISOR_TOKEN)
+    return {
+        "enabled": providers.enabled,
+        "enabled_providers": providers.enabled_names(),
+        "provider_order": list(TOUR_PROVIDER_ORDER),
+        "tourvisor": {
+            "configured": bool(TOURVISOR_TOKEN),
+            "enabled": bool(TOURVISOR_ENABLED),
+            "token_status": tv["status"],
+            "expires_in_seconds": tv["expires_in_seconds"],
+        },
+        "travelata": {
+            "configured": bool(TRAVELATA_USERNAME and TRAVELATA_PASSWORD),
+            "enabled": bool(TRAVELATA_ENABLED),
+        },
+        "sletat": {
+            "configured": bool(
+                getattr(providers.sletat, "login", "")
+                and getattr(providers.sletat, "password", "")
+            ),
+            "enabled": bool(getattr(providers.sletat, "enabled", False)),
+        },
+    }
 
 
 def _tutu_settings() -> "_tutu.TutuSettings":
@@ -448,6 +475,14 @@ HINT_START = "Чтобы подобрать тур, напишите «Нача�
 # ---------------------------------------------------------------------------
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY and Groq else None
+selection_ai_provider = build_selection_provider(
+    AI_MODE,
+    groq_api_key=GROQ_API_KEY,
+    groq_model=GROQ_MODEL,
+    regcloud_api_key=REGCLOUD_API_KEY,
+    regcloud_base_url=REGCLOUD_BASE_URL,
+    regcloud_model=REGCLOUD_MODEL,
+)
 
 # ---------------------------------------------------------------------------
 # Shared HTTP session
@@ -627,6 +662,8 @@ def init_db() -> None:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_preorder_id INTEGER")
                 if "mdt_tourist_id" not in _cols:
                     cur.execute("ALTER TABLE leads ADD COLUMN mdt_tourist_id INTEGER")
+                if "manager_notified_at" not in _cols:
+                    cur.execute("ALTER TABLE leads ADD COLUMN manager_notified_at INTEGER")
         # One-time production repair for the single lead that the pre-acknowledgement
         # MDT client falsely marked `synced` after receiving an error JSON. Production
         # diagnostics identified it as lead 35, the only synced row, with zero attempts;
@@ -678,6 +715,22 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
+        _funnel_metrics.init_schema(cur)
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ops_metric_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                created_at INTEGER NOT NULL
+            )
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ops_metric_events_created_at "
+            "ON ops_metric_events(created_at)"
+        )
         cur.execute("PRAGMA journal_mode=WAL")
         cur.fetchone()
 
@@ -960,6 +1013,147 @@ def _mdt_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
     }
 
 
+def _lead_delivery_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day VK manager-delivery aggregates without customer data."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            cur.execute(
+                "SELECT created_at, manager_notified_at FROM leads WHERE created_at >= ?",
+                (cutoff,),
+            )
+            snapshot = lead_delivery_snapshot(
+                cur.fetchall(), window_seconds=window
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK lead-delivery aggregates: %s", exc)
+        return {"available": False, "window_seconds": window, "channels": {}}
+    return {
+        "available": True,
+        "window_seconds": window,
+        "channels": {"vk": snapshot},
+    }
+
+
+def record_funnel_event(
+    channel: str,
+    source: str,
+    stage: str,
+    outcome: str,
+) -> None:
+    try:
+        _funnel_metrics.record(
+            _db_cursor,
+            channel,
+            source or "direct",
+            stage,
+            outcome,
+        )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist VK acquisition funnel event: %s", exc)
+
+
+def _funnel_health(now: Optional[float] = None) -> Dict[str, Any]:
+    try:
+        return _funnel_metrics.snapshot(_db_cursor, now=now)
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK acquisition funnel: %s", exc)
+        return {
+            "available": False,
+            "window_seconds": 30 * 86400,
+            "events": 0,
+            "channels": {},
+        }
+
+
+def _record_ops_metric(category: str, subject: str, outcome: str) -> None:
+    safe = (
+        str(category or "unknown")[:40],
+        str(subject or "unknown")[:40],
+        str(outcome or "unknown")[:64],
+    )
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (*safe, int(time.time())),
+            )
+    except sqlite3.Error as exc:
+        logger.warning("Could not persist VK operational counter: %s", exc)
+
+
+def cleanup_ops_metric_events(now: Optional[float] = None) -> int:
+    """Delete stale anonymous operational events."""
+    if OPS_METRICS_RETENTION_DAYS <= 0:
+        return 0
+    current = int(time.time() if now is None else now)
+    cutoff = current - OPS_METRICS_RETENTION_DAYS * 86400
+    try:
+        with _db_cursor(commit=True) as cur:
+            cur.execute("DELETE FROM ops_metric_events WHERE created_at < ?", (cutoff,))
+            return int(cur.rowcount or 0)
+    except sqlite3.Error as exc:
+        logger.warning("Could not clean VK operational counters: %s", exc)
+        return 0
+
+
+def _provider_runtime_health(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return 30-day package-tour provider outcomes without request payloads."""
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT subject, outcome, COUNT(*) "
+                "FROM ops_metric_events "
+                "WHERE category = 'provider' AND created_at >= ? "
+                "GROUP BY subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK provider counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
+
+
+def _format_provider_runtime_report(snapshot: Optional[Dict[str, Any]] = None) -> str:
+    data = snapshot or _provider_runtime_health()
+    subjects = data.get("subjects") or {}
+    if not data.get("available"):
+        return "📊 30 дней: метрики провайдеров недоступны"
+    if not subjects:
+        return "📊 30 дней: вызовов провайдеров пока нет"
+    lines = ["📊 Провайдеры · 30 дней"]
+    for provider, outcomes in sorted(subjects.items()):
+        total = sum(int(value) for value in outcomes.values())
+        lines.append(f"• {provider}: {total}")
+        for outcome, count in sorted(outcomes.items()):
+            lines.append(f"  - {outcome}: {count}")
+    return "\n".join(lines)
+
+
+def _ops_event_health(now: Optional[float] = None) -> Dict[str, Any]:
+    current = int(time.time() if now is None else now)
+    window = 30 * 86400
+    cutoff = current - window
+    try:
+        with _db_cursor() as cur:
+            rows = cur.execute(
+                "SELECT category || ':' || subject, outcome, COUNT(*) "
+                "FROM ops_metric_events WHERE created_at >= ? "
+                "GROUP BY category, subject, outcome",
+                (cutoff,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Health could not read VK operational counters: %s", exc)
+        return {"available": False, "window_seconds": window, "subjects": {}}
+    return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
+
+
 def _notify_ops_alert(message: str, *, alert_key: str) -> bool:
     """Send a rate-limited, PII-free VK/MDT operations alert to Telegram."""
     bot_token = os.getenv("BOT_TOKEN", "").strip()
@@ -1168,17 +1362,31 @@ def _start_timeout_worker() -> None:
 
 
 def _start_retention_worker() -> None:
-    if DATA_RETENTION_DAYS <= 0:
+    if (
+        DATA_RETENTION_DAYS <= 0
+        and FUNNEL_ANALYTICS_RETENTION_DAYS <= 0
+        and OPS_METRICS_RETENTION_DAYS <= 0
+    ):
         return
     def _worker():
         while True:
             try:
                 cleanup_expired_data()
+                _funnel_metrics.cleanup(
+                    _db_cursor, FUNNEL_ANALYTICS_RETENTION_DAYS
+                )
+                cleanup_ops_metric_events()
             except Exception as exc:
                 logger.error("Error in retention worker: %s", exc)
             time.sleep(6 * 3600)
     threading.Thread(target=_worker, daemon=True, name="vk-data-retention").start()
-    logger.info("Data retention worker started (%s days)", DATA_RETENTION_DAYS)
+    logger.info(
+        "Data retention worker started "
+        "(personal=%s days, funnel_events=%s days, ops_events=%s days)",
+        DATA_RETENTION_DAYS,
+        FUNNEL_ANALYTICS_RETENTION_DAYS,
+        OPS_METRICS_RETENTION_DAYS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1649,8 +1857,8 @@ def generate_ai_selection(destination: str, dates: str, people: str, budget: str
         people,
         budget,
         ai_mode=AI_MODE,
-        groq_client=groq_client,
-        groq_model=GROQ_MODEL,
+        groq_client=selection_ai_provider.client,
+        groq_model=selection_ai_provider.model,
         log=logger,
     )
 
@@ -1865,6 +2073,7 @@ def handle_start(
     user_id: int, first_name: str = "", source_tag: str = ""
 ) -> None:
     source_tag = _first_touch_source_tag(user_id, source_tag)
+    record_funnel_event("vk", source_tag or "direct", "start", "opened")
     if CONSENT_MODE == "strict" and not has_consent(user_id):
         with _lock:
             user_data[user_id] = {
@@ -2527,6 +2736,9 @@ def _tour_search_worker(
         origin_snapshot["origin"] = origin
         provider_result, provider_name = _tour_providers.search_tours(
             _tour_provider_settings(), http_session, origin_snapshot, log=logger,
+            on_outcome=lambda provider, outcome: _record_ops_metric(
+                "provider", provider, outcome
+            ),
         )
         results.append(provider_result)
         if provider_name:
@@ -3444,7 +3656,7 @@ def _notify_admin_telegram(
             logger.error("Telegram notify error for VK lead %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
 
-def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> None:
+def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: Optional[str]) -> bool:
     """Deliver every VK lead to Natalya's private messages plus optional ops copies."""
     _notify_admin_telegram(user_id, info, phone, client_name)
     selected = _selected_tour_summary(info)
@@ -3491,6 +3703,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
         )
     elif not LEAD_NOTIFY_IDS and owner_result is None:
         logger.warning("VK lead from %s has no working manager delivery channel", _log_correlation(user_id, namespace="vk-user"))
+    return owner_result is not None
 
 
 # When true, MDT + AI run inline (tests). Production defers them off the webhook.
@@ -3625,11 +3838,29 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     lead_id: Optional[int] = None
     try:
         lead_id = save_lead(user_id, info, phone, first_name=client_name)
+        _record_ops_metric("lead", "vk", "accepted")
+        record_funnel_event(
+            "vk", str(info.get("source_tag") or "direct"), "lead", "accepted"
+        )
     except Exception as exc:
+        _record_ops_metric("lead", "vk", "save_failure")
         logger.error("Failed to save VK lead for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
 
     _confirm_to_user(user_id, info, phone)
-    _notify_admin(user_id, info, phone, client_name)
+    manager_delivered = _notify_admin(user_id, info, phone, client_name)
+    record_funnel_event(
+        "vk",
+        str(info.get("source_tag") or "direct"),
+        "manager",
+        "delivered" if manager_delivered else "failed",
+    )
+    if manager_delivered and lead_id is not None:
+        with _db_cursor(commit=True) as cur:
+            cur.execute(
+                "UPDATE leads SET manager_notified_at=? "
+                "WHERE id=? AND manager_notified_at IS NULL",
+                (int(time.time()), lead_id),
+            )
     with _lock:
         user_data.pop(user_id, None)
     delete_session(user_id)
@@ -3893,6 +4124,24 @@ def _process_message(message: Dict[str, Any]) -> None:
 
     # Admin commands
     if user_id == ADMIN_ID:
+        if text_lower in ("воронка", "funnel"):
+            send_message(
+                user_id,
+                _funnel_metrics.format_report(
+                    _funnel_health(),
+                    channels=["vk"],
+                    max_sources=10,
+                ),
+            )
+            return
+        if text_lower in ("провайдеры", "providers"):
+            send_message(
+                user_id,
+                _provider_status.format_report()
+                + "\n\n"
+                + _format_provider_runtime_report(),
+            )
+            return
         if command == "help":
             send_message(user_id, USER_HELP)
             return
@@ -4177,6 +4426,16 @@ def health() -> Any:
         "revision": _version.REVISION,
         "uptime_seconds": _version.uptime_seconds(),
         "mdt_delivery": _mdt_delivery_health(),
+        "lead_delivery": _lead_delivery_health(),
+        "ops_events": _ops_event_health(),
+        "provider_runtime": _provider_runtime_health(),
+        "acquisition_funnel": _funnel_health(),
+        "tour_search": _tour_search_health(),
+        "ai_selection": {
+            "mode": AI_MODE,
+            "ready": selection_ai_provider.ready,
+            "model": selection_ai_provider.model or None,
+        },
     })
 
 

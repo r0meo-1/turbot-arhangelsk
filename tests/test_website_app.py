@@ -44,6 +44,7 @@ def clean_website_state(monkeypatch):
     monkeypatch.setattr(bot, "DEMO_MODE", False)
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM website_leads")
+        cur.execute("DELETE FROM acquisition_funnel_events")
 
 
 @pytest.fixture
@@ -125,6 +126,9 @@ def test_website_lead_is_stored_before_async_delivery(client, monkeypatch):
     assert row[6] > 0
     assert row[7:10] == ("vk", "social", "autumn")
     assert row[10] == "pending"
+    funnel = bot._funnel_health()
+    website_source = funnel["channels"]["website"]["vk:autumn"]
+    assert website_source["lead"]["accepted"] == 1
 
 
 def test_website_request_id_is_idempotent(client, monkeypatch):
@@ -228,6 +232,11 @@ def test_website_owner_notification_retries_until_synced(monkeypatch):
     assert attempts == 2
     assert next_retry_at is None
     assert notified_at is not None
+
+    funnel = bot._funnel_health()
+    manager = funnel["channels"]["website"]["vk:autumn"]["manager"]
+    assert manager["failed"] == 1
+    assert manager["delivered"] == 1
 
 
 
