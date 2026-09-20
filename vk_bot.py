@@ -69,6 +69,7 @@ from shared import tour_providers as _tour_providers
 from shared import version as _version
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
+from shared import travel_crm_store as _travel_crm_store
 from shared import provider_status as _provider_status
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
@@ -729,6 +730,7 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_chat_id ON leads(chat_id)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
+        _travel_crm_store.init_schema(cur)
         _funnel_metrics.init_schema(cur)
         cur.execute(
             """
