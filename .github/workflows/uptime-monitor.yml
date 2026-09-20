@@ -118,6 +118,30 @@ jobs:
             gh issue close "$open_issue" --repo "$GITHUB_REPOSITORY" --reason completed
           fi
 
+      - name: Create controlled notification smoke
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[alert-smoke]')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          body="$(mktemp)"
+          {
+            echo "Controlled notification-delivery smoke test for #134."
+            echo
+            echo "This is **not a production incident** and does not indicate an outage."
+            echo
+            echo "- Source: GitHub Actions uptime workflow"
+            echo "- Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo "Purpose: verify that an issue created by the same automation identity as a real uptime incident reaches the repository owner's notification channel."
+          } > "$body"
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "[uptime-test] Actions notification delivery smoke" \
+            --assignee "$GITHUB_REPOSITORY_OWNER" \
+            --body-file "$body"
+
       - name: Fail run on confirmed outage
         if: steps.probe.outputs.failed == 'true'
         run: |
