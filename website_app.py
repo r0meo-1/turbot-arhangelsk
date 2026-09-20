@@ -18,9 +18,10 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import threading
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -28,6 +29,19 @@ from flask import Response, jsonify, request
 
 import bot as _bot
 from shared import mdt as mdt_shared
+from shared import travel_crm_store as _travel_crm_store
+from shared.travel_crm import (
+    Activity,
+    ActivityType,
+    BookingOutcome,
+    ManagerTask,
+    OutcomeStatus,
+    Quote,
+    QuoteReaction,
+    TaskStatus,
+    TaskType,
+    timeline_to_dict,
+)
 
 app = _bot.app
 logger = logging.getLogger("turbot.website")
@@ -870,6 +884,448 @@ if "agent_extension_status" not in app.view_functions:
             "status": status,
             "followUpOn": follow_up_on,
             "updatedAt": now,
+        })
+
+
+
+def _crm_parse_datetime(value: Any, *, default: Optional[datetime] = None) -> datetime:
+    text = str(value or "").strip()
+    if not text:
+        if default is not None:
+            return default
+        raise ValueError("datetime_required")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("invalid_datetime") from exc
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _crm_client_summary(cur: Any, request_id: str) -> Dict[str, Any]:
+    row = cur.execute(
+        "SELECT lead_id FROM crm_trip_requests WHERE request_id=?",
+        (request_id,),
+    ).fetchone()
+    lead_id = int(row[0]) if row and row[0] is not None else None
+    if lead_id is None:
+        return {"leadId": None, "name": "", "phone": ""}
+
+    lead = cur.execute(
+        "SELECT first_name, phone FROM leads WHERE id=?",
+        (lead_id,),
+    ).fetchone()
+    if not lead:
+        return {"leadId": lead_id, "name": "", "phone": ""}
+    return {
+        "leadId": lead_id,
+        "name": str(lead[0] or ""),
+        "phone": str(lead[1] or ""),
+    }
+
+
+def _crm_request_summary(cur: Any, request_id: str) -> Dict[str, Any]:
+    timeline = _travel_crm_store.load_timeline(cur.connection, request_id)
+    if timeline is None:
+        return {"requestId": request_id}
+    trip = timeline.request
+    summary = {
+        "requestId": trip.request_id,
+        "destination": trip.primary_destination,
+        "origin": trip.departure_city,
+        "dates": trip.dates_text or " – ".join(
+            value for value in (trip.date_from, trip.date_to) if value
+        ),
+        "adults": trip.adults,
+        "childAges": [child.age for child in trip.children],
+        "budget": trip.budget_amount,
+        "currency": trip.budget_currency,
+        "sourceTag": trip.attribution.source_tag,
+        "channel": trip.attribution.channel,
+        "campaign": trip.attribution.campaign,
+    }
+    summary.update(_crm_client_summary(cur, request_id))
+    return summary
+
+
+if "agent_extension_crm_today" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/today", methods=["GET", "OPTIONS"])
+    def agent_extension_crm_today() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+
+        try:
+            now = _crm_parse_datetime(
+                request.args.get("now"),
+                default=datetime.utcnow(),
+            )
+            limit = max(1, min(int(request.args.get("limit", "50")), 100))
+        except (TypeError, ValueError):
+            return _agent_json_response({"ok": False, "error": "invalid_query"}, 400)
+
+        with _bot._db_cursor() as cur:
+            tasks = _travel_crm_store.due_tasks(cur.connection, now)[:limit]
+            items = []
+            for task in tasks:
+                item = {
+                    "taskId": task.task_id,
+                    "requestId": task.request_id,
+                    "type": task.type.value,
+                    "dueAt": task.due_at.isoformat(),
+                    "createdAt": task.created_at.isoformat(),
+                    "priority": task.priority,
+                    "status": task.status.value,
+                    "note": task.note,
+                }
+                item["request"] = _crm_request_summary(cur, task.request_id)
+                items.append(item)
+        return _agent_json_response(
+            {"ok": True, "now": now.isoformat(), "tasks": items}
+        )
+
+
+if "agent_extension_crm_timeline" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/timeline", methods=["GET", "OPTIONS"])
+    def agent_extension_crm_timeline() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+
+        try:
+            request_id = _safe_text(request.args.get("requestId"), 128)
+        except ValueError:
+            request_id = ""
+        if not request_id:
+            return _agent_json_response({"ok": False, "error": "request_id_required"}, 400)
+
+        with _bot._db_cursor() as cur:
+            timeline = _travel_crm_store.load_timeline(cur.connection, request_id)
+            if timeline is None:
+                return _agent_json_response({"ok": False, "error": "request_not_found"}, 404)
+            payload = timeline_to_dict(timeline)
+            payload["client"] = _crm_client_summary(cur, request_id)
+            payload["lastContact"] = (
+                payload["activities"][-1] if payload["activities"] else None
+            )
+        return _agent_json_response({"ok": True, "timeline": payload})
+
+
+if "agent_extension_crm_quote" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/quote", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_quote() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+
+        try:
+            request_id = _safe_text(raw.get("requestId"), 128)
+            hotel = _safe_text(raw.get("hotel"), 180)
+            operator = _safe_text(raw.get("operator"), 120)
+            carrier = _safe_text(raw.get("carrier"), 120)
+            meal_plan = _safe_text(raw.get("mealPlan"), 40)
+            currency = _safe_text(raw.get("currency") or "RUB", 12).upper()
+            price_amount = int(raw.get("priceAmount") or 0)
+            reaction = QuoteReaction(str(raw.get("reaction") or QuoteReaction.DRAFT.value))
+            calculated_at = _crm_parse_datetime(
+                raw.get("calculatedAt"),
+                default=datetime.utcnow(),
+            )
+        except (ValueError, TypeError):
+            return _agent_json_response({"ok": False, "error": "invalid_quote"}, 400)
+        if not request_id or not hotel or price_amount < 0:
+            return _agent_json_response({"ok": False, "error": "invalid_quote"}, 400)
+
+        quote_id = str(raw.get("quoteId") or "").strip() or (
+            "quote-" + secrets.token_urlsafe(10)
+        )
+        try:
+            quote_id = _safe_text(quote_id, 128)
+        except ValueError:
+            return _agent_json_response({"ok": False, "error": "invalid_quote_id"}, 400)
+
+        quote = Quote(
+            quote_id=quote_id,
+            request_id=request_id,
+            hotel=hotel,
+            operator=operator,
+            carrier=carrier,
+            meal_plan=meal_plan,
+            price_amount=price_amount,
+            currency=currency,
+            calculated_at=calculated_at,
+            reaction=reaction,
+        )
+        try:
+            with _bot._db_cursor(commit=True) as cur:
+                if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+                    return _agent_json_response(
+                        {"ok": False, "error": "request_not_found"}, 404
+                    )
+                _travel_crm_store.append_quote(cur.connection, quote)
+        except sqlite3.IntegrityError:
+            return _agent_json_response({"ok": False, "error": "quote_exists"}, 409)
+
+        return _agent_json_response({
+            "ok": True,
+            "quoteId": quote_id,
+            "requestId": request_id,
+        })
+
+
+if "agent_extension_crm_quote_reaction" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/quote-reaction", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_quote_reaction() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+
+        try:
+            quote_id = _safe_text(raw.get("quoteId"), 128)
+            reaction = QuoteReaction(str(raw.get("reaction") or ""))
+        except (ValueError, TypeError):
+            return _agent_json_response({"ok": False, "error": "invalid_reaction"}, 400)
+
+        with _bot._db_cursor(commit=True) as cur:
+            row = cur.execute(
+                "SELECT request_id FROM crm_quotes WHERE quote_id=?",
+                (quote_id,),
+            ).fetchone()
+            if not row:
+                return _agent_json_response({"ok": False, "error": "quote_not_found"}, 404)
+            request_id = str(row[0])
+            cur.execute(
+                "UPDATE crm_quotes SET reaction=? WHERE quote_id=?",
+                (reaction.value, quote_id),
+            )
+            _travel_crm_store.append_activity(
+                cur.connection,
+                Activity(
+                    activity_id="activity-" + secrets.token_urlsafe(10),
+                    request_id=request_id,
+                    type=ActivityType.STATUS_CHANGE,
+                    summary=f"quote:{quote_id}:{reaction.value}",
+                    created_at=datetime.utcnow(),
+                ),
+            )
+
+        return _agent_json_response({
+            "ok": True,
+            "quoteId": quote_id,
+            "reaction": reaction.value,
+        })
+
+
+if "agent_extension_crm_task" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/task", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_task() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+
+        try:
+            request_id = _safe_text(raw.get("requestId"), 128)
+            task_type = TaskType(str(raw.get("type") or ""))
+            due_at = _crm_parse_datetime(raw.get("dueAt"))
+            priority = int(raw.get("priority") or 3)
+            status = TaskStatus(str(raw.get("status") or TaskStatus.TODO.value))
+            note = _safe_text(raw.get("note"), 500)
+        except (ValueError, TypeError):
+            return _agent_json_response({"ok": False, "error": "invalid_task"}, 400)
+
+        task_id = str(raw.get("taskId") or "").strip() or (
+            "task-" + secrets.token_urlsafe(10)
+        )
+        try:
+            task_id = _safe_text(task_id, 128)
+            task = ManagerTask(
+                task_id=task_id,
+                request_id=request_id,
+                type=task_type,
+                due_at=due_at,
+                created_at=_crm_parse_datetime(
+                    raw.get("createdAt"),
+                    default=datetime.utcnow(),
+                ),
+                priority=priority,
+                status=status,
+                note=note,
+            )
+        except (ValueError, TypeError):
+            return _agent_json_response({"ok": False, "error": "invalid_task"}, 400)
+
+        with _bot._db_cursor(commit=True) as cur:
+            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+                return _agent_json_response({"ok": False, "error": "request_not_found"}, 404)
+            _travel_crm_store.upsert_task(cur.connection, task)
+        return _agent_json_response({
+            "ok": True,
+            "taskId": task.task_id,
+            "status": task.status.value,
+        })
+
+
+if "agent_extension_crm_task_status" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/task-status", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_task_status() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+        try:
+            task_id = _safe_text(raw.get("taskId"), 128)
+            status = TaskStatus(str(raw.get("status") or ""))
+        except (ValueError, TypeError):
+            return _agent_json_response({"ok": False, "error": "invalid_task_status"}, 400)
+
+        with _bot._db_cursor(commit=True) as cur:
+            cur.execute(
+                "UPDATE crm_tasks SET status=? WHERE task_id=?",
+                (status.value, task_id),
+            )
+            if not cur.rowcount:
+                return _agent_json_response({"ok": False, "error": "task_not_found"}, 404)
+        return _agent_json_response({
+            "ok": True,
+            "taskId": task_id,
+            "status": status.value,
+        })
+
+
+if "agent_extension_crm_activity" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/activity", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_activity() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+
+        try:
+            request_id = _safe_text(raw.get("requestId"), 128)
+            activity_type = ActivityType(str(raw.get("type") or ActivityType.NOTE.value))
+            summary = _safe_text(raw.get("summary"), 1000)
+            created_at = _crm_parse_datetime(
+                raw.get("createdAt"),
+                default=datetime.utcnow(),
+            )
+        except (ValueError, TypeError):
+            return _agent_json_response({"ok": False, "error": "invalid_activity"}, 400)
+        if not request_id or not summary:
+            return _agent_json_response({"ok": False, "error": "invalid_activity"}, 400)
+
+        activity = Activity(
+            activity_id="activity-" + secrets.token_urlsafe(10),
+            request_id=request_id,
+            type=activity_type,
+            summary=summary,
+            created_at=created_at,
+        )
+        with _bot._db_cursor(commit=True) as cur:
+            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+                return _agent_json_response({"ok": False, "error": "request_not_found"}, 404)
+            _travel_crm_store.append_activity(cur.connection, activity)
+        return _agent_json_response({
+            "ok": True,
+            "activityId": activity.activity_id,
+            "requestId": request_id,
+        })
+
+
+if "agent_extension_crm_outcome" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/outcome", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_outcome() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        if not _AGENT_EXTENSION_TOKEN:
+            return _agent_json_response(
+                {"ok": False, "error": "agent_extension_disabled"}, 503
+            )
+        if not _agent_extension_authorized():
+            return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response({"ok": False, "error": "invalid_json"}, 400)
+
+        try:
+            request_id = _safe_text(raw.get("requestId"), 128)
+            status = OutcomeStatus(str(raw.get("status") or ""))
+            reason = _safe_text(raw.get("reason"), 500)
+            decided_at = _crm_parse_datetime(
+                raw.get("decidedAt"),
+                default=datetime.utcnow(),
+            )
+        except (ValueError, TypeError):
+            return _agent_json_response({"ok": False, "error": "invalid_outcome"}, 400)
+
+        with _bot._db_cursor(commit=True) as cur:
+            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+                return _agent_json_response({"ok": False, "error": "request_not_found"}, 404)
+            _travel_crm_store.set_outcome(
+                cur.connection,
+                request_id,
+                BookingOutcome(status=status, reason=reason, decided_at=decided_at),
+            )
+        return _agent_json_response({
+            "ok": True,
+            "requestId": request_id,
+            "status": status.value,
         })
 
 
