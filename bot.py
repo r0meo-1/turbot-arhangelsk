@@ -1190,7 +1190,11 @@ def delete_session(chat_id: int) -> None:
                 (chat_id,),
             ).fetchall()
         ]
-        _travel_crm_store.delete_for_lead_ids(cur.connection, lead_ids)
+        _travel_crm_store.delete_for_lead_ids(
+            cur.connection,
+            lead_ids,
+            channel="telegram",
+        )
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
 
 
@@ -1277,6 +1281,11 @@ def save_lead(
                 cur.connection,
                 crm_request,
                 lead_id=lead_id,
+            )
+            _travel_crm_store.ensure_initial_task(
+                cur.connection,
+                crm_request.request_id,
+                datetime.utcnow(),
             )
         except Exception as exc:
             # CRM mirroring is additive. A malformed legacy field must never
