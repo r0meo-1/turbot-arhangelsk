@@ -126,7 +126,7 @@ fi
 
 aws --endpoint-url "$OFFSITE_S3_ENDPOINT_URL" --region "$OFFSITE_S3_REGION" \
     s3 cp "$cipher" "s3://$OFFSITE_S3_BUCKET/$key" \
-    --only-show-errors --no-progress
+    --only-show-errors
 
 listed="$(
     aws --endpoint-url "$OFFSITE_S3_ENDPOINT_URL" --region "$OFFSITE_S3_REGION" \
