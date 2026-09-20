@@ -135,6 +135,28 @@ def init_schema(cur: sqlite3.Cursor) -> None:
         "CREATE INDEX IF NOT EXISTS idx_crm_tasks_due "
         "ON crm_tasks(status, due_at, priority)"
     )
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO crm_tasks (
+            task_id, request_id, task_type, due_at, created_at, priority, status, note
+        )
+        SELECT
+            request_id || ':build-selection',
+            request_id,
+            ?,
+            created_at,
+            created_at,
+            1,
+            ?,
+            'Сделать первичный подбор и отправить варианты'
+        FROM crm_trip_requests AS request
+        WHERE NOT EXISTS (
+            SELECT 1 FROM crm_outcomes AS outcome
+            WHERE outcome.request_id = request.request_id
+        )
+        """,
+        (TaskType.BUILD_SELECTION.value, TaskStatus.TODO.value),
+    )
 
 
 def _to_epoch(value: datetime) -> int:
