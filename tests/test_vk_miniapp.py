@@ -33,15 +33,26 @@ def test_signature_identity():
     assert validate_launch_params(signed(vk_group_id='0'), SECRET, '123', 999) == 42
 
 
-@pytest.mark.parametrize('raw', [
-    signed().replace('vk_user_id=42', 'vk_user_id=43'),
-    signed(vk_app_id='321'), signed(vk_group_id='1000'), signed(vk_user_id='0'),
-    signed(vk_ts=str(int(time.time()) - 3601)), signed(vk_ts=str(int(time.time()) + 120)),
-    signed() + '&vk_user_id=42', None, 'sign=é',
+@pytest.mark.parametrize('case', [
+    'tampered_user', 'wrong_app', 'wrong_group', 'zero_user',
+    'expired', 'future', 'duplicate_user', 'none', 'non_ascii_sign',
 ])
-def test_reject_auth(raw):
+def test_reject_auth(case):
+    now = 1_800_000_000
+    valid = signed(vk_ts=str(now))
+    cases = {
+        'tampered_user': valid.replace('vk_user_id=42', 'vk_user_id=43'),
+        'wrong_app': signed(vk_app_id='321', vk_ts=str(now)),
+        'wrong_group': signed(vk_group_id='1000', vk_ts=str(now)),
+        'zero_user': signed(vk_user_id='0', vk_ts=str(now)),
+        'expired': signed(vk_ts=str(now - 3601)),
+        'future': signed(vk_ts=str(now + 61)),
+        'duplicate_user': valid + '&vk_user_id=42',
+        'none': None,
+        'non_ascii_sign': 'sign=é',
+    }
     with pytest.raises(MiniAppValidationError):
-        validate_launch_params(raw, SECRET, '123', 999)
+        validate_launch_params(cases[case], SECRET, '123', 999, now=now)
 
 
 @pytest.mark.parametrize('change', [dict(consent=False), dict(termsAccepted=False), dict(nights=4.5), dict(childrenAges=[True, 14]),
