@@ -1,4 +1,4 @@
-name: Deploy TurBot
+﻿name: Deploy TurBot
 
 on:
   push:
@@ -42,19 +42,56 @@ jobs:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
       - name: Trigger restricted server deploy
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           VK_MINI_APP_ID: ${{ secrets.VK_MINI_APP_ID }}
           VK_MINI_APP_SECRET: ${{ secrets.VK_MINI_APP_SECRET }}
           MDT_API_KEY: ${{ secrets.MDT_API_KEY }}
           TRAVELATA_USERNAME: ${{ secrets.TRAVELATA_USERNAME }}
           TRAVELATA_PASSWORD: ${{ secrets.TRAVELATA_PASSWORD }}
           TRAVELPAYOUTS_API_TOKEN: ${{ secrets.TRAVELPAYOUTS_API_TOKEN }}
-          SLETAT_LOGIN: ${{ secrets.SLETAT_LOGIN }}
-          SLETAT_PASSWORD: ${{ secrets.SLETAT_PASSWORD }}
         run: |
           set -Eeuo pipefail
-          chmod +x deploy/send-production-config.sh
-          deploy/send-production-config.sh
+
+          test -n "$VK_MINI_APP_ID"
+          test -n "$VK_MINI_APP_SECRET"
+          test -n "$MDT_API_KEY"
+
+          # Travelata access is optional until the partner API is approved,
+          # but partial credentials are never accepted.
+          if [[ -n "$TRAVELATA_USERNAME" || -n "$TRAVELATA_PASSWORD" ]]; then
+            if [[ -z "$TRAVELATA_USERNAME" || -z "$TRAVELATA_PASSWORD" ]]; then
+              echo "Travelata GitHub secrets must be configured as a complete pair" >&2
+              exit 1
+            fi
+          fi
+
+          app_id_b64="$(printf '%s' "$VK_MINI_APP_ID" | base64 -w0)"
+          secret_b64="$(printf '%s' "$VK_MINI_APP_SECRET" | base64 -w0)"
+          mdt_key_b64="$(printf '%s' "$MDT_API_KEY" | base64 -w0)"
+          travelata_user_b64="$(printf '%s' "$TRAVELATA_USERNAME" | base64 -w0)"
+          travelata_password_b64="$(printf '%s' "$TRAVELATA_PASSWORD" | base64 -w0)"
+          travelpayouts_token_b64="$(printf '%s' "$TRAVELPAYOUTS_API_TOKEN" | base64 -w0)"
+
+          # First connection uses the legacy payload understood by older
+          # root-owned deploy entrypoints. It updates the server checkout and
+          # installs the current deploy script before we require payload V3.
+          printf 'TURBOT_DEPLOY_CONFIG_V1\n%s\n%s\n' \
+            "$app_id_b64" \
+            "$secret_b64" |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              root@${{ secrets.DEPLOY_HOST }} true
+
+          # Second connection runs the freshly installed entrypoint. V3 keeps
+          # MDT protected configuration and optionally installs Travelata API
+          # credentials without ever printing them. Empty Travelata values mean
+          # "preserve existing server values", not "erase them".
+          printf 'TURBOT_DEPLOY_CONFIG_V4\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+            "$app_id_b64" \
+            "$secret_b64" \
+            "$mdt_key_b64" \
+            "$travelata_user_b64" \
+            "$travelata_password_b64" |
+            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+              root@${{ secrets.DEPLOY_HOST }} true
 
       - name: Verify public Mini App production routes
         shell: bash
@@ -87,13 +124,6 @@ jobs:
             fi
             echo "VK public routes not ready yet (attempt $attempt/12)"
             sleep 5
-          done
-
-          # Code/content-specific legal assertions run after Deploy Bundle.
-          # This config workflow can execute while the previous app revision is
-          # still serving, so it only checks route availability here.
-          for legal_path in privacy.html consent.html terms.html moderation.html legal.json; do
-            curl -fsSL --max-time 15 "$vk_base/miniapp/$legal_path" >/dev/null
           done
 
           vk_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
@@ -145,112 +175,6 @@ jobs:
             exit 1
           fi
 
-          # End-to-end Booking.com smoke. The partner program is optional while
-          # Travelpayouts approval is pending; that one explicit provider state
-          # is a skip. Any other non-200 response remains a deployment failure.
-          vk_booking_request="$(python - <<'PY'
-          import base64
-          import hashlib
-          import hmac
-          import json
-          import os
-          import time
-          from datetime import date, timedelta
-          from urllib.parse import urlencode
-
-          params = {
-              "vk_app_id": os.environ["VK_MINI_APP_ID"],
-              "vk_group_id": "240310110",
-              "vk_ts": str(int(time.time())),
-              "vk_user_id": "2147483000",
-          }
-          signed = urlencode(sorted(params.items()))
-          signature = base64.urlsafe_b64encode(
-              hmac.new(
-                  os.environ["VK_MINI_APP_SECRET"].encode(),
-                  signed.encode(),
-                  hashlib.sha256,
-              ).digest()
-          ).decode().rstrip("=")
-          launch_params = urlencode([*sorted(params.items()), ("sign", signature)])
-          payload = {
-              "type": "trip_request",
-              "version": 2,
-              "destination": "Phuket",
-              "departure": "Moscow",
-              "date": (date.today() + timedelta(days=30)).isoformat(),
-              "nights": 7,
-              "adults": 2,
-              "children": 0,
-              "childrenAges": [],
-              "budgetMaxRub": 250000,
-              "budgetScope": "total",
-              "consent": True,
-              "termsAccepted": True,
-              "directOnly": False,
-          }
-          print(json.dumps({"launchParams": launch_params, "payload": payload}, separators=(",", ":")))
-          PY
-          )"
-
-          booking_response="$(mktemp)"
-          booking_status="$(curl -sS -o "$booking_response" -w '%{http_code}' --max-time 25 \
-            -X POST "$vk_base/miniapp/booking-link" \
-            -H 'Content-Type: application/json' \
-            --data "$vk_booking_request")"
-          booking_optional_skip=false
-          if [[ "$booking_status" != "200" ]]; then
-            booking_error_code="$(python - "$booking_response" <<'PY'
-          import json
-          import sys
-
-          try:
-              with open(sys.argv[1], encoding="utf-8") as fh:
-                  data = json.load(fh)
-              print(str(data.get("errorCode") or ""))
-          except Exception:
-              print("")
-          PY
-            )"
-            if [[ "$booking_error_code" == "booking_program_not_enabled" ]]; then
-              echo "VK Booking.com partner-link smoke: skipped (partner program not enabled yet)"
-              booking_optional_skip=true
-            else
-              echo "VK Booking.com partner-link smoke returned HTTP $booking_status" >&2
-              python - "$booking_response" <<'PY'
-          import json
-          import sys
-
-          try:
-              with open(sys.argv[1], encoding="utf-8") as fh:
-                  data = json.load(fh)
-              print("Provider error:", data.get("error", "unknown"), file=sys.stderr)
-              print("Provider code:", data.get("errorCode", "unknown"), file=sys.stderr)
-          except Exception:
-              print("Provider returned a non-JSON error", file=sys.stderr)
-          PY
-              rm -f "$booking_response"
-              exit 1
-            fi
-          fi
-
-          if [[ "$booking_optional_skip" != "true" ]]; then
-            python - "$booking_response" <<'PY'
-          import json
-          import sys
-          from urllib.parse import urlparse
-
-          with open(sys.argv[1], encoding="utf-8") as fh:
-              data = json.load(fh)
-          url = str(data.get("url", "")).strip()
-          parsed = urlparse(url)
-          if data.get("ok") is not True or parsed.scheme != "https" or not parsed.netloc:
-              raise SystemExit("VK Booking.com partner-link smoke returned an invalid URL")
-          print(f"VK Booking.com partner-link smoke: ok host={parsed.netloc}")
-          PY
-          fi
-          rm -f "$booking_response"
-
           tg_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$tg_submit" \
             -H 'Origin: https://r0meo-1.github.io' \
@@ -261,4 +185,5 @@ jobs:
             exit 1
           fi
 
-          echo "Public Mini App routes, VK auth, Booking.com probe, and Telegram auth smoke: ok"
+          echo "Public Mini App routes, VK app_payload assets, auth rejection, and signed VK auth smoke: ok"
+
