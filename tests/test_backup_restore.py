@@ -9,6 +9,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 BACKUP = ROOT / "scripts" / "backup.sh"
 RESTORE = ROOT / "scripts" / "restore-drill.sh"
+OFFSITE = ROOT / "scripts" / "offsite-backup.sh"
 
 
 def _seed(path: Path, table: str, secret: str) -> None:
@@ -93,3 +94,148 @@ def test_production_deploy_exposes_only_restricted_backup_drill_marker():
     assert "Unexpected backup drill marker payload" in deployer
     assert "ensure_backup_and_restore_drill" in deployer
     assert "Verify production backup and isolated restore drill" in workflow
+
+
+def test_offsite_backup_is_disabled_by_default_and_keeps_private_key_off_server(tmp_path):
+    env = os.environ.copy()
+    env["OFFSITE_BACKUP_CONFIG_FILE"] = str(tmp_path / "missing.env")
+    result = subprocess.run(
+        ["bash", str(OFFSITE)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "state=disabled reason=config_missing" in result.stdout
+
+    text = OFFSITE.read_text(encoding="utf-8")
+    assert "OFFSITE_AGE_RECIPIENT" in text
+    assert "age -r" in text
+    assert "age --decrypt" not in text
+    assert "OFFSITE_S3_ENDPOINT_URL" in text
+    assert "https://*" in text
+    assert "AWS_SECRET_ACCESS_KEY" in text
+    assert "OFFSITE_AGE_IDENTITY" not in text
+
+
+def test_offsite_backup_encrypts_before_s3_upload_and_verifies_remote_key(tmp_path):
+    app_dir = tmp_path / "app"
+    backup_dir = tmp_path / "backups"
+    fake_bin = tmp_path / "bin"
+    config = tmp_path / "offsite.env"
+    app_dir.mkdir()
+    backup_dir.mkdir()
+    fake_bin.mkdir()
+
+    main = backup_dir / "bot_state_20300101_030000.sqlite"
+    vk = backup_dir / "vk_bot_state_20300101_030000.sqlite"
+    main.write_bytes(b"main-backup-test-data")
+    vk.write_bytes(b"vk-backup-test-data")
+
+    config.write_text(
+        "\n".join(
+            [
+                "OFFSITE_BACKUP_ENABLED=true",
+                "OFFSITE_S3_ENDPOINT_URL=https://s3.example.invalid",
+                "OFFSITE_S3_REGION=ru-test",
+                "OFFSITE_S3_BUCKET=turbot-backups",
+                "OFFSITE_S3_PREFIX=turbot",
+                "OFFSITE_AGE_RECIPIENT=age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+                "AWS_ACCESS_KEY_ID=test-access",
+                "AWS_SECRET_ACCESS_KEY=test-secret",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    config.chmod(0o600)
+
+    (fake_bin / "stat").write_text(
+        """#!/usr/bin/env bash
+if [[ "$1" == "-c" && "$2" == "%u" && "$3" == "$OFFSITE_BACKUP_CONFIG_FILE" ]]; then
+  echo 0
+elif [[ "$1" == "-c" && "$2" == "%a" && "$3" == "$OFFSITE_BACKUP_CONFIG_FILE" ]]; then
+  echo 600
+else
+  exec /usr/bin/stat "$@"
+fi
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "age").write_text(
+        """#!/usr/bin/env bash
+out=""
+input=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r) shift 2 ;;
+    -o) out="$2"; shift 2 ;;
+    *) input="$1"; shift ;;
+  esac
+done
+printf 'AGE-TEST\\n' > "$out"
+cat "$input" >> "$out"
+""",
+        encoding="utf-8",
+    )
+    (fake_bin / "aws").write_text(
+        """#!/usr/bin/env bash
+args="$*"
+if [[ "$args" == *" s3 cp "* ]]; then
+  printf '%s\\n' "$args" >> "$AWS_LOG"
+  exit 0
+fi
+if [[ "$args" == *" s3api list-objects-v2 "* ]]; then
+  prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "--prefix" ]]; then
+      printf '%s\\n' "$arg"
+      exit 0
+    fi
+    prev="$arg"
+  done
+fi
+exit 2
+""",
+        encoding="utf-8",
+    )
+    for path in (fake_bin / "stat", fake_bin / "age", fake_bin / "aws"):
+        path.chmod(0o755)
+
+    aws_log = tmp_path / "aws.log"
+    env = os.environ.copy()
+    env.update(
+        APP_DIR=str(app_dir),
+        BACKUP_DIR=str(backup_dir),
+        OFFSITE_BACKUP_CONFIG_FILE=str(config),
+        MAX_BACKUP_AGE_SECONDS=str(10**10),
+        PATH=f"{fake_bin}:{env['PATH']}",
+        AWS_LOG=str(aws_log),
+    )
+
+    result = subprocess.run(
+        ["bash", str(OFFSITE)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "Off-site backup complete: encrypted=true files=2" in result.stdout
+    upload = aws_log.read_text(encoding="utf-8")
+    assert ".tar.gz.age" in upload
+    assert ".sqlite" not in upload
+    assert "s3://turbot-backups/turbot/" in upload
+
+
+def test_local_backup_chains_offsite_helper_only_after_verified_backup():
+    text = BACKUP.read_text(encoding="utf-8")
+    assert 'if [[ -x "$APP_DIR/scripts/offsite-backup.sh" ]]' in text
+    assert text.index('echo "Backup complete: copies=$BACKED_UP') < text.index(
+        '"$APP_DIR/scripts/offsite-backup.sh"'
+    )
+
+    deployer = (ROOT / "deploy" / "turbot-deploy.sh").read_text(encoding="utf-8")
+    assert '"$repo/scripts/offsite-backup.sh"' in deployer
