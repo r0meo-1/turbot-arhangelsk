@@ -73,3 +73,39 @@ Record screenshots or message IDs in #113. Do not mark attribution production-re
 8. Keep `vk_ref` and `vk_platform` visible separately when debugging Mini App launch context; they are not campaign tags.
 
 Record the live VK evidence in #113. Automated tests prove the data path, not that VK delivered a real referral event in production.
+
+
+## Redacted evidence verifier
+
+After the real lead is completed, copy the manager notification into a local
+UTF-8 text file (for example `manager.txt`) and the relevant admin `/export`
+output into another file (for example `export.txt`).
+
+Run:
+
+```bash
+python scripts/verify_campaign_evidence.py \
+  --source-tag video_pain \
+  --manager-file manager.txt \
+  --export-file export.txt
+```
+
+A passing result looks like:
+
+```text
+campaign_evidence_status=PASS
+source_tag=video_pain
+manager_marker=present
+export_marker=present
+manager_sha256=<sha256>
+export_sha256=<sha256>
+```
+
+The verifier never echoes the copied manager/export contents, so its stdout can
+be attached to #113 without exposing the customer's name, phone number or
+Telegram/VK identifier. Keep the original text files private; the hashes identify
+the exact evidence snapshots used by the check.
+
+The verifier proves that the same campaign tag is present in both the manager
+handoff and durable admin export. It does **not** replace the requirement that the
+lead itself entered through a real Telegram/VK campaign link in production.
