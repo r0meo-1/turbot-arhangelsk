@@ -1,4 +1,4 @@
-from deploy.performance_probe import PageResult, PageSpec, _within_budget
+from deploy.performance_probe import PROFILES, PageResult, PageSpec, _within_budget
 from deploy.performance_probe import probe_page
 from unittest.mock import MagicMock
 
@@ -6,7 +6,8 @@ import pytest
 
 
 @pytest.mark.parametrize("status", [404, 429, 500, 503, None])
-def test_http_failure_cannot_pass_performance_budget(status):
+@pytest.mark.parametrize("profile", list(PROFILES.values()))
+def test_http_failure_cannot_pass_performance_budget(status, profile):
     browser = MagicMock()
     context = browser.new_context.return_value
     page = context.new_page.return_value
@@ -14,7 +15,7 @@ def test_http_failure_cannot_pass_performance_budget(status):
         None if status is None else MagicMock(status=status, ok=False)
     )
 
-    result = probe_page(_spec(), browser)
+    result = probe_page(_spec(), browser, profile)
 
     assert result.ok is False
     assert result.within_budget is False
@@ -23,7 +24,8 @@ def test_http_failure_cannot_pass_performance_budget(status):
     context.close.assert_called_once()
 
 
-def test_successful_http_response_collects_performance_metrics():
+@pytest.mark.parametrize("profile", list(PROFILES.values()))
+def test_successful_http_response_collects_performance_metrics(profile):
     browser = MagicMock()
     context = browser.new_context.return_value
     page = context.new_page.return_value
@@ -33,7 +35,7 @@ def test_successful_http_response_collects_performance_metrics():
         "bytes": 1024, "resources": 2,
     }
 
-    result = probe_page(_spec(), browser)
+    result = probe_page(_spec(), browser, profile)
 
     assert result.ok is True
     assert result.within_budget is True
@@ -108,3 +110,13 @@ def test_performance_budget_does_not_claim_failed_probe_is_fast():
         error="browser_probe_failed",
     )
     assert _within_budget(_spec(), failed) is False
+
+
+def test_performance_profiles_cover_mobile_slow_network_and_desktop():
+    mobile = PROFILES["mobile-slow4g"]
+    desktop = PROFILES["desktop-broadband"]
+
+    assert mobile["viewport"] == {"width": 390, "height": 844}
+    assert mobile["latency_ms"] >= desktop["latency_ms"]
+    assert mobile["download_kbps"] < desktop["download_kbps"]
+    assert desktop["viewport"]["width"] >= 1280

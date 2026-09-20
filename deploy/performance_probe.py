@@ -64,13 +64,24 @@ PAGES = (
     ),
 )
 
-NETWORK_PROFILE = {
-    "name": "slow_4g_class",
-    "latency_ms": 150,
-    "download_kbps": 1600,
-    "upload_kbps": 750,
+PROFILES = {
+    "mobile-slow4g": {
+        "name": "mobile_slow_4g_class",
+        "viewport": {"width": 390, "height": 844},
+        "latency_ms": 150,
+        "download_kbps": 1600,
+        "upload_kbps": 750,
+        "connection_type": "cellular4g",
+    },
+    "desktop-broadband": {
+        "name": "desktop_bounded_broadband",
+        "viewport": {"width": 1280, "height": 800},
+        "latency_ms": 50,
+        "download_kbps": 10000,
+        "upload_kbps": 2000,
+        "connection_type": "wifi",
+    },
 }
-VIEWPORT = {"width": 390, "height": 844}
 
 
 def _within_budget(spec: PageSpec, result: PageResult) -> bool:
@@ -85,8 +96,8 @@ def _within_budget(spec: PageSpec, result: PageResult) -> bool:
     return all(checks)
 
 
-def probe_page(spec: PageSpec, browser) -> PageResult:
-    context = browser.new_context(viewport=VIEWPORT)
+def probe_page(spec: PageSpec, browser, profile: dict) -> PageResult:
+    context = browser.new_context(viewport=profile["viewport"])
     page = context.new_page()
     session = context.new_cdp_session(page)
 
@@ -97,10 +108,10 @@ def probe_page(spec: PageSpec, browser) -> PageResult:
             "Network.emulateNetworkConditions",
             {
                 "offline": False,
-                "latency": NETWORK_PROFILE["latency_ms"],
-                "downloadThroughput": NETWORK_PROFILE["download_kbps"] * 1000 / 8,
-                "uploadThroughput": NETWORK_PROFILE["upload_kbps"] * 1000 / 8,
-                "connectionType": "cellular4g",
+                "latency": profile["latency_ms"],
+                "downloadThroughput": profile["download_kbps"] * 1000 / 8,
+                "uploadThroughput": profile["upload_kbps"] * 1000 / 8,
+                "connectionType": profile["connection_type"],
             },
         )
         page.add_init_script(
@@ -179,23 +190,30 @@ def probe_page(spec: PageSpec, browser) -> PageResult:
         context.close()
 
 
-def run(pages: Iterable[PageSpec] = PAGES) -> dict:
+def run(
+    pages: Iterable[PageSpec] = PAGES,
+    *,
+    profile_name: str = "mobile-slow4g",
+) -> dict:
     from playwright.sync_api import sync_playwright
 
+    profile = PROFILES[profile_name]
     results = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel="msedge", headless=True)
         try:
             for spec in pages:
-                results.append(probe_page(spec, browser))
+                results.append(probe_page(spec, browser, profile))
         finally:
             browser.close()
 
     owned = [result for result in results if result.owner == "owned"]
     return {
         "checked_at": datetime.now(timezone.utc).isoformat(),
-        "profile": NETWORK_PROFILE,
-        "viewport": VIEWPORT,
+        "profile": {
+            key: value for key, value in profile.items() if key != "viewport"
+        },
+        "viewport": profile["viewport"],
         "owned_ok": all(item.ok for item in owned),
         "owned_within_budget": all(item.within_budget for item in owned),
         "results": [asdict(item) for item in results],
@@ -214,9 +232,14 @@ def run(pages: Iterable[PageSpec] = PAGES) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json-out", default="")
+    parser.add_argument(
+        "--profile",
+        choices=sorted(PROFILES),
+        default="mobile-slow4g",
+    )
     args = parser.parse_args()
 
-    payload = run()
+    payload = run(profile_name=args.profile)
     rendered = json.dumps(payload, ensure_ascii=False, sort_keys=True)
     print(rendered)
     if args.json_out:
