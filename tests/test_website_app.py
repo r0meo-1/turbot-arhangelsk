@@ -56,6 +56,7 @@ def clean_website_state(monkeypatch):
     monkeypatch.setattr(bot, "DEMO_MODE", False)
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM website_leads")
+        cur.execute("DELETE FROM leads")
         cur.execute("DELETE FROM acquisition_funnel_events")
         for table in ("crm_quotes", "crm_activities", "crm_tasks", "crm_outcomes", "crm_trip_requests"):
             cur.execute(f"DELETE FROM {table}")
