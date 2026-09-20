@@ -46,14 +46,19 @@ jobs:
         run: |
           set -euo pipefail
           root="${PAGE_URL%/}"
+          rev="${GITHUB_SHA}"
+
+          fetch_page() {
+            curl -fsSL --max-time 15 -H 'Cache-Control: no-cache' "$1" || true
+          }
 
           for attempt in {1..12}; do
-            home="$(curl -fsSL --max-time 15 "$root/" || true)"
-            canonical="$(curl -fsSL --max-time 15 "$root/apreltour/" || true)"
-            privacy="$(curl -fsSL --max-time 15 "$root/apreltour/privacy.html" || true)"
-            consent="$(curl -fsSL --max-time 15 "$root/apreltour/consent.html" || true)"
-            robots="$(curl -fsSL --max-time 15 "$root/robots.txt" || true)"
-            sitemap="$(curl -fsSL --max-time 15 "$root/sitemap.xml" || true)"
+            home="$(fetch_page "$root/?rev=$rev")"
+            canonical="$(fetch_page "$root/apreltour/?rev=$rev")"
+            privacy="$(fetch_page "$root/apreltour/privacy.html?rev=$rev")"
+            consent="$(fetch_page "$root/apreltour/consent.html?rev=$rev")"
+            robots="$(fetch_page "$root/robots.txt?rev=$rev")"
+            sitemap="$(fetch_page "$root/sitemap.xml?rev=$rev")"
 
             if grep -q 'TurBot × АПРЕЛЬ тур' <<<"$home" &&
                grep -q 'Наталья Ильина' <<<"$canonical" &&
@@ -72,7 +77,29 @@ jobs:
             fi
 
             if [[ "$attempt" == "12" ]]; then
-              echo "TurBot Pages smoke failed" >&2
+              check() {
+                local name="$1"
+                shift
+                if "$@"; then
+                  echo "$name=ok" >&2
+                else
+                  echo "$name=fail" >&2
+                fi
+              }
+              check page_home grep -q 'TurBot × АПРЕЛЬ тур' <<<"$home"
+              check page_canonical_manager grep -q 'Наталья Ильина' <<<"$canonical"
+              check page_canonical_link grep -q 'data-turbot-link' <<<"$canonical"
+              check page_canonical_tag grep -q 'rel="canonical"' <<<"$canonical"
+              check page_privacy_title grep -q 'Политика обработки персональных данных' <<<"$privacy"
+              check page_privacy_operator grep -q 'ИП Замятина Мария Андреевна' <<<"$privacy"
+              check page_consent_operator grep -q 'ИП Замятина Мария Андреевна' <<<"$consent"
+              absent() { ! grep -Fq "$1"; }
+              check page_privacy_no_draft absent 'ЧЕРНОВИК / ШАБЛОН' <<<"$privacy"
+              check page_privacy_no_placeholder absent '[указать' <<<"$privacy"
+              check page_consent_no_placeholder absent '[указать' <<<"$consent"
+              check page_robots_sitemap grep -Fq 'Sitemap: https://r0meo1.ru/sitemap.xml' <<<"$robots"
+              check page_sitemap_canonical grep -Fq 'https://r0meo1.ru/apreltour/' <<<"$sitemap"
+              echo "TurBot Pages smoke failed; only boolean diagnostics are shown" >&2
               exit 1
             fi
 
