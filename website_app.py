@@ -33,13 +33,17 @@ from shared import travel_crm_store as _travel_crm_store
 from shared.travel_crm import (
     Activity,
     ActivityType,
+    Attribution,
     BookingOutcome,
+    BudgetScope,
+    BudgetType,
     ManagerTask,
     OutcomeStatus,
     Quote,
     QuoteReaction,
     TaskStatus,
     TaskType,
+    TripRequest,
     timeline_to_dict,
 )
 
@@ -700,6 +704,52 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
                 raise exc
         else:
             duplicate = False
+            try:
+                people_match = re.search(r"\d+", str(payload.get("people") or ""))
+                adults = max(1, int(people_match.group(0))) if people_match else 1
+                source = str(payload.get("utm_source") or "").strip()
+                channel = "agent_extension" if source == "agent_extension" else "website"
+                crm_request = TripRequest(
+                    request_id=f"web-lead-{lead_id}",
+                    departure_city=str(payload.get("origin") or "Не указан").strip() or "Не указан",
+                    adults=adults,
+                    dates_text=str(payload.get("dates") or "").strip(),
+                    budget_amount=int(payload.get("budget") or 0) or None,
+                    budget_type=BudgetType.MAX,
+                    budget_scope=BudgetScope.TOTAL,
+                    primary_destination=str(payload.get("destination") or "").strip(),
+                    attribution=Attribution(
+                        source_tag=str(payload.get("utm_content") or "").strip(),
+                        channel=channel,
+                        source=source,
+                        referrer=str(payload.get("utm_medium") or "").strip(),
+                        campaign=str(payload.get("utm_campaign") or "").strip(),
+                    ),
+                )
+                _travel_crm_store.upsert_request(
+                    cur.connection,
+                    crm_request,
+                    lead_id=lead_id,
+                )
+                now_dt = datetime.utcnow()
+                _travel_crm_store.upsert_task(
+                    cur.connection,
+                    ManagerTask(
+                        task_id=f"{crm_request.request_id}:build_selection",
+                        request_id=crm_request.request_id,
+                        type=TaskType.BUILD_SELECTION,
+                        due_at=now_dt,
+                        created_at=now_dt,
+                        priority=1,
+                        note="Новый лид: сделать подбор",
+                    ),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "CRM mirror skipped for website lead %s: %s",
+                    lead_id,
+                    type(exc).__name__,
+                )
     outcome = "duplicate" if duplicate else "accepted"
     _bot._record_ops_metric("lead", "website", outcome)
     _bot.record_funnel_event(
@@ -971,8 +1021,9 @@ if "agent_extension_crm_today" not in app.view_functions:
         except (TypeError, ValueError):
             return _agent_json_response({"ok": False, "error": "invalid_query"}, 400)
 
+        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
         with _bot._db_cursor() as cur:
-            tasks = _travel_crm_store.due_tasks(cur.connection, now)[:limit]
+            tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)[:limit]
             items = []
             for task in tasks:
                 item = {
@@ -1018,9 +1069,16 @@ if "agent_extension_crm_timeline" not in app.view_functions:
                 return _agent_json_response({"ok": False, "error": "request_not_found"}, 404)
             payload = timeline_to_dict(timeline)
             payload["client"] = _crm_client_summary(cur, request_id)
-            payload["lastContact"] = (
-                payload["activities"][-1] if payload["activities"] else None
-            )
+            contact_types = {
+                ActivityType.CALL.value,
+                ActivityType.MESSAGE_SENT.value,
+                ActivityType.MESSAGE_RECEIVED.value,
+            }
+            contacts = [
+                item for item in payload["activities"]
+                if item.get("type") in contact_types
+            ]
+            payload["lastContact"] = contacts[-1] if contacts else None
         return _agent_json_response({"ok": True, "timeline": payload})
 
 
