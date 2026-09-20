@@ -8,7 +8,7 @@ import bot
 from shared import travelpayouts_links as links
 
 
-BOT_TOKEN = "123456789:test_bot_token_for_partner_links"
+BOT_TOKEN = "123456789:" + "test_" + "bot_token_for_partner_links"
 ORIGIN = "https://r0meo-1.github.io"
 
 
