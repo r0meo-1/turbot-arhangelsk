@@ -34,19 +34,28 @@ jobs:
           pip install "playwright==1.62.0"
           python -m playwright install msedge
 
-      - name: Measure production under mobile slow-network profile
+      - name: Measure production under mobile and desktop profiles
         run: |
-          python deploy/performance_probe.py --json-out /tmp/performance-baseline.json
+          python deploy/performance_probe.py \
+            --profile mobile-slow4g \
+            --json-out /tmp/performance-mobile.json
+          python deploy/performance_probe.py \
+            --profile desktop-broadband \
+            --json-out /tmp/performance-desktop.json
           {
             echo "### TurBot production performance baseline"
             echo
-            echo "Viewport: 390x844"
+            echo "Mobile: 390x844, 150ms latency, 1.6Mbps down, 750Kbps up"
+            echo "Desktop: 1280x800, 50ms latency, 10Mbps down, 2Mbps up"
             echo
-            echo "Network profile: 150ms latency, 1.6Mbps down, 750Kbps up"
-            echo
-            echo
+            echo "#### Mobile / Slow-4G"
             echo '~~~json'
-            cat /tmp/performance-baseline.json
+            cat /tmp/performance-mobile.json
+            echo '~~~'
+            echo
+            echo "#### Desktop / bounded broadband"
+            echo '~~~json'
+            cat /tmp/performance-desktop.json
             echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -54,5 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: performance-baseline
-          path: /tmp/performance-baseline.json
+          path: |
+            /tmp/performance-mobile.json
+            /tmp/performance-desktop.json
           retention-days: 14
