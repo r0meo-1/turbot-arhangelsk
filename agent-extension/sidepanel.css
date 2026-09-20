@@ -43,3 +43,17 @@ textarea{min-height:48px;resize:vertical}
 .row-actions{display:flex;gap:10px;align-items:center}
 .followup-label{font-size:10px;color:#8094ad}
 .followup-label input{margin-top:4px}
+
+.muted{color:#6f86a1;font-size:10px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.today-tasks,.quote-history,.activity-history{display:grid;gap:7px}
+.task-card,.quote-card{padding:9px;border:1px solid #2a3a52;border-radius:10px;background:#0d1726}
+.task-actions{display:flex;gap:6px}.task-actions button{flex:1}
+.trip-summary{margin:0 0 10px;color:#bdcad9;font-size:11px;line-height:1.45}
+.section-title{margin:8px 0 6px;font-size:11px}
+.crm-form{margin-top:9px;padding-top:8px;border-top:1px solid #263348}
+.crm-form summary{margin-bottom:8px;color:#b8c8da}
+.crm-form button{margin-top:7px;width:100%}
+.quote-card{display:grid;gap:6px}
+.quote-card strong{font-size:12px}.quote-card small{color:#7f93aa;font-size:10px}
+.activity-title{display:block;margin-top:10px;font-size:11px}
+.activity-row{margin:0;padding:7px 0;border-bottom:1px solid #202d40;color:#aebdd0;font-size:10px;line-height:1.4}
