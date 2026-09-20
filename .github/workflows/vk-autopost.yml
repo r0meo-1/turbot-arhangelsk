@@ -1,0 +1,67 @@
+name: VK Marketing Autopost
+
+on:
+  schedule:
+    # Plan uses Europe/Moscow (UTC+3, no DST):
+    # Tue 19:30, Thu 12:30, Sun 18:30.
+    - cron: "30 16 * * 2"
+    - cron: "30 9 * * 4"
+    - cron: "30 15 * * 0"
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: "Preview/publish one configured creative angle"
+        required: true
+        type: choice
+        options:
+          - pain
+          - dream
+          - battle
+      publish:
+        description: "Actually publish to VK (false = preview only)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  scheduled:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.txt
+      - name: Run gated VK schedule
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+          VK_OWNER_ID: ${{ vars.VK_OWNER_ID }}
+          VK_AUTOPOST_ENABLED: ${{ vars.VK_AUTOPOST_ENABLED }}
+        run: python vk_autopost.py run
+
+  manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - run: pip install -r requirements.txt
+      - name: Preview selected post
+        if: inputs.publish == false
+        env:
+          VK_GROUP_ID: "240310110"
+        run: python vk_autopost.py preview --slug "${{ inputs.slug }}"
+      - name: Publish selected post
+        if: inputs.publish == true
+        env:
+          VK_TOKEN: ${{ secrets.VK_TOKEN }}
+          VK_OWNER_ID: ${{ vars.VK_OWNER_ID }}
+        run: python vk_autopost.py post --slug "${{ inputs.slug }}" --force

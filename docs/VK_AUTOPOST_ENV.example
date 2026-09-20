@@ -1,0 +1,7 @@
+# VK Marketing Autopost
+#
+# Scheduled publication is fail-closed. The JSON plan must be enabled AND this
+# value must be true in the runtime/GitHub Actions environment.
+VK_AUTOPOST_ENABLED=false
+# Optional local idempotency ledger path.
+# VK_AUTOPOST_DB=vk_autopost.sqlite
