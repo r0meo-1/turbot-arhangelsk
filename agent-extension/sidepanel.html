@@ -96,6 +96,21 @@
         </details>
 
         <details class="crm-form">
+          <summary>Результат заявки</summary>
+          <div class="grid">
+            <label>Статус
+              <select id="outcomeStatus">
+                <option value="paused">Пауза / думает</option>
+                <option value="won">Продано</option>
+                <option value="lost">Потеряно</option>
+              </select>
+            </label>
+            <label>Причина<input id="outcomeReason" placeholder="дорого / забронировано"></label>
+          </div>
+          <button id="saveOutcome" class="secondary">Сохранить результат</button>
+        </details>
+
+        <details class="crm-form">
           <summary>Поставить задачу</summary>
           <div class="grid">
             <label>Что сделать
