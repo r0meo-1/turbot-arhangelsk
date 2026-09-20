@@ -6,14 +6,14 @@
 The scheduler is intentionally gated:
 - scheduled publishing requires both plan.enabled=true and VK_AUTOPOST_ENABLED=true;
 - preview never needs a VK token;
-- every recurring slot is idempotent per ISO week via a local SQLite ledger;
+- recurring slots are de-duplicated against both a local SQLite ledger and the VK wall;
 - manual publishing requires an explicit --force flag.
 
 Environment:
   VK_TOKEN or VK_ACCESS_TOKEN
   VK_OWNER_ID (negative community wall id) OR VK_GROUP_ID (positive community id)
   VK_AUTOPOST_ENABLED=true
-  VK_AUTOPOST_DB=vk_autopost.sqlite        # optional
+  VK_AUTOPOST_DB=vk_autopost.sqlite        # optional local ledger
 """
 
 from __future__ import annotations
@@ -185,11 +185,51 @@ def mark_published(campaign: str, slug: str, key: str, post_id: int | None, now:
     with _db() as db:
         db.execute(
             """
-            INSERT INTO vk_autopost_log(campaign, slug, period_key, post_id, published_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT OR IGNORE INTO vk_autopost_log(
+                campaign, slug, period_key, post_id, published_at
+            ) VALUES (?, ?, ?, ?, ?)
             """,
             (campaign, slug, key, post_id, now.isoformat()),
         )
+
+
+def _iso_week_start(now: datetime) -> datetime:
+    start = now - timedelta(
+        days=now.weekday(),
+        hours=now.hour,
+        minutes=now.minute,
+        seconds=now.second,
+        microseconds=now.microsecond,
+    )
+    return start
+
+
+def wall_has_source_tag(
+    token: str,
+    owner_id: int,
+    source_tag: str,
+    now: datetime,
+    *,
+    count: int = 100,
+) -> bool:
+    """Use VK itself as durable idempotency state across ephemeral CI runners."""
+    response = vk_call(
+        "wall.get",
+        token,
+        owner_id=owner_id,
+        count=count,
+        offset=0,
+        filter="owner",
+    )
+    items = response.get("items", []) if isinstance(response, dict) else []
+    week_start_ts = int(_iso_week_start(now).timestamp())
+    needle = f"ref={source_tag}"
+    for item in items:
+        if int(item.get("date") or 0) < week_start_ts:
+            continue
+        if needle in str(item.get("text") or ""):
+            return True
+    return False
 
 
 def _campaign_active(plan: dict[str, Any], local_date: date) -> bool:
@@ -227,12 +267,18 @@ def publish_one(
     now = now or datetime.now(tz)
     campaign = str(plan["campaign"])
     slug = str(post["slug"])
+    source_tag = str(post["source_tag"])
     key = period_key(now)
 
-    if already_published(campaign, slug, key) and not force:
-        raise VKAutopostError(f"{slug} already published for {key}")
-
     token, owner_id, group_id = resolve_identity()
+
+    if not force:
+        if already_published(campaign, slug, key):
+            raise VKAutopostError(f"{slug} already published for {key}")
+        if wall_has_source_tag(token, owner_id, source_tag, now):
+            mark_published(campaign, slug, key, None, now)
+            raise VKAutopostError(f"{slug} already exists on VK wall for {key}")
+
     message = render_text(post, group_id)
     params: dict[str, Any] = {
         "owner_id": owner_id,
@@ -252,12 +298,16 @@ def publish_one(
 def cmd_preview(args: argparse.Namespace) -> None:
     plan = load_plan(Path(args.plan))
     group_id = abs(int(os.getenv("VK_GROUP_ID", "240310110") or "240310110"))
+    found = False
     for post in plan["posts"]:
         if args.slug and post["slug"] != args.slug:
             continue
+        found = True
         print(f"--- {post['slug']} | {post['weekday']} {post['time']} | {post['source_tag']} ---")
         print(render_text(post, group_id))
         print()
+    if args.slug and not found:
+        raise VKAutopostError(f"Unknown slug: {args.slug}")
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -280,12 +330,14 @@ def cmd_run(args: argparse.Namespace) -> None:
         print("No VK posts are due in the current schedule window.")
         return
 
-    key = period_key(now)
     for post in due:
-        if already_published(str(plan["campaign"]), str(post["slug"]), key):
-            print(f"{post['slug']}: already published for {key}; skipping.")
-            continue
-        post_id = publish_one(plan, post, now=now)
+        try:
+            post_id = publish_one(plan, post, now=now)
+        except VKAutopostError as exc:
+            if "already" in str(exc):
+                print(f"{post['slug']}: {exc}; skipping.")
+                continue
+            raise
         print(f"{post['slug']}: published VK post_id={post_id}")
         return
     print("All due VK posts were already published.")
