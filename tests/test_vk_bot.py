@@ -362,6 +362,12 @@ def test_vk_campaign_ref_is_first_touch_and_persists(client):
             "SELECT source_tag FROM leads WHERE id = ?", (lead_id,)
         ).fetchone()
     assert row[0] == "video_pain"
+    with bot._db_cursor() as cur:
+        crm = cur.execute(
+            "SELECT request_id, source_tag, channel FROM crm_trip_requests WHERE lead_id = ?",
+            (lead_id,),
+        ).fetchone()
+    assert tuple(crm) == (f"vk-lead-{lead_id}", "video_pain", "vk")
 
 
 def test_vk_referral_message_starts_attributed_flow(client):
