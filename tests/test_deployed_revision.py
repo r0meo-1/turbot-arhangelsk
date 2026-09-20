@@ -101,3 +101,43 @@ printf new > "$repo/.deployed-commit"
     else:
         assert not (repo / ".deployed-commit").exists()
         assert not (repo / ".deploy-manifest").exists()
+
+
+@pytest.mark.parametrize("mode", ["target", "previous"])
+@pytest.mark.parametrize("reset_ok", [True, False])
+def test_git_reset_clears_bundle_metadata_only_after_success(tmp_path, mode, reset_ok):
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("Bash is required for deployment regression")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".deployed-commit").write_text(SHA)
+    (repo / ".deploy-manifest").write_bytes(b"app.py\n")
+    text = Path("deploy/turbot-deploy.sh").read_text(encoding="utf-8")
+    start = text.index(f'git reset --hard "${mode}"')
+    end = text.index('"$venv/pip"', start)
+    snippet = text[start:end]
+    script = '''set -euo pipefail
+repo="$PWD/repo"
+target=target
+previous=previous
+git() { return RESET_CODE; }
+''' .replace("RESET_CODE", "0" if reset_ok else "1") + snippet
+    result = subprocess.run([bash, "-c", script], cwd=tmp_path, capture_output=True)
+    assert (result.returncode == 0) is reset_ok
+    assert (repo / ".deployed-commit").exists() is not reset_ok
+    assert (repo / ".deploy-manifest").exists() is not reset_ok
+
+
+@pytest.mark.parametrize("bundle", [False, True])
+def test_git_deploy_same_head_does_not_skip_bundle_checkout(tmp_path, bundle):
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("Bash is required for deployment regression")
+    if bundle:
+        (tmp_path / ".deployed-commit").write_text(SHA)
+    text = Path("deploy/turbot-deploy.sh").read_text(encoding="utf-8")
+    condition = next(line for line in text.splitlines() if line.startswith('if [[ "$target" == "$previous"'))
+    script = 'repo="$PWD"; target=same; previous=same\n' + condition + '\n echo skip\nelse\n echo deploy\nfi\n'
+    result = subprocess.run([bash, "-c", script], cwd=tmp_path, check=True, capture_output=True, text=True)
+    assert result.stdout.strip() == ("deploy" if bundle else "skip")
