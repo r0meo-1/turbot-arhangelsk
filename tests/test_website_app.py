@@ -782,3 +782,44 @@ def test_agent_crm_endpoints_require_pairing_token(client, monkeypatch):
     )
     assert response.status_code == 401
     assert response.get_json()["error"] == "unauthorized"
+
+
+def test_agent_crm_website_timeline_uses_website_client_source(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-client-source-0001"),
+    )
+    assert create.status_code == 202
+    lead_id = create.get_json()["leadId"]
+
+    # Deliberately create a canonical Telegram lead with the same integer ID.
+    # The timeline must not accidentally leak/attach that row to a website lead.
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            """
+            INSERT OR REPLACE INTO leads (
+                id, chat_id, first_name, username, destination, origin, dates,
+                nights, people, kids, infants, budget, budget_scope, direct_only,
+                phone, source_tag, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                lead_id, 900000 + lead_id, "Wrong Source", "wrong",
+                "Египет", "Архангельск", "октябрь", 7, "2", 0, 0,
+                100000, "total", 0, "+79990000000", "wrong_source", 1,
+            ),
+        )
+
+    timeline = client.get(
+        f"/agent-extension/crm/timeline?requestId=web-lead-{lead_id}",
+        headers=_agent_headers(),
+    )
+    assert timeline.status_code == 200
+    data = timeline.get_json()["timeline"]
+    assert data["client"]["name"] == "Роман"
+    assert data["client"]["phone"] == "+79161234567"
+    assert data["client"]["name"] != "Wrong Source"
