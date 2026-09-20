@@ -160,7 +160,7 @@ echo "==> [9/$TOTAL] Installing the nightly backup job"
 if [ "${SKIP_BACKUP:-0}" = "1" ]; then
     echo "    skipped (SKIP_BACKUP=1)"
 else
-    chmod +x "$APP_DIR/scripts/backup.sh"
+    chmod +x "$APP_DIR/scripts/backup.sh" "$APP_DIR/scripts/offsite-backup.sh"
     # The script documented its own cron line, but nothing ever installed it,
     # so backups existed only in theory.
     cat > /etc/cron.d/turbot-backup <<CRON

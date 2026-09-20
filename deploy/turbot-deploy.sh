@@ -149,7 +149,7 @@ ensure_backup_and_restore_drill() {
     return 1
   fi
 
-  chmod 755 "$repo/scripts/backup.sh" "$repo/scripts/restore-drill.sh"
+  chmod 755 "$repo/scripts/backup.sh" "$repo/scripts/restore-drill.sh" "$repo/scripts/offsite-backup.sh"
 
   cat > /etc/cron.d/turbot-backup <<CRON
 # TurBot — nightly verified SQLite online backup.
