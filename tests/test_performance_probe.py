@@ -1,4 +1,44 @@
 from deploy.performance_probe import PageResult, PageSpec, _within_budget
+from deploy.performance_probe import probe_page
+from unittest.mock import MagicMock
+
+import pytest
+
+
+@pytest.mark.parametrize("status", [404, 429, 500, 503, None])
+def test_http_failure_cannot_pass_performance_budget(status):
+    browser = MagicMock()
+    context = browser.new_context.return_value
+    page = context.new_page.return_value
+    page.goto.return_value = (
+        None if status is None else MagicMock(status=status, ok=False)
+    )
+
+    result = probe_page(_spec(), browser)
+
+    assert result.ok is False
+    assert result.within_budget is False
+    assert result.error == "http_response_failed"
+    page.evaluate.assert_not_called()
+    context.close.assert_called_once()
+
+
+def test_successful_http_response_collects_performance_metrics():
+    browser = MagicMock()
+    context = browser.new_context.return_value
+    page = context.new_page.return_value
+    page.goto.return_value = MagicMock(status=200, ok=True)
+    page.evaluate.return_value = {
+        "dom": 100, "load": 200, "fcp": 100, "lcp": 150,
+        "bytes": 1024, "resources": 2,
+    }
+
+    result = probe_page(_spec(), browser)
+
+    assert result.ok is True
+    assert result.within_budget is True
+    assert result.transfer_kb == 1
+    context.close.assert_called_once()
 
 
 def _spec():
