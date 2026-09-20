@@ -956,17 +956,34 @@ def _crm_parse_datetime(value: Any, *, default: Optional[datetime] = None) -> da
 
 def _crm_client_summary(cur: Any, request_id: str) -> Dict[str, Any]:
     row = cur.execute(
-        "SELECT lead_id FROM crm_trip_requests WHERE request_id=?",
+        "SELECT lead_id, payload_json FROM crm_trip_requests WHERE request_id=?",
         (request_id,),
     ).fetchone()
     lead_id = int(row[0]) if row and row[0] is not None else None
     if lead_id is None:
         return {"leadId": None, "name": "", "phone": ""}
 
-    lead = cur.execute(
-        "SELECT first_name, phone FROM leads WHERE id=?",
-        (lead_id,),
-    ).fetchone()
+    channel = ""
+    if row:
+        try:
+            payload = json.loads(row[1] or "{}")
+            channel = str(
+                (payload.get("attribution") or {}).get("channel") or ""
+            ).strip().lower()
+        except (TypeError, ValueError, json.JSONDecodeError):
+            channel = ""
+
+    if channel in {"website", "agent_extension"}:
+        lead = cur.execute(
+            "SELECT name, phone FROM website_leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+    else:
+        lead = cur.execute(
+            "SELECT first_name, phone FROM leads WHERE id=?",
+            (lead_id,),
+        ).fetchone()
+
     if not lead:
         return {"leadId": lead_id, "name": "", "phone": ""}
     return {
