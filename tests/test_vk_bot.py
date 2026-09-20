@@ -2080,3 +2080,82 @@ def test_vk_sletat_actualization_updates_selected_price(monkeypatch):
     assert current["actualization_status"] == "available"
     assert bot.user_data[user_id]["_tour_offers"][0]["price"] == 225500
     assert any("Актуализированная цена" in text for text in sent)
+
+def test_vk_tourvisor_live_actualization_persists_with_selected_lead(monkeypatch):
+    sent = []
+    user_id = 964
+    selected = {
+        "hotel": "Tourvisor Live Hotel",
+        "category": 5,
+        "region": "Анталья",
+        "date": "2030-09-15",
+        "nights": 7,
+        "meal": "AI",
+        "room": "DBL",
+        "operator": "Operator",
+        "price": 198000,
+        "currency": "RUB",
+        "fuel_charge": 5000,
+        "tour_id": "tour-77",
+        "provider": "tourvisor",
+        "provider_search_id": 777,
+        "picture_url": "",
+        "departure": "Москва",
+    }
+    bot.user_data[user_id] = {
+        "state": bot.STATE_REVIEW,
+        "selected_tour": None,
+        "_tour_offers": [dict(selected)],
+        "_tour_offers_base": [dict(selected)],
+        "destination": "Турция",
+    }
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(
+        bot._tour_providers,
+        "actualize_offer",
+        lambda *args, **kwargs: {
+            "status": "available",
+            "confirmed": True,
+            "flight_status": "🟢 Места на выбранном перелёте есть",
+            "hotel_status": "🟡 Наличие номера подтверждает менеджер перед оформлением",
+            "total_price": 205000,
+            "currency": "RUB",
+            "actualized_at": "18:10",
+            "provider": "tourvisor",
+        },
+    )
+    monkeypatch.setattr(
+        bot,
+        "send_message",
+        lambda uid, text, **kwargs: sent.append(text),
+    )
+
+    bot._select_tour(user_id, 1)
+
+    current = bot.user_data[user_id]["selected_tour"]
+    assert current["price"] == 205000
+    assert current["fuel_charge"] == 0
+    assert current["provider"] == "tourvisor"
+    assert current["provider_search_id"] == 777
+    assert current["actualization_confirmed"] is True
+    assert current["actualization_status"] == "available"
+    assert "Tourvisor" in bot._selected_tour_summary(bot.user_data[user_id])
+    assert "Актуализация: цена и перелёт подтверждены" in bot._selected_tour_summary(
+        bot.user_data[user_id]
+    )
+    assert any("Перепроверяю цену и наличие в Tourvisor" in text for text in sent)
+    assert any("Tourvisor перепроверил выбранный тур" in text for text in sent)
+
+    lead_id = bot.save_lead(user_id, bot.user_data[user_id], "VK", "QA Test")
+    with bot._db_cursor() as cur:
+        stored = json.loads(
+            cur.execute(
+                "SELECT selected_tour FROM leads WHERE id = ?", (lead_id,)
+            ).fetchone()[0]
+        )
+    assert stored["provider"] == "tourvisor"
+    assert stored["provider_search_id"] == 777
+    assert stored["actualization_confirmed"] is True
+    assert stored["actualization_status"] == "available"
+    assert stored["price"] == 205000
+
