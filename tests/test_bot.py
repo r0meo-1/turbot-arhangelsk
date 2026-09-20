@@ -2966,3 +2966,18 @@ def test_health_exposes_lead_assist_flag_without_provider_secret(client, monkeyp
     raw = response.get_data(as_text=True)
     assert "REGCLOUD_API_KEY" not in raw
     assert "REGCLOUD_BASE_URL" not in raw
+
+
+def test_manager_quick_reply_is_embedded_in_telegram_lead_card():
+    info = {
+        "destination": "Вьетнам",
+        "dates": "10–20 января",
+        "people": 2,
+        "budget": 250000,
+    }
+    text = bot._format_lead_notify_text(42, info, "+79000000000", "Тест")
+    assert "⚡ SLA:" in text
+    assert "≤5 мин" in text
+    assert "💬 Быстрый ответ:" in text
+    assert "основные параметры уже сохранены" in text
+    assert bot.LEAD_OWNER_NAME in text
