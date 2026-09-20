@@ -22,6 +22,8 @@ jobs:
           python-version: "3.12"
       - name: Scan tracked files for high-confidence credentials
         run: python scripts/scan_repo_secrets.py
+      - name: Install scanner test dependency
+        run: python -m pip install pytest
       - name: Test secret scanner behavior
         run: python -m pytest -q tests/test_scan_repo_secrets.py
 
