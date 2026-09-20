@@ -1,0 +1,58 @@
+name: Production Performance Baseline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/performance_probe.py"
+      - ".github/workflows/performance-baseline.yml"
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: turbot-performance-baseline
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright
+        run: |
+          python -m pip install --upgrade pip
+          pip install "playwright==1.62.0"
+          python -m playwright install msedge
+
+      - name: Measure production under mobile slow-network profile
+        run: |
+          python deploy/performance_probe.py --json-out /tmp/performance-baseline.json
+          {
+            echo "### TurBot production performance baseline"
+            echo
+            echo "Viewport: 390x844"
+            echo
+            echo "Network profile: 150ms latency, 1.6Mbps down, 750Kbps up"
+            echo
+            echo
+            echo '~~~json'
+            cat /tmp/performance-baseline.json
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload safe aggregate baseline
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-baseline
+          path: /tmp/performance-baseline.json
+          retention-days: 14
