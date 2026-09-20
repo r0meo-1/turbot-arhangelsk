@@ -1,0 +1,139 @@
+name: Domain Expiry Monitor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/domain_expiry_probe.py"
+      - "tests/test_domain_expiry_probe.py"
+      - ".github/workflows/domain-expiry-monitor.yml"
+  schedule:
+    - cron: "23 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: turbot-domain-expiry
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Probe .RU registration expiry
+        id: probe
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          python deploy/domain_expiry_probe.py \
+            --domain r0meo1.ru \
+            --warn-days 45 \
+            --timeout 10 \
+            --json-out /tmp/domain-expiry.json || status=$?
+
+          if [[ "$status" -eq 0 ]]; then
+            echo "needs_attention=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needs_attention=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "### TurBot domain-expiry probe"
+            echo
+            echo '~~~json'
+            cat /tmp/domain-expiry.json
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Manage domain-expiry alert issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS_ATTENTION: ${{ steps.probe.outputs.needs_attention }}
+        run: |
+          set -Eeuo pipefail
+          title="[domain-expiry] r0meo1.ru attention required"
+          open_issue="$(
+            gh issue list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --search 'in:title "[domain-expiry] r0meo1.ru attention required"' \
+              --json number,title \
+              --jq '.[] | select(.title == "[domain-expiry] r0meo1.ru attention required") | .number' \
+              | head -n1
+          )"
+
+          checked_at="$(python - <<'PY'
+import json
+with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
+    print(json.load(fh)['checked_at'])
+PY
+          )"
+          paid_till="$(python - <<'PY'
+import json
+with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
+    print(json.load(fh).get('paid_till') or 'unknown')
+PY
+          )"
+          days_remaining="$(python - <<'PY'
+import json
+with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
+    value = json.load(fh).get('days_remaining')
+    print('unknown' if value is None else value)
+PY
+          )"
+          error="$(python - <<'PY'
+import json
+with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
+    print(json.load(fh).get('error') or 'none')
+PY
+          )"
+          run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+          if [[ "$NEEDS_ATTENTION" == "true" ]]; then
+            if [[ -z "$open_issue" ]]; then
+              body="$(mktemp)"
+              {
+                echo "The daily .RU registration-expiry monitor requires attention."
+                echo
+                echo "- Domain: r0meo1.ru"
+                echo "- Checked: $checked_at"
+                echo "- paid-till: $paid_till"
+                echo "- Days remaining: $days_remaining"
+                echo "- Warning threshold: 45 days"
+                echo "- Error class: $error"
+                echo "- Source: official .RU WHOIS server whois.tcinet.ru"
+                echo "- Run: $run_url"
+                echo
+                echo "No WHOIS holder data or raw registry response is stored in this issue."
+              } > "$body"
+              gh issue create \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "$title" \
+                --assignee "$GITHUB_REPOSITORY_OWNER" \
+                --body-file "$body"
+            fi
+          elif [[ -n "$open_issue" ]]; then
+            recovery="$(mktemp)"
+            {
+              echo "Domain-expiry monitor is healthy again."
+              echo
+              echo "- Checked: $checked_at"
+              echo "- paid-till: $paid_till"
+              echo "- Days remaining: $days_remaining"
+              echo "- Run: $run_url"
+            } > "$recovery"
+            gh issue comment "$open_issue" --repo "$GITHUB_REPOSITORY" --body-file "$recovery"
+            gh issue close "$open_issue" --repo "$GITHUB_REPOSITORY" --reason completed
+          fi
