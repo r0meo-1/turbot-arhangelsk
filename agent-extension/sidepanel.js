@@ -387,7 +387,11 @@ function renderToday(tasks) {
     open.textContent = "История";
     open.addEventListener("click", async () => {
       $("crmRequestId").value = task.requestId;
-      await loadTimeline(task.requestId);
+      try {
+        await loadTimeline(task.requestId);
+      } catch (error) {
+        setStatus("История: " + (error.message || "ошибка"));
+      }
     });
     const done = document.createElement("button");
     done.className = "secondary";
@@ -417,7 +421,13 @@ function renderToday(tasks) {
 }
 
 async function loadToday() {
-  const data = await crmFetch(CRM_TODAY_API + "?limit=50");
+  const now = new Date();
+  const params = new URLSearchParams({
+    limit: "50",
+    now: now.toISOString(),
+    tzOffsetMinutes: String(now.getTimezoneOffset())
+  });
+  const data = await crmFetch(CRM_TODAY_API + "?" + params.toString());
   renderToday(data.tasks || []);
 }
 
