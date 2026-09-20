@@ -200,6 +200,7 @@ def search_tours(
     *,
     sleep_fn: Callable[[float], None] = time.sleep,
     log: Optional[logging.Logger] = None,
+    on_search_request: Optional[Callable[[], None]] = None,
 ) -> _tourvisor.SearchResult:
     """Search Sletat.ru and normalise results into the TurBot offer model."""
     log = log or logger
@@ -275,6 +276,14 @@ def search_tours(
             if info.get("budget_scope") != "total":
                 total_cap *= adults + len(child_ages)
             params["s_priceMax"] = total_cap
+
+        if on_search_request is not None:
+            try:
+                on_search_request()
+            except Exception as exc:
+                log.warning(
+                    "Sletat.ru quota metrics callback failed: %s", type(exc).__name__
+                )
 
         started = _request(settings, session, "GetTours", params)
         if not isinstance(started, dict):
