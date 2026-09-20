@@ -2159,3 +2159,11 @@ def test_vk_tourvisor_live_actualization_persists_with_selected_lead(monkeypatch
     assert stored["actualization_status"] == "available"
     assert stored["price"] == 205000
 
+
+
+def test_manager_quick_reply_text_is_available_for_vk_leads():
+    reply = bot._manager_quick_reply_text()
+    assert bot.LEAD_OWNER_NAME in reply
+    assert "основные параметры уже сохранены" in reply
+    assert "Уточню только то, чего в заявке нет" in reply
+    assert "≤5 мин" in bot.MANAGER_SLA_HINT
