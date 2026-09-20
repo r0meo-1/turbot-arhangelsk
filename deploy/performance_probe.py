@@ -128,7 +128,15 @@ def probe_page(spec: PageSpec, browser, profile: dict) -> PageResult:
         )
 
         started = time.perf_counter()
-        page.goto(spec.url, wait_until="load", timeout=30_000)
+        response = page.goto(spec.url, wait_until="load", timeout=30_000)
+        if response is None or not response.ok:
+            return PageResult(
+                name=spec.name,
+                owner=spec.owner,
+                ok=False,
+                within_budget=False,
+                error="http_response_failed",
+            )
         page.wait_for_timeout(750)
         wall_ms = round((time.perf_counter() - started) * 1000)
 
