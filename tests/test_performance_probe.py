@@ -1,4 +1,4 @@
-from deploy.performance_probe import PageResult, PageSpec, _within_budget
+from deploy.performance_probe import PROFILES, PageResult, PageSpec, _within_budget
 
 
 def _spec():
@@ -68,3 +68,13 @@ def test_performance_budget_does_not_claim_failed_probe_is_fast():
         error="browser_probe_failed",
     )
     assert _within_budget(_spec(), failed) is False
+
+
+def test_performance_profiles_cover_mobile_slow_network_and_desktop():
+    mobile = PROFILES["mobile-slow4g"]
+    desktop = PROFILES["desktop-broadband"]
+
+    assert mobile["viewport"] == {"width": 390, "height": 844}
+    assert mobile["latency_ms"] >= desktop["latency_ms"]
+    assert mobile["download_kbps"] < desktop["download_kbps"]
+    assert desktop["viewport"]["width"] >= 1280
