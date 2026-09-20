@@ -22,8 +22,10 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
-def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
-    handler = partial(_QuietHandler, directory=str(MINIAPP_DIR))
+@pytest.mark.parametrize("width", [320, 390, 1280])
+@pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
+def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width, asset_dir):
+    handler = partial(_QuietHandler, directory=str(asset_dir))
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -33,7 +35,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
         url = f"http://127.0.0.1:{server.server_port}/index.html"
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="msedge", headless=True)
-            context = browser.new_context(viewport={"width": 320, "height": 760})
+            context = browser.new_context(viewport={"width": width, "height": 760})
             context.add_init_script(
                 f"""
                 window.__tgClosed = false;
@@ -90,7 +92,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
             shell_box = page.locator(".shell").bounding_box()
             assert shell_box is not None
             assert shell_box["x"] >= 0
-            assert shell_box["x"] + shell_box["width"] <= 320.5
+            assert shell_box["x"] + shell_box["width"] <= width + 0.5
 
             # Critical form controls need stable accessible names instead of
             # relying on placeholders or visual proximity.
@@ -107,6 +109,9 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
 
             # Keyboard users must get an explicit visible focus indicator.
             page.locator("#destination").focus()
+            assert page.locator("#destination").evaluate(
+                "el => getComputedStyle(el).outlineStyle !== 'none' && getComputedStyle(el).outlineWidth !== '0px'"
+            )
             page.keyboard.press("Tab")
             focused = page.evaluate(
                 """() => {
@@ -151,6 +156,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
 
             # Review is local only: no backend write and no WebView close yet.
             page.locator("#review").wait_for(state="visible")
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
             assert captured == []
             assert page.evaluate("window.__tgClosed") is False
             assert page.evaluate("window.__tgBackVisible") is True

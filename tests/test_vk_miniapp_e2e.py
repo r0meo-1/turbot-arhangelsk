@@ -49,7 +49,8 @@ def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator("#chat").wait_for(state="visible")
 
 
-def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallback():
+@pytest.mark.parametrize("width", [320, 390, 1280])
+def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallback(width):
     saved = []
 
     def save_draft(uid, info):
@@ -68,7 +69,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
         url = f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}"
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="msedge", headless=True)
-            context = browser.new_context(viewport={"width": 320, "height": 760})
+            context = browser.new_context(viewport={"width": width, "height": 760})
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded")
 
@@ -94,7 +95,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             shell_box = page.locator(".shell").bounding_box()
             assert shell_box is not None
             assert shell_box["x"] >= 0
-            assert shell_box["x"] + shell_box["width"] <= 320.5
+            assert shell_box["x"] + shell_box["width"] <= width + 0.5
 
             for label in (
                 "Направление",
@@ -108,6 +109,9 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
                 assert page.get_by_label(label, exact=True).count() == 1
 
             page.locator("#destination").focus()
+            assert page.locator("#destination").evaluate(
+                "el => getComputedStyle(el).outlineStyle !== 'none' && getComputedStyle(el).outlineWidth !== '0px'"
+            )
             page.keyboard.press("Tab")
             focused = page.evaluate(
                 """() => {
