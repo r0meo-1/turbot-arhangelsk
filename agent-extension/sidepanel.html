@@ -57,6 +57,71 @@
 
     <section class="card">
       <div class="row">
+        <h2>Что делать сегодня</h2>
+        <button id="refreshToday" class="link">Обновить</button>
+      </div>
+      <div id="todayTasks" class="today-tasks"></div>
+      <p id="todayEmpty" class="empty">Нет просроченных задач. Редкий момент, когда очередь решила не размножаться.</p>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <h2>История заявки</h2>
+        <small id="activeRequestId" class="muted"></small>
+      </div>
+      <p id="timelineEmpty" class="empty">Открой заявку из блока «Что делать сегодня».</p>
+      <div id="timeline" hidden>
+        <p id="tripSummary" class="trip-summary"></p>
+
+        <div class="row section-title">
+          <strong>Предложения</strong>
+        </div>
+        <div id="quoteHistory" class="quote-history"></div>
+
+        <details class="crm-form">
+          <summary>Добавить предложение</summary>
+          <div class="grid">
+            <label>Отель<input id="quoteHotel" placeholder="Synthetic Resort"></label>
+            <label>Цена, ₽<input id="quotePrice" inputmode="numeric" placeholder="195000"></label>
+            <label>Туроператор<input id="quoteOperator" placeholder="оператор"></label>
+            <label>Питание<input id="quoteMeal" placeholder="AI / HB / BB"></label>
+          </div>
+          <button id="addQuote" class="secondary">Добавить в историю</button>
+        </details>
+
+        <details class="crm-form">
+          <summary>Записать контакт</summary>
+          <textarea id="activitySummary" placeholder="Клиент сказал: дорого, просит другой отель"></textarea>
+          <button id="addActivity" class="secondary">Сохранить результат контакта</button>
+        </details>
+
+        <details class="crm-form">
+          <summary>Поставить задачу</summary>
+          <div class="grid">
+            <label>Что сделать
+              <select id="taskType">
+                <option value="build_selection">Сделать подбор</option>
+                <option value="send_options">Отправить варианты</option>
+                <option value="call_back">Перезвонить</option>
+                <option value="check_price">Проверить цену</option>
+                <option value="flights">Авиабилеты</option>
+                <option value="visa">Виза</option>
+                <option value="documents">Документы</option>
+                <option value="next_contact">Следующий контакт</option>
+              </select>
+            </label>
+            <label>Когда<input id="taskDueAt" type="datetime-local"></label>
+          </div>
+          <textarea id="taskNote" placeholder="Что уточнить / что отправить"></textarea>
+          <button id="addTask" class="secondary">Добавить задачу</button>
+        </details>
+
+        <div id="activityHistory" class="activity-history"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row">
         <h2>Мини-CRM</h2>
         <div class="row-actions">
           <button id="exportLeads" class="link">CSV</button>
