@@ -233,6 +233,7 @@ def run(
     opener: Callable = urlopen,
     cert_loader: Callable = _load_peer_certificate,
     sleeper: Callable[[float], None] = time.sleep,
+    now: Optional[datetime] = None,
 ) -> dict:
     results = [
         probe_endpoint(
@@ -253,6 +254,7 @@ def run(
             timeout=min(max(1.0, timeout), 5.0),
             cert_loader=cert_loader,
             sleeper=sleeper,
+            now=now,
         )
         for spec in tls_hosts
     ]
