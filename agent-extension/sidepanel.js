@@ -2,6 +2,14 @@ const API = "https://bot.r0meo1.ru/agent-extension/lead";
 const LEADS_API = "https://bot.r0meo1.ru/agent-extension/leads";
 const STATUS_API = "https://bot.r0meo1.ru/agent-extension/status";
 const EXPORT_API = "https://bot.r0meo1.ru/agent-extension/export.csv";
+const CRM_TODAY_API = "https://bot.r0meo1.ru/agent-extension/crm/today";
+const CRM_TIMELINE_API = "https://bot.r0meo1.ru/agent-extension/crm/timeline";
+const CRM_QUOTE_API = "https://bot.r0meo1.ru/agent-extension/crm/quote";
+const CRM_QUOTE_REACTION_API = "https://bot.r0meo1.ru/agent-extension/crm/quote-reaction";
+const CRM_TASK_API = "https://bot.r0meo1.ru/agent-extension/crm/task";
+const CRM_TASK_STATUS_API = "https://bot.r0meo1.ru/agent-extension/crm/task-status";
+const CRM_ACTIVITY_API = "https://bot.r0meo1.ru/agent-extension/crm/activity";
+const CRM_OUTCOME_API = "https://bot.r0meo1.ru/agent-extension/crm/outcome";
 const fieldIds = ["name","phone","destination","origin","dates","people","budget","consent"];
 
 const $ = (id) => document.getElementById(id);
@@ -56,6 +64,7 @@ async function load() {
   renderCandidates(state.candidates || []);
   if (state.agentToken) {
     loadLeads().catch(() => {});
+    loadToday().catch(() => {});
   }
 }
 
@@ -195,6 +204,76 @@ const STATUS_LABELS = {
   lost: "Потеряно"
 };
 
+const TASK_LABELS = {
+  build_selection: "Сделать подбор",
+  send_options: "Отправить варианты",
+  call_back: "Перезвонить",
+  check_price: "Проверить цену",
+  flights: "Авиабилеты",
+  visa: "Виза",
+  documents: "Документы",
+  next_contact: "Следующий контакт"
+};
+
+const REACTION_LABELS = {
+  draft: "Черновик",
+  sent: "Отправлено",
+  viewed: "Посмотрел",
+  too_expensive: "Дорого",
+  thinking: "Думает",
+  wants_alternative: "Нужен другой вариант",
+  accepted: "Согласен",
+  rejected: "Отказ"
+};
+
+function authHeaders(token, json=false) {
+  const headers = { "Authorization": "Bearer " + token };
+  if (json) headers["Content-Type"] = "application/json";
+  return headers;
+}
+
+async function crmFetch(url, options={}) {
+  const state = await chrome.storage.local.get({ agentToken: "" });
+  if (!state.agentToken) throw new Error("Сначала сохрани Agent token.");
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      ...authHeaders(state.agentToken, Boolean(options.body))
+    }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || ("HTTP " + response.status));
+  }
+  return data;
+}
+
+function fmtDateTime(value) {
+  if (!value) return "";
+  const date = new Date(String(value).endsWith("Z") ? value : value + "Z");
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString("ru-RU");
+}
+
+function requestMeta(req={}) {
+  const people = [];
+  if (req.adults) people.push(req.adults + " взр.");
+  if (Array.isArray(req.childAges) && req.childAges.length) {
+    people.push("дети " + req.childAges.join(", "));
+  }
+  return [
+    req.name || "",
+    req.phone || "",
+    req.destination || "",
+    req.origin ? "из " + req.origin : "",
+    req.dates || "",
+    people.join(" + "),
+    req.budget ? formatRub(req.budget) : "",
+    req.sourceTag ? "source: " + req.sourceTag : ""
+  ].filter(Boolean).join(" · ");
+}
+
 function formatRub(value) {
   return new Intl.NumberFormat("ru-RU").format(Number(value || 0)) + " ₽";
 }
@@ -261,6 +340,246 @@ function renderLeads(leads) {
     card.append(head, meta, controls);
     box.append(card);
   });
+}
+
+
+function renderToday(tasks) {
+  const box = $("todayTasks");
+  box.textContent = "";
+  $("todayEmpty").hidden = Boolean(tasks.length);
+
+  tasks.forEach((task) => {
+    const card = document.createElement("article");
+    card.className = "today-task";
+
+    const head = document.createElement("div");
+    head.className = "lead-head";
+    const title = document.createElement("strong");
+    title.textContent = TASK_LABELS[task.type] || task.type;
+    const due = document.createElement("small");
+    due.textContent = "до " + fmtDateTime(task.dueAt);
+    head.append(title, due);
+
+    const meta = document.createElement("div");
+    meta.className = "lead-meta";
+    meta.textContent = requestMeta(task.request || {});
+
+    const note = document.createElement("p");
+    note.className = "task-note";
+    note.textContent = task.note || "";
+
+    const actions = document.createElement("div");
+    actions.className = "task-actions";
+    const open = document.createElement("button");
+    open.className = "secondary";
+    open.textContent = "История";
+    open.addEventListener("click", async () => {
+      $("crmRequestId").value = task.requestId;
+      await loadTimeline(task.requestId);
+    });
+    const done = document.createElement("button");
+    done.className = "secondary";
+    done.textContent = "Готово";
+    done.addEventListener("click", async () => {
+      done.disabled = true;
+      try {
+        await crmFetch(CRM_TASK_STATUS_API, {
+          method: "POST",
+          body: JSON.stringify({ taskId: task.taskId, status: "done" })
+        });
+        setStatus("Задача закрыта.", true);
+        await loadToday();
+        if ($("crmRequestId").value === task.requestId) {
+          await loadTimeline(task.requestId);
+        }
+      } catch (error) {
+        setStatus("Задача не обновлена: " + (error.message || "ошибка"));
+      } finally {
+        done.disabled = false;
+      }
+    });
+    actions.append(open, done);
+    card.append(head, meta, note, actions);
+    box.append(card);
+  });
+}
+
+async function loadToday() {
+  const data = await crmFetch(CRM_TODAY_API + "?limit=50");
+  renderToday(data.tasks || []);
+}
+
+function renderTimeline(timeline) {
+  const request = timeline.request || {};
+  const client = timeline.client || {};
+  $("timelineSummary").textContent = [
+    client.name || "",
+    client.phone || "",
+    request.primary_destination || "",
+    request.departure_city ? "из " + request.departure_city : "",
+    request.dates_text || [request.date_from, request.date_to].filter(Boolean).join(" – "),
+    request.budget_amount ? formatRub(request.budget_amount) : "",
+    request.attribution?.source_tag ? "source: " + request.attribution.source_tag : ""
+  ].filter(Boolean).join(" · ");
+
+  const quoteBox = $("quoteHistory");
+  quoteBox.textContent = "";
+  const quotes = timeline.quotes || [];
+  if (!quotes.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "Предложений пока нет.";
+    quoteBox.append(empty);
+  }
+  quotes.slice().reverse().forEach((quote) => {
+    const item = document.createElement("article");
+    item.className = "quote-item";
+    const title = document.createElement("strong");
+    title.textContent = quote.hotel || "Отель";
+    const meta = document.createElement("div");
+    meta.className = "lead-meta";
+    meta.textContent = [
+      quote.operator || "",
+      quote.carrier || "",
+      quote.meal_plan || "",
+      quote.price_amount ? formatRub(quote.price_amount) : "",
+      fmtDateTime(quote.calculated_at)
+    ].filter(Boolean).join(" · ");
+
+    const reaction = document.createElement("select");
+    Object.entries(REACTION_LABELS).forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      option.selected = value === quote.reaction;
+      reaction.append(option);
+    });
+    reaction.addEventListener("change", async () => {
+      try {
+        await crmFetch(CRM_QUOTE_REACTION_API, {
+          method: "POST",
+          body: JSON.stringify({ quoteId: quote.quote_id, reaction: reaction.value })
+        });
+        setStatus("Реакция клиента сохранена.", true);
+        await loadTimeline(request.request_id);
+      } catch (error) {
+        setStatus("Реакция не сохранена: " + (error.message || "ошибка"));
+      }
+    });
+
+    item.append(title, meta, reaction);
+    quoteBox.append(item);
+  });
+
+  const last = timeline.lastContact;
+  $("lastContact").textContent = last
+    ? (fmtDateTime(last.created_at) + " · " + last.type + " · " + last.summary)
+    : "Нет записи.";
+
+  const outcome = timeline.outcome || null;
+  if (outcome) {
+    $("outcomeStatus").value = outcome.status || "paused";
+    $("outcomeReason").value = outcome.reason || "";
+  }
+}
+
+async function loadTimeline(requestId=null) {
+  const id = String(requestId || $("crmRequestId").value || "").trim();
+  if (!id) return setStatus("Укажи ID заявки.");
+  $("crmRequestId").value = id;
+  const data = await crmFetch(CRM_TIMELINE_API + "?requestId=" + encodeURIComponent(id));
+  renderTimeline(data.timeline || {});
+}
+
+async function addQuote() {
+  const requestId = $("crmRequestId").value.trim();
+  const hotel = $("quoteHotel").value.trim();
+  const priceAmount = Number($("quotePrice").value || 0);
+  if (!requestId || !hotel) return setStatus("Для предложения нужны ID заявки и отель.");
+  try {
+    await crmFetch(CRM_QUOTE_API, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId,
+        hotel,
+        priceAmount,
+        operator: $("quoteOperator").value.trim(),
+        carrier: $("quoteCarrier").value.trim(),
+        mealPlan: $("quoteMeal").value.trim(),
+        reaction: $("quoteReaction").value,
+        currency: "RUB"
+      })
+    });
+    ["quoteHotel","quotePrice","quoteOperator","quoteCarrier","quoteMeal"].forEach((id) => $(id).value = "");
+    setStatus("Предложение добавлено в историю.", true);
+    await loadTimeline(requestId);
+  } catch (error) {
+    setStatus("Предложение не добавлено: " + (error.message || "ошибка"));
+  }
+}
+
+async function addActivity() {
+  const requestId = $("crmRequestId").value.trim();
+  const summary = $("activitySummary").value.trim();
+  if (!requestId || !summary) return setStatus("Нужны ID заявки и результат контакта.");
+  try {
+    await crmFetch(CRM_ACTIVITY_API, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId,
+        type: $("activityType").value,
+        summary
+      })
+    });
+    $("activitySummary").value = "";
+    setStatus("Контакт записан.", true);
+    await loadTimeline(requestId);
+  } catch (error) {
+    setStatus("Контакт не записан: " + (error.message || "ошибка"));
+  }
+}
+
+async function addTask() {
+  const requestId = $("crmRequestId").value.trim();
+  const dueLocal = $("taskDueAt").value;
+  if (!requestId || !dueLocal) return setStatus("Нужны ID заявки и время задачи.");
+  try {
+    await crmFetch(CRM_TASK_API, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId,
+        type: $("taskType").value,
+        dueAt: new Date(dueLocal).toISOString(),
+        priority: Number($("taskPriority").value || 3),
+        note: $("taskNote").value.trim()
+      })
+    });
+    $("taskNote").value = "";
+    setStatus("Задача добавлена.", true);
+    await loadToday();
+    await loadTimeline(requestId);
+  } catch (error) {
+    setStatus("Задача не добавлена: " + (error.message || "ошибка"));
+  }
+}
+
+async function saveOutcome() {
+  const requestId = $("crmRequestId").value.trim();
+  if (!requestId) return setStatus("Укажи ID заявки.");
+  try {
+    await crmFetch(CRM_OUTCOME_API, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId,
+        status: $("outcomeStatus").value,
+        reason: $("outcomeReason").value.trim()
+      })
+    });
+    setStatus("Результат заявки сохранён.", true);
+    await loadTimeline(requestId);
+  } catch (error) {
+    setStatus("Результат не сохранён: " + (error.message || "ошибка"));
+  }
 }
 
 async function loadLeads() {
@@ -346,10 +665,21 @@ $("saveToken").addEventListener("click", async () => {
   await chrome.storage.local.set({ agentToken: $("token").value.trim() });
   setStatus("Токен сохранён локально.", true);
   await loadLeads().catch((error) => setStatus("CRM: " + error.message));
+  await loadToday().catch((error) => setStatus("Сегодня: " + error.message));
 });
 $("refreshLeads").addEventListener("click", () => {
   loadLeads().catch((error) => setStatus("CRM: " + error.message));
 });
+$("refreshToday").addEventListener("click", () => {
+  loadToday().catch((error) => setStatus("Сегодня: " + error.message));
+});
+$("loadTimeline").addEventListener("click", () => {
+  loadTimeline().catch((error) => setStatus("История: " + error.message));
+});
+$("addQuote").addEventListener("click", addQuote);
+$("addActivity").addEventListener("click", addActivity);
+$("addTask").addEventListener("click", addTask);
+$("saveOutcome").addEventListener("click", saveOutcome);
 $("exportLeads").addEventListener("click", exportLeads);
 $("send").addEventListener("click", sendLead);
 
