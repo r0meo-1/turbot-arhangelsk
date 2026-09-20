@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
+import ssl
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -19,6 +21,25 @@ class EndpointSpec:
     url: str
     kind: str
     expected: str = ""
+
+
+@dataclass(frozen=True)
+class TLSSpec:
+    name: str
+    host: str
+    port: int = 443
+    min_days_remaining: int = 21
+
+
+@dataclass
+class TLSProbeResult:
+    name: str
+    host: str
+    ok: bool
+    attempts: int
+    days_remaining: Optional[float] = None
+    expires_at: str = ""
+    error: str = ""
 
 
 @dataclass
@@ -36,6 +57,12 @@ ENDPOINTS = (
     EndpointSpec("vk_health", "https://bot.r0meo1.ru/vk/health", "json_status", "ok"),
     EndpointSpec("landing", "https://r0meo1.ru/apreltour/", "nonempty"),
     EndpointSpec("vk_miniapp", "https://bot.r0meo1.ru/vk/miniapp/", "contains", "trip-form"),
+)
+
+TLS_HOSTS = (
+    TLSSpec("bot_tls", "bot.r0meo1.ru"),
+    TLSSpec("site_tls", "r0meo1.ru"),
+    TLSSpec("travel_tls", "travel.r0meo1.ru"),
 )
 
 
@@ -120,14 +147,93 @@ def probe_endpoint(
     )
 
 
+def _load_peer_certificate(spec: TLSSpec, *, timeout: float) -> dict:
+    context = ssl.create_default_context()
+    with socket.create_connection((spec.host, spec.port), timeout=timeout) as raw_socket:
+        with context.wrap_socket(raw_socket, server_hostname=spec.host) as tls_socket:
+            return dict(tls_socket.getpeercert() or {})
+
+
+def _certificate_expiry(
+    spec: TLSSpec,
+    certificate: dict,
+    *,
+    now: Optional[datetime] = None,
+) -> tuple[datetime, float]:
+    not_after = str(certificate.get("notAfter") or "").strip()
+    if not not_after:
+        raise ValueError("missing_not_after")
+    expires_at = datetime.fromtimestamp(
+        ssl.cert_time_to_seconds(not_after),
+        tz=timezone.utc,
+    )
+    current = now or datetime.now(timezone.utc)
+    days_remaining = (expires_at - current).total_seconds() / 86400
+    if days_remaining < spec.min_days_remaining:
+        raise ValueError("certificate_expiring")
+    return expires_at, days_remaining
+
+
+def probe_tls_certificate(
+    spec: TLSSpec,
+    *,
+    attempts: int,
+    delay: float,
+    timeout: float,
+    cert_loader: Callable = _load_peer_certificate,
+    sleeper: Callable[[float], None] = time.sleep,
+    now: Optional[datetime] = None,
+) -> TLSProbeResult:
+    last_error = ""
+    used = 0
+    total_attempts = max(1, attempts)
+    for attempt in range(1, total_attempts + 1):
+        used = attempt
+        try:
+            certificate = cert_loader(spec, timeout=timeout)
+            expires_at, days_remaining = _certificate_expiry(
+                spec,
+                certificate,
+                now=now,
+            )
+            return TLSProbeResult(
+                spec.name,
+                spec.host,
+                True,
+                attempt,
+                days_remaining=round(days_remaining, 1),
+                expires_at=expires_at.isoformat(),
+            )
+        except (OSError, ssl.SSLError, TimeoutError):
+            last_error = "tls_network_error"
+        except ValueError as exc:
+            last_error = str(exc)[:80] or "invalid_certificate"
+        except Exception:
+            last_error = "tls_probe_error"
+
+        if attempt < total_attempts:
+            sleeper(max(0.0, delay))
+
+    return TLSProbeResult(
+        spec.name,
+        spec.host,
+        False,
+        used,
+        error=last_error or "unknown_error",
+    )
+
+
 def run(
     endpoints: Iterable[EndpointSpec] = ENDPOINTS,
     *,
+    tls_hosts: Iterable[TLSSpec] = TLS_HOSTS,
     attempts: int = 3,
     delay: float = 5.0,
     timeout: float = 15.0,
     opener: Callable = urlopen,
+    cert_loader: Callable = _load_peer_certificate,
     sleeper: Callable[[float], None] = time.sleep,
+    now: Optional[datetime] = None,
 ) -> dict:
     results = [
         probe_endpoint(
@@ -140,10 +246,23 @@ def run(
         )
         for spec in endpoints
     ]
+    tls_results = [
+        probe_tls_certificate(
+            spec,
+            attempts=min(max(1, attempts), 2),
+            delay=min(max(0.0, delay), 2.0),
+            timeout=min(max(1.0, timeout), 5.0),
+            cert_loader=cert_loader,
+            sleeper=sleeper,
+            now=now,
+        )
+        for spec in tls_hosts
+    ]
     return {
         "checked_at": datetime.now(timezone.utc).isoformat(),
-        "ok": all(item.ok for item in results),
+        "ok": all(item.ok for item in results) and all(item.ok for item in tls_results),
         "results": [asdict(item) for item in results],
+        "tls_results": [asdict(item) for item in tls_results],
     }
 
 
