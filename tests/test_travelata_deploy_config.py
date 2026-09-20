@@ -16,7 +16,7 @@ def test_deploy_shell_syntax_is_valid():
     assert result.returncode == 0, result.stderr
 
 
-def test_deploy_v3_remains_supported_and_v4_extends_it():
+def test_deploy_v3_v4_v5_remain_supported():
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert '"TURBOT_DEPLOY_CONFIG_V3": 6' in source
     assert '"TURBOT_DEPLOY_CONFIG_V4": 7' in source
@@ -33,7 +33,7 @@ def test_deploy_v3_rejects_partial_travelata_credentials():
 def test_empty_travelata_pair_preserves_server_values():
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "travelata_supplied = bool(travelata_username and travelata_password)" in source
-    assert 'marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4"} and travelata_supplied' in source
+    assert 'marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} and travelata_supplied' in source
     assert "Travelata deploy credentials not supplied; existing server values preserved" in source
 
 
@@ -45,9 +45,9 @@ def test_supplied_travelata_pair_enables_provider_first():
     assert '"TOUR_PROVIDER_ORDER": quote_env("travelata,tourvisor")' in source
 
 
-def test_v4_can_install_optional_travelpayouts_token_without_erasing_existing_value():
+def test_v4_v5_can_install_optional_travelpayouts_token_without_erasing_existing_value():
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-    assert 'travelpayouts_api_token = decode(6) if marker == "TURBOT_DEPLOY_CONFIG_V4" else ""' in source
+    assert 'travelpayouts_api_token = decode(6) if marker in {"TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPLOY_CONFIG_V5"} else ""' in source
     assert 'travelpayouts_supplied = bool(travelpayouts_api_token)' in source
     assert 'values["TRAVELPAYOUTS_API_TOKEN"] = quote_env(travelpayouts_api_token)' in source
     assert "Travelpayouts deploy token not supplied; existing server value preserved" in source
