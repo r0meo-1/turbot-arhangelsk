@@ -266,6 +266,62 @@ def test_sletat_search_maps_gateway_result_to_turbot_offer():
     assert params["s_priceMax"] == 250000
 
 
+def test_sletat_search_emits_one_quota_event_for_new_search():
+    session = FakeSletatSession()
+    settings = sletat.SletatSettings(
+        enabled=True,
+        login="agency",
+        password="secret",
+        max_offers=9,
+        poll_interval=1.5,
+        max_wait=3,
+    )
+    events = []
+
+    result = sletat.search_tours(
+        settings,
+        session,
+        _info(),
+        sleep_fn=lambda _: None,
+        on_search_request=lambda: events.append("search_request"),
+    )
+
+    assert result.offers
+    assert events == ["search_request"]
+    initial_get_tours = [
+        call for call in session.calls
+        if call[0].endswith("/GetTours")
+        and int(call[1]["params"].get("updateResult") or 0) == 0
+    ]
+    assert len(initial_get_tours) == 1
+
+
+def test_router_records_sletat_quota_event_and_success():
+    outcomes = []
+    settings = tour_providers.ProviderSettings(
+        order=("sletat",),
+        sletat=sletat.SletatSettings(
+            enabled=True,
+            login="agency",
+            password="secret",
+            max_offers=9,
+            poll_interval=1.5,
+            max_wait=3,
+        ),
+    )
+
+    result, provider = tour_providers.search_tours(
+        settings,
+        FakeSletatSession(),
+        _info(),
+        on_outcome=lambda name, outcome: outcomes.append((name, outcome)),
+    )
+
+    assert provider == "sletat"
+    assert result.offers
+    assert outcomes == [("sletat", "search_request"), ("sletat", "success")]
+
+
 def test_router_prefers_configured_sletat_even_with_legacy_order(monkeypatch):
     expected = tourvisor.TourOffer(
         hotel="Sletat First",

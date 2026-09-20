@@ -1125,6 +1125,7 @@ def _provider_runtime_health(now: Optional[float] = None) -> Dict[str, Any]:
                 "SELECT subject, outcome, COUNT(*) "
                 "FROM ops_metric_events "
                 "WHERE category = 'provider' AND created_at >= ? "
+                "AND outcome != 'search_request' "
                 "GROUP BY subject, outcome",
                 (cutoff,),
             ).fetchall()
@@ -1148,7 +1149,7 @@ def _provider_monthly_usage(now: Optional[float] = None) -> Dict[str, Any]:
             row = cur.execute(
                 "SELECT COUNT(*) FROM ops_metric_events "
                 "WHERE category = 'provider' AND subject = 'sletat' "
-                "AND outcome != 'fallback' AND created_at >= ? AND created_at <= ?",
+                "AND outcome = 'search_request' AND created_at >= ? AND created_at <= ?",
                 (month_start, current),
             ).fetchone()
     except sqlite3.Error as exc:
