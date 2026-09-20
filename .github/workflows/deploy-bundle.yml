@@ -94,6 +94,9 @@ jobs:
           )
           PY
 
+      - name: Verify public running revision
+        run: python3 deploy/verify_revision.py --expected '${{ steps.target.outputs.sha }}'
+
       - name: Verify production backup and isolated restore drill
         shell: bash
         run: |

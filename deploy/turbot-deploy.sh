@@ -10,6 +10,7 @@ cd "$repo"
 
 deploy_bundle() {
   local target_sha bundle stage old_manifest backup
+  local -a metadata=()
   IFS= read -r target_sha || {
     echo "Missing bundle commit SHA" >&2
     return 1
@@ -50,7 +51,11 @@ PY
     git -C "$repo" ls-files > "$old_manifest"
   fi
 
-  tar -czf "$backup" -C "$repo" --ignore-failed-read -T "$old_manifest" 2>/dev/null || true
+  # Restore revision and manifest together with the previous application files.
+  for name in .deploy-manifest .deployed-commit; do
+    [[ ! -f "$repo/$name" ]] || metadata+=("$name")
+  done
+  tar -czf "$backup" -C "$repo" --ignore-failed-read -T "$old_manifest" "${metadata[@]}"
 
   "$venv/python" - "$repo" "$old_manifest" <<'PY'
 from pathlib import Path
@@ -107,7 +112,8 @@ if manifest.exists():
         except FileNotFoundError:
             pass
 PY
-    tar -xzf "$backup" -C "$repo" 2>/dev/null || true
+    rm -f "$repo/.deployed-commit" "$repo/.deploy-manifest"
+    tar -xzf "$backup" -C "$repo"
     systemctl restart turbot 2>/dev/null || true
     systemctl restart vk-turbot 2>/dev/null || true
   }
