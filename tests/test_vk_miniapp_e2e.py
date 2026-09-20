@@ -138,6 +138,22 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             assert "Архангельск" in departure_options
             assert "Москва" in departure_options
 
+            # Review is still local. Closing/reopening before Save must not
+            # create a server-side draft or accidental lead.
+            page.locator("#destination").fill("Пхукет, Таиланд")
+            page.locator("#departure").fill("Архангельск")
+            page.locator("#consent").check()
+            page.locator("#terms-accepted").check()
+            page.locator("#submit").click()
+            page.locator("#review").wait_for(state="visible")
+            assert saved == []
+            assert "Заявка ещё не отправлена менеджеру." in page.locator("#review").inner_text()
+            page.reload(wait_until="domcontentloaded")
+            page.locator("#trip-form").wait_for(state="visible")
+            assert page.locator("#review").is_hidden()
+            assert saved == []
+            assert "заявка не сохранится" in page.locator(".privacy-note").inner_text()
+
             page.evaluate(
                 """
                 () => {

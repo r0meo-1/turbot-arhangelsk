@@ -173,7 +173,30 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
             assert page.locator("#children-ages input").input_value() == "5"
             assert page.evaluate("window.__tgBackVisible") is False
 
-            # Re-open review and explicitly save.
+            # Re-open review, then simulate closing/reopening before Save.
+            # Review alone must not create a backend write or accidental lead.
+            page.locator("#submit").click()
+            page.locator("#review").wait_for(state="visible")
+            assert captured == []
+            page.reload(wait_until="domcontentloaded")
+            page.locator("#trip-form").wait_for(state="visible")
+            assert page.locator("#review").is_hidden()
+            assert captured == []
+            assert "ничего не сохранится" in page.locator(".privacy-note").inner_text()
+
+            # A reopened Mini App starts a fresh form. Fill it again and save
+            # explicitly; only this action may create the one backend write.
+            page.locator("#destination").fill("Пхукет, Таиланд")
+            page.locator("#departure").fill("Архангельск")
+            page.locator("#nights").fill("10")
+            page.locator("#adults").fill("2")
+            page.locator("#children").fill("1")
+            page.locator("#children-ages input").fill("5")
+            page.locator("#budget").evaluate(
+                "el => { el.value = '270000'; el.dispatchEvent(new Event('input', {bubbles:true})); }"
+            )
+            page.locator("#direct").check()
+            page.locator("#consent").check()
             page.locator("#submit").click()
             page.locator("#review").wait_for(state="visible")
             page.locator("#save").click()
