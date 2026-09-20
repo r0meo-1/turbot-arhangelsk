@@ -1,6 +1,7 @@
 """Tests for the public Aprel Tour website lead endpoint."""
 
 import os
+from datetime import datetime, timedelta
 
 # Keep imports deterministic and keep the website retry thread out of pytest.
 os.environ.setdefault("BOT_TOKEN", "dummy-token")
@@ -15,6 +16,17 @@ import pytest
 
 import bot
 import website_app
+from shared.travel_crm import (
+    Activity,
+    ActivityType,
+    Attribution,
+    ManagerTask,
+    Quote,
+    QuoteReaction,
+    TaskType,
+    TripRequest,
+)
+from shared import travel_crm_store as crm_store
 
 
 ORIGIN = "https://r0meo1.ru"
@@ -45,6 +57,8 @@ def clean_website_state(monkeypatch):
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM website_leads")
         cur.execute("DELETE FROM acquisition_funnel_events")
+        for table in ("crm_quotes", "crm_activities", "crm_tasks", "crm_outcomes", "crm_trip_requests"):
+            cur.execute(f"DELETE FROM {table}")
 
 
 @pytest.fixture
@@ -559,3 +573,200 @@ def test_agent_extension_csv_export_escapes_formula_cells(client, monkeypatch):
     csv_text = response.get_data(as_text=True)
     assert "'=1+1" in csv_text
     assert "'@SUM(A1:A2)" in csv_text
+
+
+def _agent_headers():
+    return {
+        "Origin": "chrome-extension://abcdefghijklmnop",
+        "Authorization": "Bearer agent-secret",
+    }
+
+
+def _seed_crm_request():
+    request = TripRequest(
+        request_id="telegram-lead-7001",
+        departure_city="Москва",
+        adults=2,
+        dates_text="10–20 января 2027",
+        budget_amount=240000,
+        primary_destination="Вьетнам",
+        attribution=Attribution(
+            source_tag="video_dream",
+            channel="telegram",
+            campaign="winter_2027",
+        ),
+    )
+    with bot._db_cursor(commit=True) as cur:
+        crm_store.upsert_request(cur.connection, request, lead_id=None)
+    return request
+
+
+def test_agent_crm_today_queue_and_timeline(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    request = _seed_crm_request()
+    now = datetime(2026, 9, 21, 12, 0, 0)
+
+    with bot._db_cursor(commit=True) as cur:
+        crm_store.upsert_task(
+            cur.connection,
+            ManagerTask(
+                task_id="task-due",
+                request_id=request.request_id,
+                type=TaskType.CALL_BACK,
+                due_at=now - timedelta(minutes=10),
+                created_at=now - timedelta(hours=1),
+                priority=1,
+                note="Уточнить бюджет",
+            ),
+        )
+        crm_store.upsert_task(
+            cur.connection,
+            ManagerTask(
+                task_id="task-future",
+                request_id=request.request_id,
+                type=TaskType.DOCUMENTS,
+                due_at=now + timedelta(hours=2),
+                created_at=now,
+                priority=2,
+            ),
+        )
+        crm_store.append_quote(
+            cur.connection,
+            Quote(
+                quote_id="quote-existing",
+                request_id=request.request_id,
+                hotel="Synthetic Beach Resort 5*",
+                operator="Demo Operator",
+                price_amount=215000,
+                calculated_at=now - timedelta(hours=2),
+                reaction=QuoteReaction.SENT,
+            ),
+        )
+        crm_store.append_activity(
+            cur.connection,
+            Activity(
+                activity_id="activity-existing",
+                request_id=request.request_id,
+                type=ActivityType.CALL,
+                summary="Клиент попросил подумать",
+                created_at=now - timedelta(hours=1),
+            ),
+        )
+
+    today = client.get(
+        "/agent-extension/crm/today?now=2026-09-21T12:00:00&limit=20",
+        headers=_agent_headers(),
+    )
+    assert today.status_code == 200
+    body = today.get_json()
+    assert [item["taskId"] for item in body["tasks"]] == ["task-due"]
+    assert body["tasks"][0]["request"]["destination"] == "Вьетнам"
+    assert body["tasks"][0]["request"]["sourceTag"] == "video_dream"
+
+    timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=telegram-lead-7001",
+        headers=_agent_headers(),
+    )
+    assert timeline.status_code == 200
+    data = timeline.get_json()["timeline"]
+    assert data["request"]["primary_destination"] == "Вьетнам"
+    assert data["quotes"][0]["quote_id"] == "quote-existing"
+    assert data["lastContact"]["summary"] == "Клиент попросил подумать"
+
+
+def test_agent_crm_manager_actions_are_persisted(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    request = _seed_crm_request()
+    headers = _agent_headers()
+
+    quote = client.post(
+        "/agent-extension/crm/quote",
+        headers=headers,
+        json={
+            "requestId": request.request_id,
+            "hotel": "Synthetic Family Resort 5*",
+            "operator": "Demo Operator",
+            "carrier": "Demo Air",
+            "mealPlan": "AI",
+            "priceAmount": 198000,
+            "currency": "RUB",
+            "reaction": "sent",
+            "calculatedAt": "2026-09-21T10:00:00",
+        },
+    )
+    assert quote.status_code == 200
+    quote_id = quote.get_json()["quoteId"]
+
+    reaction = client.post(
+        "/agent-extension/crm/quote-reaction",
+        headers=headers,
+        json={"quoteId": quote_id, "reaction": "too_expensive"},
+    )
+    assert reaction.status_code == 200
+
+    activity = client.post(
+        "/agent-extension/crm/activity",
+        headers=headers,
+        json={
+            "requestId": request.request_id,
+            "type": "message_received",
+            "summary": "Просит вариант дешевле",
+            "createdAt": "2026-09-21T10:10:00",
+        },
+    )
+    assert activity.status_code == 200
+
+    task = client.post(
+        "/agent-extension/crm/task",
+        headers=headers,
+        json={
+            "requestId": request.request_id,
+            "type": "build_selection",
+            "dueAt": "2026-09-21T11:00:00",
+            "priority": 1,
+            "note": "Подобрать дешевле",
+        },
+    )
+    assert task.status_code == 200
+    task_id = task.get_json()["taskId"]
+
+    done = client.post(
+        "/agent-extension/crm/task-status",
+        headers=headers,
+        json={"taskId": task_id, "status": "done"},
+    )
+    assert done.status_code == 200
+
+    outcome = client.post(
+        "/agent-extension/crm/outcome",
+        headers=headers,
+        json={
+            "requestId": request.request_id,
+            "status": "paused",
+            "reason": "думает",
+            "decidedAt": "2026-09-21T10:15:00",
+        },
+    )
+    assert outcome.status_code == 200
+
+    timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=" + request.request_id,
+        headers=headers,
+    ).get_json()["timeline"]
+
+    assert timeline["quotes"][0]["reaction"] == "too_expensive"
+    assert any(item["summary"] == "Просит вариант дешевле" for item in timeline["activities"])
+    assert any(item["summary"].startswith("quote:") for item in timeline["activities"])
+    assert timeline["tasks"][0]["status"] == "done"
+    assert timeline["outcome"]["status"] == "paused"
+    assert timeline["outcome"]["reason"] == "думает"
+
+
+def test_agent_crm_endpoints_require_pairing_token(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    response = client.get(
+        "/agent-extension/crm/today",
+        headers={"Origin": "chrome-extension://abcdefghijklmnop"},
+    )
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
