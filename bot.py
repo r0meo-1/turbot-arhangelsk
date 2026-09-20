@@ -68,6 +68,7 @@ from shared import travelpayouts_stats as _travelpayouts_stats
 from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
+from shared import travel_crm_store as _travel_crm_store
 from shared import provider_status as _provider_status
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
@@ -814,6 +815,7 @@ def init_db() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)"
         )
+        _travel_crm_store.init_schema(cur)
         _funnel_metrics.init_schema(cur)
         cur.execute(
             """

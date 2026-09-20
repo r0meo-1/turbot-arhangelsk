@@ -28,6 +28,14 @@ class QuoteReaction(str, Enum):
     REJECTED = "rejected"
 
 
+class ActivityType(str, Enum):
+    MESSAGE_SENT = "message_sent"
+    MESSAGE_RECEIVED = "message_received"
+    NOTE = "note"
+    CALL = "call"
+    STATUS_CHANGE = "status_change"
+
+
 class TaskStatus(str, Enum):
     TODO = "todo"
     DONE = "done"
@@ -140,6 +148,21 @@ class Quote:
 
 
 @dataclass(frozen=True)
+class Activity:
+    activity_id: str
+    request_id: str
+    type: ActivityType
+    created_at: datetime
+    summary: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.activity_id.strip():
+            raise ValueError("activity_id is required")
+        if not self.request_id.strip():
+            raise ValueError("request_id is required")
+
+
+@dataclass(frozen=True)
 class ManagerTask:
     task_id: str
     request_id: str
@@ -166,6 +189,7 @@ class BookingOutcome:
 class LeadTimeline:
     request: TripRequest
     quotes: tuple[Quote, ...] = ()
+    activities: tuple[Activity, ...] = ()
     tasks: tuple[ManagerTask, ...] = ()
     outcome: BookingOutcome | None = None
 
@@ -175,6 +199,13 @@ class LeadTimeline:
         if any(item.quote_id == quote.quote_id for item in self.quotes):
             raise ValueError("quote_id already exists")
         return replace(self, quotes=(*self.quotes, quote))
+
+    def with_activity(self, activity: Activity) -> "LeadTimeline":
+        if activity.request_id != self.request.request_id:
+            raise ValueError("activity belongs to another request")
+        if any(item.activity_id == activity.activity_id for item in self.activities):
+            raise ValueError("activity_id already exists")
+        return replace(self, activities=(*self.activities, activity))
 
     def with_task(self, task: ManagerTask) -> "LeadTimeline":
         if task.request_id != self.request.request_id:
