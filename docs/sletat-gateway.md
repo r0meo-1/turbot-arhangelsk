@@ -48,7 +48,7 @@ Flow:
 
 ## Quota observability
 
-TurBot counts one Sletat search attempt per terminal provider outcome in the anonymous `ops_metric_events` table. The supplemental `fallback` outcome is excluded so one search is never counted twice.
+TurBot records one anonymous `search_request` event immediately before the initial Sletat `GetTours` call. Terminal provider outcomes remain separate operational metrics, so validation/fallback events do not inflate the vendor quota counter.
 
 - `SLETAT_MONTHLY_QUOTA` defaults to `20000` for the vendor's basic monthly search allowance.
 - Set it to `30000` only when the issued licence/contract includes the extended allowance.
