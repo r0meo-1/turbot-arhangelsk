@@ -175,6 +175,7 @@ def test_run_includes_tls_summary_without_certificate_body():
         delay=0,
         timeout=1,
         cert_loader=lambda _spec, timeout: certificate,
+        now=now,
     )
 
     assert payload["ok"] is True
