@@ -1183,6 +1183,14 @@ def session_exists(chat_id: int) -> bool:
 def delete_session(chat_id: int) -> None:
     """Remove a user's dialog session."""
     with _db_cursor(commit=True) as cur:
+        lead_ids = [
+            int(row[0])
+            for row in cur.execute(
+                "SELECT id FROM leads WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchall()
+        ]
+        _travel_crm_store.delete_for_lead_ids(cur.connection, lead_ids)
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
 
 
