@@ -241,6 +241,19 @@ LEAD_OWNER_VK_ID = _env_int("LEAD_OWNER_VK_ID", 112655584)
 MANAGER_TOURVISOR_URL = os.getenv("MANAGER_TOURVISOR_URL", "https://pro.tourvisor.ru/").strip()
 MANAGER_SLETAT_URL = os.getenv("MANAGER_SLETAT_URL", "https://sletat.ru/pro").strip()
 MANAGER_QUIQUO_URL = os.getenv("MANAGER_QUIQUO_URL", "https://qui-quo.ru/").strip()
+MANAGER_SLA_HINT = os.getenv(
+    "MANAGER_SLA_HINT",
+    "горячий лид ≤5 мин; обычный ≤15 мин; не повторять вопросы TurBot",
+).strip() or "горячий лид ≤5 мин; обычный ≤15 мин; не повторять вопросы TurBot"
+
+
+def _manager_quick_reply_text() -> str:
+    """Canonical first reply shown inside manager lead cards."""
+    return (
+        f"Здравствуйте! Я {LEAD_OWNER_NAME}, «Апрель Тур». "
+        "Вижу вашу заявку из TurBot, основные параметры уже сохранены. "
+        "Уже смотрю варианты. Уточню только то, чего в заявке нет."
+    )
 VK_ACCESS_TOKEN = os.getenv("VK_ACCESS_TOKEN", "").strip()
 VK_API_VERSION = os.getenv("VK_API_VERSION", "5.199").strip() or "5.199"
 
@@ -4074,7 +4087,9 @@ def _format_lead_notify_text(
         f"👥 {_esc(_party_text(info))}\n"
         f"💰 {'от' if info.get('budget_open_ended') else 'до'} {_esc(info.get('budget', '?'))} ₽ на человека\n"
         f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
-        f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}"
+        f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}\n\n"
+        f"⚡ SLA: {_esc(MANAGER_SLA_HINT)}\n"
+        f"💬 Быстрый ответ:\n{_esc(_manager_quick_reply_text())}"
     )
 
 
@@ -4139,7 +4154,9 @@ def _notify_admin(
         + "🔎 Подбор менеджеру:\n"
         + f"Tourvisor PRO: {MANAGER_TOURVISOR_URL}\n"
         + f"Sletat PRO: {MANAGER_SLETAT_URL}\n"
-        + f"Qui-Quo: {MANAGER_QUIQUO_URL}"
+        + f"Qui-Quo: {MANAGER_QUIQUO_URL}\n\n"
+        + f"⚡ SLA: {MANAGER_SLA_HINT}\n"
+        + f"💬 Быстрый ответ:\n{_manager_quick_reply_text()}"
     )
     owner_delivered = send_lead_owner_vk(owner_text)
     if not recipients and not owner_delivered:

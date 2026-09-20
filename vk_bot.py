@@ -168,6 +168,19 @@ LEAD_OWNER_VK_ID = _env_int("LEAD_OWNER_VK_ID", 112655584)
 MANAGER_TOURVISOR_URL = os.getenv("MANAGER_TOURVISOR_URL", "https://pro.tourvisor.ru/").strip()
 MANAGER_SLETAT_URL = os.getenv("MANAGER_SLETAT_URL", "https://sletat.ru/pro").strip()
 MANAGER_QUIQUO_URL = os.getenv("MANAGER_QUIQUO_URL", "https://qui-quo.ru/").strip()
+MANAGER_SLA_HINT = os.getenv(
+    "MANAGER_SLA_HINT",
+    "горячий лид ≤5 мин; обычный ≤15 мин; не повторять вопросы TurBot",
+).strip() or "горячий лид ≤5 мин; обычный ≤15 мин; не повторять вопросы TurBot"
+
+
+def _manager_quick_reply_text() -> str:
+    """Canonical first reply shown inside manager lead cards."""
+    return (
+        f"Здравствуйте! Я {LEAD_OWNER_NAME}, «Апрель Тур». "
+        "Вижу вашу заявку из TurBot, основные параметры уже сохранены. "
+        "Уже смотрю варианты. Уточню только то, чего в заявке нет."
+    )
 
 # MDT CRM (same env vars as Telegram bot)
 MDT_ENABLED    = os.getenv("MDT_ENABLED", "false").lower().strip() in ("1", "true", "yes")
@@ -3667,6 +3680,8 @@ def _notify_admin_telegram(
         f"💰 Бюджет: {_budget_summary(info)}\n"
         f"📞 Связь: {phone}"
         + (f"\n\n🎯 Выбранный тур:\n{selected}" if selected else "")
+        + f"\n\n⚡ SLA: {MANAGER_SLA_HINT}\n"
+        + f"💬 Быстрый ответ:\n{_manager_quick_reply_text()}"
     )
     for recipient in LEAD_NOTIFY_IDS:
         try:
@@ -3709,7 +3724,9 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
         + "\n\n🔎 Подбор менеджеру:\n"
         + f"Tourvisor PRO: {MANAGER_TOURVISOR_URL}\n"
         + f"Sletat PRO: {MANAGER_SLETAT_URL}\n"
-        + f"Qui-Quo: {MANAGER_QUIQUO_URL}"
+        + f"Qui-Quo: {MANAGER_QUIQUO_URL}\n\n"
+        + f"⚡ SLA: {MANAGER_SLA_HINT}\n"
+        + f"💬 Быстрый ответ:\n{_manager_quick_reply_text()}"
     )
     owner_result = send_message(LEAD_OWNER_VK_ID, owner_message) if LEAD_OWNER_VK_ID else None
     if owner_result is None:
