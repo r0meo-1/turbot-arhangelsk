@@ -20,6 +20,7 @@ from shared.travel_crm import (
 from shared.travel_crm_store import (
     append_activity,
     append_quote,
+    delete_for_lead_ids,
     due_tasks,
     init_schema,
     load_timeline,
@@ -183,3 +184,33 @@ def test_due_tasks_returns_today_queue_by_priority():
     )
 
     assert [task.task_id for task in due_tasks(conn, now)] == ["send", "callback"]
+
+
+def test_delete_for_lead_ids_erases_whole_crm_timeline():
+    conn = _db()
+    request = _request()
+    upsert_request(conn, request, lead_id=77)
+    append_quote(
+        conn,
+        Quote(
+            quote_id="delete-q",
+            request_id=request.request_id,
+            hotel="Synthetic Resort",
+            price_amount=123000,
+        ),
+    )
+    append_activity(
+        conn,
+        Activity(
+            activity_id="delete-a",
+            request_id=request.request_id,
+            type=ActivityType.NOTE,
+            summary="synthetic note",
+            created_at=datetime(2026, 9, 21, 10, 0),
+        ),
+    )
+
+    assert delete_for_lead_ids(conn, [77]) == 1
+    assert load_timeline(conn, request.request_id) is None
+    assert conn.execute("SELECT COUNT(*) FROM crm_quotes").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM crm_activities").fetchone()[0] == 0
