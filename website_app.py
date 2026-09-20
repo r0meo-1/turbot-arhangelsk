@@ -20,7 +20,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -998,7 +998,7 @@ def _agent_parse_datetime(value: Any) -> datetime:
         return datetime.utcnow()
     parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone().astimezone(tz=None).replace(tzinfo=None)
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed
 
 
