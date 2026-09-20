@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import socket
 import ssl
 import time
@@ -68,6 +69,12 @@ DIAGNOSTIC_ENDPOINTS = (
         "https_redirect",
         "travel.r0meo1.ru",
     ),
+    EndpointSpec(
+        "travel_whitelabel_hygiene",
+        "https://travel.r0meo1.ru/",
+        "whitelabel_hygiene",
+        "travel.r0meo1.ru",
+    ),
 )
 
 TLS_HOSTS = (
@@ -103,6 +110,23 @@ def _validate_body(spec: EndpointSpec, body: bytes, *, final_url: str = "") -> N
             raise ValueError("redirect_host_mismatch")
         if not body.strip():
             raise ValueError("empty_body")
+        return
+    if spec.kind == "whitelabel_hygiene":
+        parsed = urlsplit(final_url)
+        if parsed.scheme.lower() != "https":
+            raise ValueError("final_not_https")
+        if spec.expected and (parsed.hostname or "").lower() != spec.expected.lower():
+            raise ValueError("final_host_mismatch")
+        if not body.strip():
+            raise ValueError("empty_body")
+        html = body.decode("utf-8", errors="ignore")
+        mixed_patterns = (
+            r'''(?:src|action|poster)\s*=\s*["']\s*http://''',
+            r'''srcset\s*=\s*["'][^"']*\bhttp://''',
+            r'''url\(\s*["']?http://''',
+        )
+        if any(re.search(pattern, html, flags=re.IGNORECASE) for pattern in mixed_patterns):
+            raise ValueError("mixed_content")
         return
     raise ValueError("unsupported_probe_kind")
 
