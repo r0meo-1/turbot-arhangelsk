@@ -163,6 +163,31 @@ def test_https_redirect_probe_requires_https_on_expected_host():
     assert wrong_host.error == "redirect_host_mismatch"
 
 
+def test_report_only_redirect_diagnostic_does_not_page_uptime():
+    diagnostic = EndpointSpec(
+        "travel_whitelabel_http_redirect",
+        "http://travel.example.invalid/",
+        "https_redirect",
+        "travel.example.invalid",
+    )
+    payload = run(
+        endpoints=(),
+        diagnostic_endpoints=(diagnostic,),
+        tls_hosts=(),
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b"<html>known upstream behavior</html>",
+            final_url="http://travel.example.invalid/",
+        ),
+    )
+
+    assert payload["ok"] is True
+    assert payload["diagnostic_results"][0]["ok"] is False
+    assert payload["diagnostic_results"][0]["error"] == "redirect_not_https"
+
+
 def test_tls_probe_reports_safe_expiry_metadata():
     now = datetime(2030, 1, 1, tzinfo=timezone.utc)
     expires = now + timedelta(days=45)
