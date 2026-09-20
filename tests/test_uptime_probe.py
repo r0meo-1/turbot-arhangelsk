@@ -11,9 +11,13 @@ from deploy.uptime_probe import (
 
 
 class FakeResponse:
-    def __init__(self, body: bytes, status: int = 200):
+    def __init__(self, body: bytes, status: int = 200, final_url: str = ""):
         self._body = body
         self.status = status
+        self._final_url = final_url
+
+    def geturl(self):
+        return self._final_url
 
     def read(self, _limit=-1):
         return self._body
@@ -25,10 +29,11 @@ class FakeResponse:
         return False
 
 
-def opener_for(body: bytes, status: int = 200):
-    def _open(_request, timeout=0):
+def opener_for(body: bytes, status: int = 200, final_url: str = ""):
+    def _open(request, timeout=0):
         assert timeout > 0
-        return FakeResponse(body, status)
+        resolved_url = final_url or request.full_url
+        return FakeResponse(body, status, resolved_url)
     return _open
 
 
@@ -109,6 +114,53 @@ def test_vk_health_probe_rejects_wrong_platform():
     assert result.ok is False
     assert result.error == "unexpected_platform"
 
+
+
+def test_https_redirect_probe_requires_https_on_expected_host():
+    spec = EndpointSpec(
+        "travel_whitelabel_http_redirect",
+        "http://travel.example.invalid/",
+        "https_redirect",
+        "travel.example.invalid",
+    )
+
+    good = probe_endpoint(
+        spec,
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b"<html>white label</html>",
+            final_url="https://travel.example.invalid/",
+        ),
+    )
+    assert good.ok is True
+
+    not_https = probe_endpoint(
+        spec,
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b"<html>white label</html>",
+            final_url="http://travel.example.invalid/",
+        ),
+    )
+    assert not_https.ok is False
+    assert not_https.error == "redirect_not_https"
+
+    wrong_host = probe_endpoint(
+        spec,
+        attempts=1,
+        delay=0,
+        timeout=1,
+        opener=opener_for(
+            b"<html>white label</html>",
+            final_url="https://provider.example.invalid/",
+        ),
+    )
+    assert wrong_host.ok is False
+    assert wrong_host.error == "redirect_host_mismatch"
 
 
 def test_tls_probe_reports_safe_expiry_metadata():
