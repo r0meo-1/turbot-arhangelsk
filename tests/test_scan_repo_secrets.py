@@ -15,7 +15,7 @@ sk-not-a-real-key
 def test_secret_scanner_detects_high_confidence_values_without_returning_value():
     fake_telegram = "123456789:" + ("A" * 35)
     fake_github = "ghp_" + ("B" * 36)
-    fake_private_key = "-----BEGIN PRIVATE KEY-----"
+    fake_private_key = "-----BEGIN " + "PRIVATE KEY-----"
     text = "\n".join((fake_telegram, fake_github, fake_private_key))
 
     findings = scan_text(text)
