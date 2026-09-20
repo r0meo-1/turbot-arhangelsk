@@ -528,7 +528,7 @@ previous=$(git rev-parse HEAD)
 git fetch --depth=1 origin "$branch"
 target=$(git rev-parse "origin/$branch")
 
-if [[ "$target" == "$previous" ]]; then
+if [[ "$target" == "$previous" && ! -f "$repo/.deployed-commit" ]]; then
   chmod +x "$repo/deploy/verify-vk-miniapp.sh"
   "$repo/deploy/verify-vk-miniapp.sh"
   echo "TurBot already runs $target"
@@ -538,6 +538,7 @@ fi
 rollback() {
   echo "Deployment failed; restoring $previous" >&2
   git reset --hard "$previous"
+  rm -f "$repo/.deployed-commit" "$repo/.deploy-manifest"
   "$venv/pip" install --requirement requirements.txt
   cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
@@ -571,6 +572,7 @@ PY
 }
 
 git reset --hard "$target"
+rm -f "$repo/.deployed-commit" "$repo/.deploy-manifest"
 "$venv/pip" install --requirement requirements.txt
 cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
 systemctl daemon-reload 2>/dev/null || true
