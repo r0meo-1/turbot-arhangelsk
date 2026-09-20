@@ -77,3 +77,10 @@ echo "Cleaning backups older than $KEEP_DAYS days..."
 find "$BACKUP_DIR" -maxdepth 1 -type f -name '*_*.sqlite' -mtime +"$KEEP_DAYS" -delete
 
 echo "Backup complete: copies=$BACKED_UP retention_days=$KEEP_DAYS"
+
+# Off-site upload is intentionally a separate, fail-closed step. The helper
+# exits 0 while disabled/unconfigured and fails the nightly job once explicitly
+# enabled but unable to encrypt/upload.
+if [[ -x "$APP_DIR/scripts/offsite-backup.sh" ]]; then
+    "$APP_DIR/scripts/offsite-backup.sh"
+fi
