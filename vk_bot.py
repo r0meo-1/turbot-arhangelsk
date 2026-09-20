@@ -71,6 +71,7 @@ from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapsho
 from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
 from shared import travel_crm_adapter as _travel_crm_adapter
+from shared.travel_crm import ManagerTask, TaskType
 from shared import provider_status as _provider_status
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
@@ -977,6 +978,19 @@ def save_lead(
                 cur.connection,
                 crm_request,
                 lead_id=lead_id,
+            )
+            now_dt = datetime.utcnow()
+            _travel_crm_store.upsert_task(
+                cur.connection,
+                ManagerTask(
+                    task_id=f"{crm_request.request_id}:build_selection",
+                    request_id=crm_request.request_id,
+                    type=TaskType.BUILD_SELECTION,
+                    due_at=now_dt,
+                    created_at=now_dt,
+                    priority=1,
+                    note="Новый лид: сделать подбор",
+                ),
             )
         except Exception as exc:
             # CRM mirroring is additive. A malformed legacy field must never
