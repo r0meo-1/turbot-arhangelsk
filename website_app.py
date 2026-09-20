@@ -21,7 +21,7 @@ import secrets
 import sqlite3
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -1036,10 +1036,18 @@ if "agent_extension_crm_today" not in app.view_functions:
                 default=datetime.utcnow(),
             )
             limit = max(1, min(int(request.args.get("limit", "50")), 100))
+            tz_offset = int(request.args.get("tzOffsetMinutes", "0"))
+            if not -840 <= tz_offset <= 840:
+                raise ValueError("invalid_timezone")
         except (TypeError, ValueError):
             return _agent_json_response({"ok": False, "error": "invalid_query"}, 400)
 
-        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        # JS Date.getTimezoneOffset() is UTC - local time. Tasks are stored as
+        # UTC-naive timestamps, so compute the manager's local end-of-day and
+        # convert that cutoff back to UTC before querying.
+        local_now = now - timedelta(minutes=tz_offset)
+        local_end = local_now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        end_of_day = local_end + timedelta(minutes=tz_offset)
         with _bot._db_cursor() as cur:
             tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)[:limit]
             items = []
