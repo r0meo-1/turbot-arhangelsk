@@ -140,6 +140,17 @@ def test_website_lead_is_stored_before_async_delivery(client, monkeypatch):
     assert row[6] > 0
     assert row[7:10] == ("vk", "social", "autumn")
     assert row[10] == "pending"
+    with bot._db_cursor() as cur:
+        crm_row = cur.execute(
+            "SELECT request_id, source_tag, channel, campaign FROM crm_trip_requests WHERE request_id=?",
+            (f"web-lead-{body['leadId']}",),
+        ).fetchone()
+        task_row = cur.execute(
+            "SELECT task_type, status FROM crm_tasks WHERE request_id=?",
+            (f"web-lead-{body['leadId']}",),
+        ).fetchone()
+    assert crm_row == (f"web-lead-{body['leadId']}", "", "website", "autumn")
+    assert task_row == ("build_selection", "todo")
     funnel = bot._funnel_health()
     website_source = funnel["channels"]["website"]["vk:autumn"]
     assert website_source["lead"]["accepted"] == 1
@@ -349,6 +360,7 @@ def test_agent_extension_lists_and_updates_crm_status(client, monkeypatch):
     assert listing.status_code == 200
     leads = listing.get_json()["leads"]
     assert leads[0]["id"] == lead_id
+    assert leads[0]["requestId"] == f"web-lead-{lead_id}"
     assert leads[0]["status"] == "new"
     assert leads[0]["candidateCount"] == 1
 
@@ -625,7 +637,7 @@ def test_agent_crm_today_queue_and_timeline(client, monkeypatch):
                 task_id="task-future",
                 request_id=request.request_id,
                 type=TaskType.DOCUMENTS,
-                due_at=now + timedelta(hours=2),
+                due_at=now + timedelta(days=1),
                 created_at=now,
                 priority=2,
             ),
