@@ -914,6 +914,63 @@ if "agent_extension_status" not in app.view_functions:
             changed = int(cur.rowcount or 0)
         if not changed:
             return _agent_json_response({"ok": False, "error": "lead_not_found"}, 404)
+
+        request_id = f"web-lead-{lead_id}"
+        with _bot._db_cursor(commit=True) as cur:
+            timeline = _travel_crm_store.load_timeline(cur.connection, request_id)
+            if timeline is not None:
+                summary = f"Статус: {status}"
+                if note:
+                    summary += f" · {note}"
+                _travel_crm_store.append_activity(
+                    cur.connection,
+                    Activity(
+                        activity_id="activity-" + secrets.token_hex(10),
+                        request_id=request_id,
+                        type=ActivityType.STATUS_CHANGE,
+                        summary=summary,
+                        created_at=datetime.utcnow(),
+                    ),
+                )
+                if follow_up_on:
+                    follow_date = date.fromisoformat(follow_up_on)
+                    _travel_crm_store.upsert_task(
+                        cur.connection,
+                        ManagerTask(
+                            task_id=f"{request_id}:followup:{follow_up_on}",
+                            request_id=request_id,
+                            type=TaskType.NEXT_CONTACT,
+                            due_at=datetime.combine(follow_date, datetime.min.time()),
+                            created_at=datetime.utcnow(),
+                            priority=2,
+                            note="Связаться с клиентом",
+                        ),
+                    )
+                if status in {"won", "lost", "waiting"}:
+                    outcome_status = {
+                        "won": OutcomeStatus.WON,
+                        "lost": OutcomeStatus.LOST,
+                        "waiting": OutcomeStatus.PAUSED,
+                    }[status]
+                    _travel_crm_store.set_outcome(
+                        cur.connection,
+                        request_id,
+                        BookingOutcome(
+                            status=outcome_status,
+                            reason=note,
+                            decided_at=datetime.utcnow(),
+                        ),
+                    )
+                if status in {"won", "lost"}:
+                    cur.execute(
+                        "UPDATE crm_tasks SET status=? WHERE request_id=? AND status=?",
+                        (
+                            TaskStatus.DONE.value,
+                            request_id,
+                            TaskStatus.TODO.value,
+                        ),
+                    )
+
         return _agent_json_response({
             "ok": True,
             "leadId": lead_id,
