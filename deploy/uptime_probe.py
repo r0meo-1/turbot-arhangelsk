@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Callable, Iterable, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -57,6 +58,13 @@ ENDPOINTS = (
     EndpointSpec("vk_health", "https://bot.r0meo1.ru/vk/health", "json_status", "ok"),
     EndpointSpec("landing", "https://r0meo1.ru/apreltour/", "nonempty"),
     EndpointSpec("vk_miniapp", "https://bot.r0meo1.ru/vk/miniapp/", "contains", "trip-form"),
+    EndpointSpec("travel_whitelabel_https", "https://travel.r0meo1.ru/", "nonempty"),
+    EndpointSpec(
+        "travel_whitelabel_http_redirect",
+        "http://travel.r0meo1.ru/",
+        "https_redirect",
+        "travel.r0meo1.ru",
+    ),
 )
 
 TLS_HOSTS = (
@@ -66,7 +74,7 @@ TLS_HOSTS = (
 )
 
 
-def _validate_body(spec: EndpointSpec, body: bytes) -> None:
+def _validate_body(spec: EndpointSpec, body: bytes, *, final_url: str = "") -> None:
     if spec.kind == "json_status":
         data = json.loads(body.decode("utf-8"))
         if str(data.get("status") or "").lower() != spec.expected:
@@ -84,6 +92,15 @@ def _validate_body(spec: EndpointSpec, body: bytes) -> None:
         if not body.strip():
             raise ValueError("empty_body")
         return
+    if spec.kind == "https_redirect":
+        parsed = urlsplit(final_url)
+        if parsed.scheme.lower() != "https":
+            raise ValueError("redirect_not_https")
+        if spec.expected and (parsed.hostname or "").lower() != spec.expected.lower():
+            raise ValueError("redirect_host_mismatch")
+        if not body.strip():
+            raise ValueError("empty_body")
+        return
     raise ValueError("unsupported_probe_kind")
 
 
@@ -97,12 +114,14 @@ def _probe_once(spec: EndpointSpec, *, timeout: float, opener: Callable = urlope
     )
     with opener(request, timeout=timeout) as response:
         status = int(getattr(response, "status", 200))
+        geturl = getattr(response, "geturl", None)
+        final_url = str(geturl() if callable(geturl) else spec.url)
         body = response.read(1024 * 1024 + 1)
     if not 200 <= status < 300:
         raise HTTPError(spec.url, status, "non_2xx", {}, None)
     if len(body) > 1024 * 1024:
         raise ValueError("response_too_large")
-    _validate_body(spec, body)
+    _validate_body(spec, body, final_url=final_url)
     return status, body
 
 
