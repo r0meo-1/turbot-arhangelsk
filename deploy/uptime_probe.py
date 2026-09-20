@@ -59,6 +59,9 @@ ENDPOINTS = (
     EndpointSpec("landing", "https://r0meo1.ru/apreltour/", "nonempty"),
     EndpointSpec("vk_miniapp", "https://bot.r0meo1.ru/vk/miniapp/", "contains", "trip-form"),
     EndpointSpec("travel_whitelabel_https", "https://travel.r0meo1.ru/", "nonempty"),
+)
+
+DIAGNOSTIC_ENDPOINTS = (
     EndpointSpec(
         "travel_whitelabel_http_redirect",
         "http://travel.r0meo1.ru/",
@@ -245,6 +248,7 @@ def probe_tls_certificate(
 def run(
     endpoints: Iterable[EndpointSpec] = ENDPOINTS,
     *,
+    diagnostic_endpoints: Iterable[EndpointSpec] = (),
     tls_hosts: Iterable[TLSSpec] = TLS_HOSTS,
     attempts: int = 3,
     delay: float = 5.0,
@@ -265,6 +269,17 @@ def run(
         )
         for spec in endpoints
     ]
+    diagnostic_results = [
+        probe_endpoint(
+            spec,
+            attempts=attempts,
+            delay=delay,
+            timeout=timeout,
+            opener=opener,
+            sleeper=sleeper,
+        )
+        for spec in diagnostic_endpoints
+    ]
     tls_results = [
         probe_tls_certificate(
             spec,
@@ -281,6 +296,7 @@ def run(
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "ok": all(item.ok for item in results) and all(item.ok for item in tls_results),
         "results": [asdict(item) for item in results],
+        "diagnostic_results": [asdict(item) for item in diagnostic_results],
         "tls_results": [asdict(item) for item in tls_results],
     }
 
@@ -294,6 +310,7 @@ def main() -> int:
     args = parser.parse_args()
 
     payload = run(
+        diagnostic_endpoints=DIAGNOSTIC_ENDPOINTS,
         attempts=max(1, min(args.attempts, 5)),
         delay=max(0.0, min(args.delay, 60.0)),
         timeout=max(1.0, min(args.timeout, 60.0)),
