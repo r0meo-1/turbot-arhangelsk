@@ -129,6 +129,7 @@ def _from_epoch(value: int) -> datetime:
 def _request_payload(request: TripRequest) -> dict[str, Any]:
     payload = asdict(request)
     payload["budget_type"] = request.budget_type.value
+    payload["budget_scope"] = request.budget_scope.value
     return payload
 
 
