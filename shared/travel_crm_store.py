@@ -428,3 +428,35 @@ def due_tasks(conn: sqlite3.Connection, now: datetime) -> list[ManagerTask]:
         )
         for r in rows
     ]
+
+
+def delete_for_lead_ids(conn: sqlite3.Connection, lead_ids: list[int]) -> int:
+    """Erase CRM mirrors tied to canonical lead rows.
+
+    This keeps /delete and retention cleanup honest: enriching a lead must not
+    create a second, immortal copy of the same customer's request.
+    """
+
+    ids = [int(value) for value in lead_ids]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    request_rows = conn.execute(
+        f"SELECT request_id FROM crm_trip_requests WHERE lead_id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    request_ids = [str(row[0]) for row in request_rows]
+    if not request_ids:
+        return 0
+
+    req_placeholders = ",".join("?" for _ in request_ids)
+    for table in ("crm_quotes", "crm_activities", "crm_tasks", "crm_outcomes"):
+        conn.execute(
+            f"DELETE FROM {table} WHERE request_id IN ({req_placeholders})",
+            request_ids,
+        )
+    conn.execute(
+        f"DELETE FROM crm_trip_requests WHERE request_id IN ({req_placeholders})",
+        request_ids,
+    )
+    return len(request_ids)
