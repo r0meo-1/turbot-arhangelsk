@@ -22,8 +22,10 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
-def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
-    handler = partial(_QuietHandler, directory=str(MINIAPP_DIR))
+@pytest.mark.parametrize("width", [320, 390, 1280])
+@pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
+def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width, asset_dir):
+    handler = partial(_QuietHandler, directory=str(asset_dir))
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -33,7 +35,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
         url = f"http://127.0.0.1:{server.server_port}/index.html"
         with sync_playwright() as pw:
             browser = pw.chromium.launch(channel="msedge", headless=True)
-            context = browser.new_context()
+            context = browser.new_context(viewport={"width": width, "height": 760})
             context.add_init_script(
                 f"""
                 window.__tgClosed = false;
@@ -82,6 +84,50 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
             page.route(API_URL, accept_submit)
             page.goto(url, wait_until="domcontentloaded")
 
+            # Narrow-mobile acceptance: the entire customer form must fit the
+            # viewport without page-level horizontal scrolling.
+            assert page.evaluate(
+                "document.documentElement.scrollWidth <= window.innerWidth"
+            )
+            shell_box = page.locator(".shell").bounding_box()
+            assert shell_box is not None
+            assert shell_box["x"] >= 0
+            assert shell_box["x"] + shell_box["width"] <= width + 0.5
+
+            # Critical form controls need stable accessible names instead of
+            # relying on placeholders or visual proximity.
+            for label in (
+                "Направление",
+                "Вылет",
+                "Ночей",
+                "Дата вылета",
+                "Взрослых",
+                "Детей до 18",
+                "Бюджет на всю поездку",
+            ):
+                assert page.get_by_label(label, exact=True).count() == 1
+
+            # Keyboard users must get an explicit visible focus indicator.
+            page.locator("#destination").focus()
+            assert page.locator("#destination").evaluate(
+                "el => getComputedStyle(el).outlineStyle !== 'none' && getComputedStyle(el).outlineWidth !== '0px'"
+            )
+            page.keyboard.press("Tab")
+            focused = page.evaluate(
+                """() => {
+                  const el = document.activeElement;
+                  const style = getComputedStyle(el);
+                  return {
+                    isChip: el?.classList?.contains('chip') || false,
+                    outlineWidth: style.outlineWidth,
+                    outlineStyle: style.outlineStyle
+                  };
+                }"""
+            )
+            assert focused["isChip"] is True
+            assert focused["outlineStyle"] != "none"
+            assert focused["outlineWidth"] != "0px"
+
             # start_param=thailand should prefill the country, then the user may
             # choose a more specific resort suggestion.
             assert page.locator("#destination").input_value() == "Таиланд"
@@ -110,6 +156,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes():
 
             # Review is local only: no backend write and no WebView close yet.
             page.locator("#review").wait_for(state="visible")
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
             assert captured == []
             assert page.evaluate("window.__tgClosed") is False
             assert page.evaluate("window.__tgBackVisible") is True
