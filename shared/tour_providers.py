@@ -110,7 +110,13 @@ def search_tours(
         attempted = True
         if name == "sletat":
             result = _sletat.search_tours(
-                settings.sletat, session, info, log=log
+                settings.sletat,
+                session,
+                info,
+                log=log,
+                on_search_request=lambda: _emit_outcome(
+                    on_outcome, "sletat", "search_request", log
+                ),
             )
         elif name == "travelata":
             result = _travelata.search_tours(
