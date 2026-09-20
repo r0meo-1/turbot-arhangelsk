@@ -74,31 +74,10 @@ jobs:
               | head -n1
           )"
 
-          checked_at="$(python - <<'PY'
-import json
-with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
-    print(json.load(fh)['checked_at'])
-PY
-          )"
-          paid_till="$(python - <<'PY'
-import json
-with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
-    print(json.load(fh).get('paid_till') or 'unknown')
-PY
-          )"
-          days_remaining="$(python - <<'PY'
-import json
-with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
-    value = json.load(fh).get('days_remaining')
-    print('unknown' if value is None else value)
-PY
-          )"
-          error="$(python - <<'PY'
-import json
-with open('/tmp/domain-expiry.json', encoding='utf-8') as fh:
-    print(json.load(fh).get('error') or 'none')
-PY
-          )"
+          checked_at="$(python -c "import json; print(json.load(open('/tmp/domain-expiry.json', encoding='utf-8'))['checked_at'])")"
+          paid_till="$(python -c "import json; d=json.load(open('/tmp/domain-expiry.json', encoding='utf-8')); print(d.get('paid_till') or 'unknown')")"
+          days_remaining="$(python -c "import json; d=json.load(open('/tmp/domain-expiry.json', encoding='utf-8')); v=d.get('days_remaining'); print('unknown' if v is None else v)")"
+          error="$(python -c "import json; d=json.load(open('/tmp/domain-expiry.json', encoding='utf-8')); print(d.get('error') or 'none')")"
           run_url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
           if [[ "$NEEDS_ATTENTION" == "true" ]]; then
