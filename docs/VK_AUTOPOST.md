@@ -68,11 +68,16 @@ VK_TOKEN=... VK_OWNER_ID=-240310110 \
   python vk_autopost.py post --slug pain --force
 ```
 
-## Idempotency
+## Duplicate protection
 
-Published slots are recorded in `vk_autopost.sqlite`. The unique key is
-`campaign + slug + ISO week`, so rerunning a scheduled job cannot duplicate the
-same angle in the same week.
+Two layers are used:
+
+1. a local SQLite ledger keyed by `campaign + slug + ISO week`;
+2. a `wall.get` check for the same `ref=<source_tag>` marker on the VK wall
+   during the current ISO week.
+
+The second layer is the durable one for GitHub Actions, whose runners are
+ephemeral. A retried scheduled job therefore does not become a duplicate post.
 
 ## Visuals
 
