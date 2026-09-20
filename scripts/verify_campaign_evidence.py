@@ -51,9 +51,9 @@ def read_text(path: Path) -> tuple[str, str]:
 def manager_has_tag(text: str, tag: str) -> bool:
     # Handles Telegram HTML (<code>tag</code>) and plain VK manager cards.
     pattern = re.compile(
-        rf"Источник:\\s*(?:<code>\\s*)?"
+        rf"Источник:\s*(?:<code>\s*)?"
         rf"{re.escape(tag)}"
-        rf"(?:\\s*</code>)?(?![{TOKEN_CHARS}])",
+        rf"(?:\s*</code>)?(?![{TOKEN_CHARS}])",
         re.IGNORECASE,
     )
     return bool(pattern.search(text))
@@ -88,7 +88,7 @@ def main() -> int:
         manager_text, manager_sha = read_text(args.manager_file)
         export_text, export_sha = read_text(args.export_file)
     except EvidenceError as exc:
-        print(f"campaign_evidence_status=FAIL")
+        print("campaign_evidence_status=FAIL")
         print(f"error={exc}", file=sys.stderr)
         return 2
 
