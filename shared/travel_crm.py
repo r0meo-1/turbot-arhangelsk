@@ -17,6 +17,11 @@ class BudgetType(str, Enum):
     FIXED = "fixed"
 
 
+class BudgetScope(str, Enum):
+    TOTAL = "total"
+    PER_PERSON = "per_person"
+
+
 class QuoteReaction(str, Enum):
     DRAFT = "draft"
     SENT = "sent"
@@ -72,6 +77,7 @@ class Child:
 class Attribution:
     source_tag: str = ""
     channel: str = ""
+    source: str = ""
     referrer: str = ""
     campaign: str = ""
 
@@ -83,6 +89,7 @@ class TripRequest:
     adults: int
     children: tuple[Child, ...] = ()
     departure_airport: str = ""
+    dates_text: str = ""
     date_from: str = ""
     date_to: str = ""
     flexible_dates: bool = False
@@ -91,6 +98,8 @@ class TripRequest:
     budget_amount: int | None = None
     budget_currency: str = "RUB"
     budget_type: BudgetType = BudgetType.TARGET
+    budget_scope: BudgetScope = BudgetScope.TOTAL
+    direct_only: bool = False
     meal_plans: tuple[str, ...] = ()
     primary_destination: str = ""
     alternative_destinations: tuple[str, ...] = ()
