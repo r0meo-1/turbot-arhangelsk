@@ -2585,6 +2585,12 @@ def test_admin_export_includes_campaign_source(monkeypatch):
         first_name="Roma",
     )
     assert lead_id > 0
+    with bot._db_cursor() as cur:
+        crm = cur.execute(
+            "SELECT request_id, source_tag, channel FROM crm_trip_requests WHERE lead_id = ?",
+            (lead_id,),
+        ).fetchone()
+    assert tuple(crm) == (f"tg-lead-{lead_id}", "video_vs", "telegram")
 
     assert bot._admin_export(999, "") is True
     assert any("src=video_vs" in text for _, text in sent)

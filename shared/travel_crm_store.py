@@ -18,6 +18,7 @@ from shared.travel_crm import (
     ActivityType,
     Attribution,
     BookingOutcome,
+    BudgetScope,
     BudgetType,
     Child,
     LeadTimeline,
@@ -128,6 +129,7 @@ def _from_epoch(value: int) -> datetime:
 def _request_payload(request: TripRequest) -> dict[str, Any]:
     payload = asdict(request)
     payload["budget_type"] = request.budget_type.value
+    payload["budget_scope"] = request.budget_scope.value
     return payload
 
 
@@ -139,6 +141,7 @@ def _request_from_payload(payload: dict[str, Any]) -> TripRequest:
         adults=int(payload["adults"]),
         children=tuple(Child(int(item["age"])) for item in payload.get("children") or ()),
         departure_airport=str(payload.get("departure_airport") or ""),
+        dates_text=str(payload.get("dates_text") or ""),
         date_from=str(payload.get("date_from") or ""),
         date_to=str(payload.get("date_to") or ""),
         flexible_dates=bool(payload.get("flexible_dates")),
@@ -147,6 +150,8 @@ def _request_from_payload(payload: dict[str, Any]) -> TripRequest:
         budget_amount=payload.get("budget_amount"),
         budget_currency=str(payload.get("budget_currency") or "RUB"),
         budget_type=BudgetType(str(payload.get("budget_type") or BudgetType.TARGET.value)),
+        budget_scope=BudgetScope(str(payload.get("budget_scope") or BudgetScope.TOTAL.value)),
+        direct_only=bool(payload.get("direct_only")),
         meal_plans=tuple(str(x) for x in payload.get("meal_plans") or ()),
         primary_destination=str(payload.get("primary_destination") or ""),
         alternative_destinations=tuple(
@@ -165,6 +170,7 @@ def _request_from_payload(payload: dict[str, Any]) -> TripRequest:
         attribution=Attribution(
             source_tag=str(attribution.get("source_tag") or ""),
             channel=str(attribution.get("channel") or ""),
+            source=str(attribution.get("source") or ""),
             referrer=str(attribution.get("referrer") or ""),
             campaign=str(attribution.get("campaign") or ""),
         ),
@@ -422,3 +428,35 @@ def due_tasks(conn: sqlite3.Connection, now: datetime) -> list[ManagerTask]:
         )
         for r in rows
     ]
+
+
+def delete_for_lead_ids(conn: sqlite3.Connection, lead_ids: list[int]) -> int:
+    """Erase CRM mirrors tied to canonical lead rows.
+
+    This keeps /delete and retention cleanup honest: enriching a lead must not
+    create a second, immortal copy of the same customer's request.
+    """
+
+    ids = [int(value) for value in lead_ids]
+    if not ids:
+        return 0
+    placeholders = ",".join("?" for _ in ids)
+    request_rows = conn.execute(
+        f"SELECT request_id FROM crm_trip_requests WHERE lead_id IN ({placeholders})",
+        ids,
+    ).fetchall()
+    request_ids = [str(row[0]) for row in request_rows]
+    if not request_ids:
+        return 0
+
+    req_placeholders = ",".join("?" for _ in request_ids)
+    for table in ("crm_quotes", "crm_activities", "crm_tasks", "crm_outcomes"):
+        conn.execute(
+            f"DELETE FROM {table} WHERE request_id IN ({req_placeholders})",
+            request_ids,
+        )
+    conn.execute(
+        f"DELETE FROM crm_trip_requests WHERE request_id IN ({req_placeholders})",
+        request_ids,
+    )
+    return len(request_ids)

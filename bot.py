@@ -69,6 +69,7 @@ from shared import travelpayouts_transfer as _travelpayouts_transfer
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
+from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import provider_status as _provider_status
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
@@ -1182,6 +1183,14 @@ def session_exists(chat_id: int) -> bool:
 def delete_session(chat_id: int) -> None:
     """Remove a user's dialog session."""
     with _db_cursor(commit=True) as cur:
+        lead_ids = [
+            int(row[0])
+            for row in cur.execute(
+                "SELECT id FROM leads WHERE chat_id = ?",
+                (chat_id,),
+            ).fetchall()
+        ]
+        _travel_crm_store.delete_for_lead_ids(cur.connection, lead_ids)
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
 
 
@@ -1257,7 +1266,27 @@ def save_lead(
                 now,
             ),
         )
-        return int(cur.lastrowid)
+        lead_id = int(cur.lastrowid)
+        try:
+            crm_request = _travel_crm_adapter.trip_request_from_lead(
+                lead_id=lead_id,
+                info=info,
+                channel="telegram",
+            )
+            _travel_crm_store.upsert_request(
+                cur.connection,
+                crm_request,
+                lead_id=lead_id,
+            )
+        except Exception as exc:
+            # CRM mirroring is additive. A malformed legacy field must never
+            # roll back the canonical lead or prevent manager delivery.
+            logger.warning(
+                "CRM mirror skipped for telegram lead %s: %s",
+                lead_id,
+                type(exc).__name__,
+            )
+        return lead_id
 
 
 def count_leads() -> int:
