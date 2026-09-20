@@ -335,7 +335,19 @@ function renderLeads(leads) {
     save.addEventListener("click", () => updateLeadStatus(
       lead.id, select.value, note.value, follow.value, save
     ));
-    controls.append(select, followLabel, note, save);
+    const history = document.createElement("button");
+    history.className = "secondary";
+    history.textContent = "Открыть историю";
+    history.addEventListener("click", async () => {
+      const requestId = lead.requestId || ("web-lead-" + lead.id);
+      $("crmRequestId").value = requestId;
+      try {
+        await loadTimeline(requestId);
+      } catch (error) {
+        setStatus("История: " + (error.message || "ошибка"));
+      }
+    });
+    controls.append(select, followLabel, note, save, history);
 
     card.append(head, meta, controls);
     box.append(card);
