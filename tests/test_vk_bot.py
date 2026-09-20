@@ -182,6 +182,61 @@ def test_provider_runtime_health_is_30_day_aggregate_without_pii():
         assert secret not in raw
 
 
+def test_sletat_monthly_usage_counts_search_attempts_not_fallback(monkeypatch):
+    from datetime import datetime, timezone
+
+    now = int(datetime(2026, 9, 20, 12, 0, tzinfo=timezone.utc).timestamp())
+    september = int(datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc).timestamp())
+    august = int(datetime(2026, 8, 31, 23, 59, tzinfo=timezone.utc).timestamp())
+    monkeypatch.setattr(bot, "SLETAT_MONTHLY_QUOTA", 4)
+
+    with bot._db_cursor(commit=True) as cur:
+        cur.executemany(
+            "INSERT INTO ops_metric_events(category, subject, outcome, created_at) "
+            "VALUES ('provider', 'sletat', ?, ?)",
+            [
+                ("success", september + 60),
+                ("fallback", september + 60),
+                ("timeout", now - 60),
+                ("success", august),
+            ],
+        )
+
+    usage = bot._provider_monthly_usage(now)
+
+    assert usage == {
+        "available": True,
+        "period": "2026-09",
+        "used": 2,
+        "limit": 4,
+        "remaining": 2,
+        "utilization_pct": 50.0,
+    }
+
+
+def test_provider_report_includes_sletat_monthly_quota(monkeypatch):
+    monkeypatch.setattr(bot, "SLETAT_MONTHLY_QUOTA", 10)
+    snapshot = {
+        "available": True,
+        "window_seconds": 30 * 86400,
+        "subjects": {"sletat": {"success": 2}},
+    }
+    usage = {
+        "available": True,
+        "period": "2026-09",
+        "used": 2,
+        "limit": 10,
+        "remaining": 8,
+        "utilization_pct": 20.0,
+    }
+
+    report = bot._format_provider_runtime_report(snapshot, usage)
+
+    assert "Sletat · 2026-09" in report
+    assert "2/10 поисков" in report
+    assert "осталось 8 (20.0%)" in report
+
+
 def test_provider_runtime_retention_deletes_old_events(monkeypatch):
     now = int(time.time())
     monkeypatch.setattr(bot, "OPS_METRICS_RETENTION_DAYS", 90)
@@ -219,7 +274,15 @@ def test_vk_health_exposes_provider_runtime_without_customer_fields(client):
     assert response.status_code == 200
     data = response.get_json()
     assert data["provider_runtime"]["subjects"]["tourvisor"]["empty"] == 1
-    raw = json.dumps(data["provider_runtime"], ensure_ascii=False)
+    assert data["provider_usage"]["available"] is True
+    assert data["provider_usage"]["limit"] == bot.SLETAT_MONTHLY_QUOTA
+    raw = json.dumps(
+        {
+            "provider_runtime": data["provider_runtime"],
+            "provider_usage": data["provider_usage"],
+        },
+        ensure_ascii=False,
+    )
     for forbidden in (
         "chat_id",
         "phone",

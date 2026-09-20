@@ -19,7 +19,7 @@ import sqlite3
 import logging
 import threading
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -225,6 +225,7 @@ DATA_OPERATOR_NAME = os.getenv(
 DATA_RETENTION_DAYS = _env_int("DATA_RETENTION_DAYS", 180)
 FUNNEL_ANALYTICS_RETENTION_DAYS = _env_int("FUNNEL_ANALYTICS_RETENTION_DAYS", 365)
 OPS_METRICS_RETENTION_DAYS = _env_int("OPS_METRICS_RETENTION_DAYS", 90)
+SLETAT_MONTHLY_QUOTA = max(1, _env_int("SLETAT_MONTHLY_QUOTA", 20000))
 # soft (default): short notice + «Начать», flexible contact (VK/phone/TG).
 # strict: classic «Согласен / Отказаться».
 CONSENT_MODE = os.getenv("CONSENT_MODE", "soft").lower().strip()
@@ -1133,19 +1134,78 @@ def _provider_runtime_health(now: Optional[float] = None) -> Dict[str, Any]:
     return {"available": True, **event_counter_snapshot(rows, window_seconds=window)}
 
 
-def _format_provider_runtime_report(snapshot: Optional[Dict[str, Any]] = None) -> str:
+def _provider_monthly_usage(now: Optional[float] = None) -> Dict[str, Any]:
+    """Return current UTC-month Sletat search usage without request/customer data."""
+    current = int(time.time() if now is None else now)
+    current_dt = datetime.fromtimestamp(current, tz=timezone.utc)
+    month_start = int(
+        current_dt.replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        ).timestamp()
+    )
+    try:
+        with _db_cursor() as cur:
+            row = cur.execute(
+                "SELECT COUNT(*) FROM ops_metric_events "
+                "WHERE category = 'provider' AND subject = 'sletat' "
+                "AND outcome != 'fallback' AND created_at >= ? AND created_at <= ?",
+                (month_start, current),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        logger.warning("Could not read Sletat monthly usage counter: %s", exc)
+        return {
+            "available": False,
+            "period": current_dt.strftime("%Y-%m"),
+            "limit": SLETAT_MONTHLY_QUOTA,
+        }
+
+    used = int((row or [0])[0] or 0)
+    limit = int(SLETAT_MONTHLY_QUOTA)
+    remaining = max(0, limit - used)
+    return {
+        "available": True,
+        "period": current_dt.strftime("%Y-%m"),
+        "used": used,
+        "limit": limit,
+        "remaining": remaining,
+        "utilization_pct": round((used / limit) * 100.0, 1),
+    }
+
+
+def _format_provider_runtime_report(
+    snapshot: Optional[Dict[str, Any]] = None,
+    monthly_usage: Optional[Dict[str, Any]] = None,
+) -> str:
     data = snapshot or _provider_runtime_health()
+    usage = monthly_usage or _provider_monthly_usage()
     subjects = data.get("subjects") or {}
+
     if not data.get("available"):
-        return "📊 30 дней: метрики провайдеров недоступны"
-    if not subjects:
-        return "📊 30 дней: вызовов провайдеров пока нет"
-    lines = ["📊 Провайдеры · 30 дней"]
-    for provider, outcomes in sorted(subjects.items()):
-        total = sum(int(value) for value in outcomes.values())
-        lines.append(f"• {provider}: {total}")
-        for outcome, count in sorted(outcomes.items()):
-            lines.append(f"  - {outcome}: {count}")
+        lines = ["📊 30 дней: метрики провайдеров недоступны"]
+    elif not subjects:
+        lines = ["📊 30 дней: вызовов провайдеров пока нет"]
+    else:
+        lines = ["📊 Провайдеры · 30 дней"]
+        for provider, outcomes in sorted(subjects.items()):
+            total = sum(int(value) for value in outcomes.values())
+            lines.append(f"• {provider}: {total}")
+            for outcome, count in sorted(outcomes.items()):
+                lines.append(f"  - {outcome}: {count}")
+
+    if usage.get("available"):
+        lines.extend(
+            [
+                "",
+                (
+                    f"📦 Sletat · {usage.get('period')}: "
+                    f"{int(usage.get('used') or 0)}/{int(usage.get('limit') or 0)} поисков; "
+                    f"осталось {int(usage.get('remaining') or 0)} "
+                    f"({float(usage.get('utilization_pct') or 0):.1f}%)"
+                ),
+            ]
+        )
+    else:
+        lines.extend(["", "📦 Sletat: месячный счётчик недоступен"])
     return "\n".join(lines)
 
 
@@ -4476,6 +4536,7 @@ def health() -> Any:
         "lead_delivery": _lead_delivery_health(),
         "ops_events": _ops_event_health(),
         "provider_runtime": _provider_runtime_health(),
+        "provider_usage": _provider_monthly_usage(),
         "acquisition_funnel": _funnel_health(),
         "tour_search": _tour_search_health(),
         "ai_selection": {
