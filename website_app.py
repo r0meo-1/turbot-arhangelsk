@@ -803,6 +803,7 @@ if "agent_extension_leads" not in app.view_functions:
                 candidates = []
             leads.append({
                 "id": int(row[0]),
+                "requestId": f"web-lead-{int(row[0])}",
                 "name": str(row[1] or ""),
                 "phone": str(row[2] or ""),
                 "destination": str(row[3] or ""),
