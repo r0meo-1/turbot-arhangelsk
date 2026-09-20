@@ -46,6 +46,16 @@ Flow:
 5. Results are manager assistance only until commercial facts are confirmed.
 6. Natalya can continue in Tourvisor PRO, Sletat PRO or Qui-Quo from the manager handoff.
 
+## Quota observability
+
+TurBot counts one Sletat search attempt per terminal provider outcome in the anonymous `ops_metric_events` table. The supplemental `fallback` outcome is excluded so one search is never counted twice.
+
+- `SLETAT_MONTHLY_QUOTA` defaults to `20000` for the vendor's basic monthly search allowance.
+- Set it to `30000` only when the issued licence/contract includes the extended allowance.
+- VK `/health` exposes only aggregate `provider_usage` fields (period, used, limit, remaining, utilization percentage).
+- The admin `providers` report shows the same aggregate monthly usage.
+- No search payload, customer field, credential or provider response body is stored in the quota counter.
+
 ## Required configuration
 
 Do not commit credentials.
@@ -58,6 +68,7 @@ SLETAT_PASSWORD=
 SLETAT_LICENSE_HOST=
 SLETAT_TIMEOUT_SECONDS=20
 SLETAT_MAX_OFFERS=15
+SLETAT_MONTHLY_QUOTA=20000
 ```
 
 The exact authentication and request contract must be implemented only from the active vendor documentation / credentials supplied after registration. Do not guess private endpoint parameters.
