@@ -824,3 +824,34 @@ def test_agent_crm_website_timeline_uses_website_client_source(client, monkeypat
     assert data["client"]["name"] == "Роман"
     assert data["client"]["phone"] == "+79161234567"
     assert data["client"]["name"] != "Wrong Source"
+
+
+def test_agent_crm_today_uses_manager_local_day(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    request = _seed_crm_request()
+
+    # 21:10 UTC is already 00:10 next day in UTC+3. A task at 20:00 UTC later
+    # that same local day must appear in "Что делать сегодня".
+    now = datetime(2026, 9, 21, 21, 10, 0)
+    with bot._db_cursor(commit=True) as cur:
+        crm_store.upsert_task(
+            cur.connection,
+            ManagerTask(
+                task_id="task-local-day",
+                request_id=request.request_id,
+                type=TaskType.NEXT_CONTACT,
+                due_at=datetime(2026, 9, 22, 20, 0, 0),
+                created_at=now,
+                priority=2,
+            ),
+        )
+
+    response = client.get(
+        "/agent-extension/crm/today"
+        "?now=2026-09-21T21:10:00Z&tzOffsetMinutes=-180&limit=20",
+        headers=_agent_headers(),
+    )
+    assert response.status_code == 200
+    assert [item["taskId"] for item in response.get_json()["tasks"]] == [
+        "task-local-day"
+    ]
