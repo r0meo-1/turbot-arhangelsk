@@ -12,6 +12,7 @@ curl, а не сессией по SSH. Причин обычно три: pull н
 from __future__ import annotations
 
 import os
+import re
 import time
 from typing import Optional
 
@@ -33,6 +34,10 @@ def git_revision(base_dir: Optional[str] = None) -> str:
     ответе на вопрос «жив ли ты», хуже отсутствующего.
     """
     root = base_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Tracked-file bundles deliberately leave the server's .git unchanged.
+    deployed = _read(os.path.join(root, ".deployed-commit"))
+    if deployed is not None:
+        return deployed[:7] if re.fullmatch(r"[0-9a-f]{40}", deployed) else "unknown"
     git_dir = os.path.join(root, ".git")
 
     head = _read(os.path.join(git_dir, "HEAD"))
