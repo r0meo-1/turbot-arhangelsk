@@ -554,6 +554,9 @@ def _db_cursor(commit: bool = False):
 
 
 def init_db() -> None:
+    with _db_cursor() as cur:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.fetchone()
     with _db_cursor(commit=True) as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -748,8 +751,6 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_ops_metric_events_created_at "
             "ON ops_metric_events(created_at)"
         )
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.fetchone()
 
 
 # --- session helpers ---
@@ -848,7 +849,11 @@ def delete_session(chat_id: int) -> None:
                 (chat_id,),
             ).fetchall()
         ]
-        _travel_crm_store.delete_for_lead_ids(cur.connection, lead_ids)
+        _travel_crm_store.delete_for_lead_ids(
+            cur.connection,
+            lead_ids,
+            channel="vk",
+        )
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
 
 
@@ -977,6 +982,11 @@ def save_lead(
                 cur.connection,
                 crm_request,
                 lead_id=lead_id,
+            )
+            _travel_crm_store.ensure_initial_task(
+                cur.connection,
+                crm_request.request_id,
+                datetime.utcnow(),
             )
         except Exception as exc:
             # CRM mirroring is additive. A malformed legacy field must never

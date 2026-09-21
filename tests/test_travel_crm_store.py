@@ -14,17 +14,22 @@ from shared.travel_crm import (
     OutcomeStatus,
     Quote,
     QuoteReaction,
+    QuoteReactionEvent,
+    TaskStatus,
     TaskType,
     TripRequest,
 )
 from shared.travel_crm_store import (
     append_activity,
     append_quote,
+    append_quote_reaction,
     delete_for_lead_ids,
     due_tasks,
+    ensure_initial_task,
     init_schema,
     load_timeline,
     set_outcome,
+    set_task_status,
     upsert_request,
     upsert_task,
 )
@@ -214,3 +219,87 @@ def test_delete_for_lead_ids_erases_whole_crm_timeline():
     assert load_timeline(conn, request.request_id) is None
     assert conn.execute("SELECT COUNT(*) FROM crm_quotes").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM crm_activities").fetchone()[0] == 0
+
+
+
+def test_quote_reaction_history_is_append_only_and_round_trips():
+    conn = _db()
+    request = _request()
+    upsert_request(conn, request)
+    quote = Quote(
+        quote_id="reaction-q",
+        request_id=request.request_id,
+        hotel="Synthetic Resort",
+        price_amount=190000,
+        reaction=QuoteReaction.SENT,
+    )
+    append_quote(conn, quote)
+    append_quote_reaction(
+        conn,
+        QuoteReactionEvent(
+            event_id="reaction-1",
+            quote_id=quote.quote_id,
+            request_id=request.request_id,
+            reaction=QuoteReaction.TOO_EXPENSIVE,
+            note="Просит дешевле",
+            created_at=datetime(2026, 9, 21, 12, 0),
+        ),
+    )
+    append_quote_reaction(
+        conn,
+        QuoteReactionEvent(
+            event_id="reaction-2",
+            quote_id=quote.quote_id,
+            request_id=request.request_id,
+            reaction=QuoteReaction.WANTS_ALTERNATIVE,
+            note="Нужен другой отель",
+            created_at=datetime(2026, 9, 21, 12, 5),
+        ),
+    )
+
+    timeline = load_timeline(conn, request.request_id)
+
+    assert timeline is not None
+    assert [event.event_id for event in timeline.quote_reactions] == [
+        "reaction-1",
+        "reaction-2",
+    ]
+    assert timeline.quotes[0].reaction is QuoteReaction.SENT
+    assert timeline.quote_reactions[-1].reaction is QuoteReaction.WANTS_ALTERNATIVE
+
+
+def test_initial_task_is_idempotent_and_can_be_completed():
+    conn = _db()
+    request = _request()
+    upsert_request(conn, request)
+    now = datetime(2026, 9, 21, 9, 0)
+
+    first = ensure_initial_task(conn, request.request_id, now)
+    second = ensure_initial_task(conn, request.request_id, now + timedelta(minutes=1))
+
+    assert first == second
+    rows = conn.execute(
+        "SELECT task_id, status FROM crm_tasks WHERE request_id=?",
+        (request.request_id,),
+    ).fetchall()
+    assert rows == [(first, "todo")]
+    assert set_task_status(conn, first, TaskStatus.DONE) is True
+    assert due_tasks(conn, now + timedelta(hours=1)) == []
+
+
+def test_channel_scoped_delete_does_not_erase_same_numeric_id_from_another_channel():
+    conn = _db()
+    telegram = _request()
+    website = TripRequest(
+        request_id="web-lead-77",
+        departure_city="Москва",
+        adults=2,
+        primary_destination="Таиланд",
+        attribution=Attribution(channel="website", source_tag="web_test"),
+    )
+    upsert_request(conn, telegram, lead_id=77)
+    upsert_request(conn, website, lead_id=77)
+
+    assert delete_for_lead_ids(conn, [77], channel="telegram") == 1
+    assert load_timeline(conn, telegram.request_id) is None
+    assert load_timeline(conn, website.request_id) is not None

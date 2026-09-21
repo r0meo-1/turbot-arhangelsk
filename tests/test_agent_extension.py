@@ -34,5 +34,12 @@ def test_agent_extension_points_only_to_protected_agent_endpoint():
     assert "https://bot.r0meo1.ru/agent-extension/leads" in js
     assert "https://bot.r0meo1.ru/agent-extension/status" in js
     assert "https://bot.r0meo1.ru/agent-extension/export.csv" in js
+    assert "https://bot.r0meo1.ru/agent-extension/crm/today" in js
+    assert "https://bot.r0meo1.ru/agent-extension/crm/timeline" in js
+    assert "https://bot.r0meo1.ru/agent-extension/crm/quote" in js
+    assert "https://bot.r0meo1.ru/agent-extension/crm/reaction" in js
+    assert "https://bot.r0meo1.ru/agent-extension/crm/activity" in js
     assert "followUpOn" in js
+    assert "Что делать сегодня" in (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    assert "История заявки" in (EXT / "sidepanel.html").read_text(encoding="utf-8")
     assert "/website/lead" not in js

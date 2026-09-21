@@ -1,6 +1,7 @@
 """Tests for the public Aprel Tour website lead endpoint."""
 
 import os
+from datetime import datetime, timezone
 
 # Keep imports deterministic and keep the website retry thread out of pytest.
 os.environ.setdefault("BOT_TOKEN", "dummy-token")
@@ -43,6 +44,12 @@ def clean_website_state(monkeypatch):
     website_app._rate_hits.clear()
     monkeypatch.setattr(bot, "DEMO_MODE", False)
     with bot._db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM crm_quote_reactions")
+        cur.execute("DELETE FROM crm_quotes")
+        cur.execute("DELETE FROM crm_activities")
+        cur.execute("DELETE FROM crm_tasks")
+        cur.execute("DELETE FROM crm_outcomes")
+        cur.execute("DELETE FROM crm_trip_requests")
         cur.execute("DELETE FROM website_leads")
         cur.execute("DELETE FROM acquisition_funnel_events")
 
@@ -126,6 +133,25 @@ def test_website_lead_is_stored_before_async_delivery(client, monkeypatch):
     assert row[6] > 0
     assert row[7:10] == ("vk", "social", "autumn")
     assert row[10] == "pending"
+    with bot._db_cursor() as cur:
+        crm = cur.execute(
+            """
+            SELECT request_id, source_tag, channel, campaign
+            FROM crm_trip_requests WHERE lead_id=? AND channel='website'
+            """,
+            (body["leadId"],),
+        ).fetchone()
+        task = cur.execute(
+            """
+            SELECT task_type, status FROM crm_tasks
+            WHERE request_id=?
+            """,
+            (f"web-lead-{body['leadId']}",),
+        ).fetchone()
+    assert tuple(crm) == (
+        f"web-lead-{body['leadId']}", "autumn", "website", "autumn"
+    )
+    assert tuple(task) == ("build_selection", "todo")
     funnel = bot._funnel_health()
     website_source = funnel["channels"]["website"]["vk:autumn"]
     assert website_source["lead"]["accepted"] == 1
@@ -369,6 +395,19 @@ def test_agent_extension_lists_and_updates_crm_status(client, monkeypatch):
     assert follow_up_on == "2026-09-21"
     assert updated_at > 0
 
+    with bot._db_cursor() as cur:
+        timeline = website_app._travel_crm_store.load_timeline(
+            cur.connection, f"web-lead-{lead_id}"
+        )
+    assert timeline is not None
+    assert timeline.activities[-1].type.value == "status_change"
+    assert "Ждём ответ клиента" in timeline.activities[-1].summary
+    assert any(
+        task.type.value == "next_contact"
+        and task.due_at.date().isoformat() == "2026-09-21"
+        for task in timeline.tasks
+    )
+
     listing2 = client.get(
         "/agent-extension/leads?limit=10",
         headers={
@@ -559,3 +598,204 @@ def test_agent_extension_csv_export_escapes_formula_cells(client, monkeypatch):
     csv_text = response.get_data(as_text=True)
     assert "'=1+1" in csv_text
     assert "'@SUM(A1:A2)" in csv_text
+
+
+
+def _agent_headers():
+    return {
+        "Origin": "chrome-extension://abcdefghijklmnop",
+        "Authorization": "Bearer agent-secret",
+    }
+
+
+def test_agent_extension_crm_today_quote_reaction_and_activity(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-crm-timeline-0001"),
+    )
+    assert create.status_code == 202
+    lead_id = create.get_json()["leadId"]
+    request_id = f"web-lead-{lead_id}"
+
+    today = client.get(
+        "/agent-extension/crm/today",
+        headers=_agent_headers(),
+    )
+    assert today.status_code == 200
+    tasks = today.get_json()["tasks"]
+    initial = next(task for task in tasks if task["requestId"] == request_id)
+    assert initial["type"] == "build_selection"
+    assert initial["destination"] == "Турция"
+    assert initial["sourceTag"] == "autumn"
+
+    quote = client.post(
+        "/agent-extension/crm/quote",
+        headers=_agent_headers(),
+        json={
+            "requestId": request_id,
+            "hotel": "Synthetic Family Resort 5*",
+            "operator": "Demo Operator",
+            "carrier": "Demo Air",
+            "mealPlan": "AI",
+            "priceAmount": 195000,
+            "currency": "RUB",
+        },
+    )
+    assert quote.status_code == 200
+    quote_id = quote.get_json()["quoteId"]
+
+    reaction = client.post(
+        "/agent-extension/crm/reaction",
+        headers=_agent_headers(),
+        json={
+            "quoteId": quote_id,
+            "reaction": "too_expensive",
+            "note": "Просит вариант дешевле",
+        },
+    )
+    assert reaction.status_code == 200
+
+    activity = client.post(
+        "/agent-extension/crm/activity",
+        headers=_agent_headers(),
+        json={
+            "requestId": request_id,
+            "type": "call",
+            "summary": "Созвонились, клиент думает до вечера",
+        },
+    )
+    assert activity.status_code == 200
+
+    follow = client.post(
+        "/agent-extension/crm/task",
+        headers=_agent_headers(),
+        json={
+            "requestId": request_id,
+            "type": "next_contact",
+            "dueAt": "2030-09-21T12:00:00",
+            "priority": 2,
+            "note": "Уточнить решение",
+        },
+    )
+    assert follow.status_code == 200
+
+    timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=" + request_id,
+        headers=_agent_headers(),
+    )
+    assert timeline.status_code == 200
+    payload = timeline.get_json()["timeline"]
+    assert payload["request"]["attribution"]["channel"] == "website"
+    assert payload["quotes"][0]["hotel"] == "Synthetic Family Resort 5*"
+    assert payload["quote_reactions"][-1]["reaction"] == "too_expensive"
+    assert payload["activities"][-1]["summary"] == "Созвонились, клиент думает до вечера"
+    assert any(task["type"] == "next_contact" for task in payload["tasks"])
+
+    done = client.post(
+        "/agent-extension/crm/task",
+        headers=_agent_headers(),
+        json={"taskId": initial["taskId"], "status": "done"},
+    )
+    assert done.status_code == 200
+    assert done.get_json()["status"] == "done"
+
+
+def test_agent_extension_crm_today_uses_manager_local_day(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-crm-local-day-0001"),
+    )
+    assert create.status_code == 202
+    request_id = f"web-lead-{create.get_json()['leadId']}"
+
+    def epoch(value):
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE crm_tasks SET due_at=? WHERE request_id=? AND task_type='build_selection'",
+            (epoch("2026-09-21T20:00:00Z"), request_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO crm_tasks (
+                task_id, request_id, task_type, due_at, created_at,
+                priority, status, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "task-after-moscow-day",
+                request_id,
+                "next_contact",
+                epoch("2026-09-21T21:30:00Z"),
+                epoch("2026-09-20T21:30:00Z"),
+                2,
+                "todo",
+                "Следующий локальный день",
+            ),
+        )
+
+    response = client.get(
+        "/agent-extension/crm/today"
+        "?now=2026-09-20T21:30:00Z&tzOffsetMinutes=-180&limit=100",
+        headers=_agent_headers(),
+    )
+    assert response.status_code == 200
+    ids = {item["taskId"] for item in response.get_json()["tasks"]}
+    assert f"{request_id}:build-selection" in ids
+    assert "task-after-moscow-day" not in ids
+
+
+def test_agent_extension_crm_requires_pairing_token(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+
+    denied = client.get("/agent-extension/crm/today")
+    assert denied.status_code == 401
+
+    denied_timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=web-lead-1"
+    )
+    assert denied_timeline.status_code == 401
+
+
+def test_agent_extension_won_status_closes_tasks_and_sets_outcome(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-crm-won-0001"),
+    )
+    lead_id = create.get_json()["leadId"]
+    request_id = f"web-lead-{lead_id}"
+
+    update = client.post(
+        "/agent-extension/status",
+        headers=_agent_headers(),
+        json={
+            "leadId": lead_id,
+            "status": "won",
+            "note": "Забронировано",
+            "followUpOn": "",
+        },
+    )
+    assert update.status_code == 200
+
+    with bot._db_cursor() as cur:
+        timeline = website_app._travel_crm_store.load_timeline(
+            cur.connection, request_id
+        )
+    assert timeline is not None
+    assert timeline.outcome is not None
+    assert timeline.outcome.status.value == "won"
+    assert timeline.outcome.reason == "Забронировано"
+    assert all(task.status.value == "done" for task in timeline.tasks)

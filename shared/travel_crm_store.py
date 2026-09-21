@@ -26,6 +26,7 @@ from shared.travel_crm import (
     OutcomeStatus,
     Quote,
     QuoteReaction,
+    QuoteReactionEvent,
     TaskStatus,
     TaskType,
     TripRequest,
@@ -60,6 +61,18 @@ def init_schema(cur: sqlite3.Cursor) -> None:
             currency TEXT NOT NULL,
             calculated_at INTEGER NOT NULL,
             reaction TEXT NOT NULL
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS crm_quote_reactions (
+            event_id TEXT PRIMARY KEY,
+            quote_id TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            reaction TEXT NOT NULL,
+            note TEXT,
+            created_at INTEGER NOT NULL
         )
         """
     )
@@ -107,12 +120,42 @@ def init_schema(cur: sqlite3.Cursor) -> None:
         "ON crm_quotes(request_id, calculated_at)"
     )
     cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_crm_quote_reactions_quote "
+        "ON crm_quote_reactions(quote_id, created_at)"
+    )
+    cur.execute(
+        "CREATE INDEX IF NOT EXISTS idx_crm_quote_reactions_request "
+        "ON crm_quote_reactions(request_id, created_at)"
+    )
+    cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_crm_activities_request "
         "ON crm_activities(request_id, created_at)"
     )
     cur.execute(
         "CREATE INDEX IF NOT EXISTS idx_crm_tasks_due "
         "ON crm_tasks(status, due_at, priority)"
+    )
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO crm_tasks (
+            task_id, request_id, task_type, due_at, created_at, priority, status, note
+        )
+        SELECT
+            request_id || ':build-selection',
+            request_id,
+            ?,
+            created_at,
+            created_at,
+            1,
+            ?,
+            'Сделать первичный подбор и отправить варианты'
+        FROM crm_trip_requests AS request
+        WHERE NOT EXISTS (
+            SELECT 1 FROM crm_outcomes AS outcome
+            WHERE outcome.request_id = request.request_id
+        )
+        """,
+        (TaskType.BUILD_SELECTION.value, TaskStatus.TODO.value),
     )
 
 
@@ -241,6 +284,36 @@ def append_quote(conn: sqlite3.Connection, quote: Quote) -> None:
     )
 
 
+def append_quote_reaction(
+    conn: sqlite3.Connection,
+    event: QuoteReactionEvent,
+) -> None:
+    quote = conn.execute(
+        "SELECT request_id FROM crm_quotes WHERE quote_id = ?",
+        (event.quote_id,),
+    ).fetchone()
+    if quote is None:
+        raise ValueError("quote reaction references an unknown quote")
+    if str(quote[0]) != event.request_id:
+        raise ValueError("quote reaction request_id does not match quote")
+
+    conn.execute(
+        """
+        INSERT INTO crm_quote_reactions (
+            event_id, quote_id, request_id, reaction, note, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event.event_id,
+            event.quote_id,
+            event.request_id,
+            event.reaction.value,
+            event.note,
+            _to_epoch(event.created_at),
+        ),
+    )
+
+
 def append_activity(conn: sqlite3.Connection, activity: Activity) -> None:
     conn.execute(
         """
@@ -341,6 +414,26 @@ def load_timeline(conn: sqlite3.Connection, request_id: str) -> LeadTimeline | N
         ).fetchall()
     )
 
+    quote_reactions = tuple(
+        QuoteReactionEvent(
+            event_id=r[0],
+            quote_id=r[1],
+            request_id=r[2],
+            reaction=QuoteReaction(r[3]),
+            note=r[4] or "",
+            created_at=_from_epoch(r[5]),
+        )
+        for r in conn.execute(
+            """
+            SELECT event_id, quote_id, request_id, reaction, note, created_at
+            FROM crm_quote_reactions
+            WHERE request_id = ?
+            ORDER BY created_at, event_id
+            """,
+            (request_id,),
+        ).fetchall()
+    )
+
     activities = tuple(
         Activity(
             activity_id=r[0],
@@ -398,10 +491,51 @@ def load_timeline(conn: sqlite3.Connection, request_id: str) -> LeadTimeline | N
     return LeadTimeline(
         request=request,
         quotes=quotes,
+        quote_reactions=quote_reactions,
         activities=activities,
         tasks=tasks,
         outcome=outcome,
     )
+
+
+def ensure_initial_task(
+    conn: sqlite3.Connection,
+    request_id: str,
+    now: datetime,
+) -> str:
+    """Create the default manager action once for a newly mirrored lead."""
+
+    task_id = f"{request_id}:build-selection"
+    stamp = _to_epoch(now)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO crm_tasks (
+            task_id, request_id, task_type, due_at, created_at, priority, status, note
+        ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            task_id,
+            request_id,
+            TaskType.BUILD_SELECTION.value,
+            stamp,
+            stamp,
+            TaskStatus.TODO.value,
+            "Сделать первичный подбор и отправить варианты",
+        ),
+    )
+    return task_id
+
+
+def set_task_status(
+    conn: sqlite3.Connection,
+    task_id: str,
+    status: TaskStatus,
+) -> bool:
+    cur = conn.execute(
+        "UPDATE crm_tasks SET status = ? WHERE task_id = ?",
+        (status.value, task_id),
+    )
+    return bool(cur.rowcount)
 
 
 def due_tasks(conn: sqlite3.Connection, now: datetime) -> list[ManagerTask]:
@@ -430,27 +564,43 @@ def due_tasks(conn: sqlite3.Connection, now: datetime) -> list[ManagerTask]:
     ]
 
 
-def delete_for_lead_ids(conn: sqlite3.Connection, lead_ids: list[int]) -> int:
+def delete_for_lead_ids(
+    conn: sqlite3.Connection,
+    lead_ids: list[int],
+    *,
+    channel: str | None = None,
+) -> int:
     """Erase CRM mirrors tied to canonical lead rows.
 
-    This keeps /delete and retention cleanup honest: enriching a lead must not
-    create a second, immortal copy of the same customer's request.
+    lead IDs are only unique inside their source table. Channel filtering keeps
+    a Telegram lead #12 from deleting an unrelated website/VK lead #12.
     """
 
     ids = [int(value) for value in lead_ids]
     if not ids:
         return 0
     placeholders = ",".join("?" for _ in ids)
+    params: list[Any] = list(ids)
+    where = f"lead_id IN ({placeholders})"
+    if channel:
+        where += " AND channel = ?"
+        params.append(str(channel))
     request_rows = conn.execute(
-        f"SELECT request_id FROM crm_trip_requests WHERE lead_id IN ({placeholders})",
-        ids,
+        f"SELECT request_id FROM crm_trip_requests WHERE {where}",
+        params,
     ).fetchall()
     request_ids = [str(row[0]) for row in request_rows]
     if not request_ids:
         return 0
 
     req_placeholders = ",".join("?" for _ in request_ids)
-    for table in ("crm_quotes", "crm_activities", "crm_tasks", "crm_outcomes"):
+    for table in (
+        "crm_quote_reactions",
+        "crm_quotes",
+        "crm_activities",
+        "crm_tasks",
+        "crm_outcomes",
+    ):
         conn.execute(
             f"DELETE FROM {table} WHERE request_id IN ({req_placeholders})",
             request_ids,

@@ -703,6 +703,9 @@ def _db_cursor(commit: bool = False):
 
 def init_db() -> None:
     """Create SQLite tables if they don't exist and enable WAL mode."""
+    with _db_cursor() as cur:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.fetchone()
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
@@ -866,7 +869,6 @@ def init_db() -> None:
             )
             """
         )
-        cur.execute("PRAGMA journal_mode=WAL")
 
 
 def _safe_ai_metric_label(value: Any, *, default: str, limit: int) -> str:
@@ -1190,7 +1192,11 @@ def delete_session(chat_id: int) -> None:
                 (chat_id,),
             ).fetchall()
         ]
-        _travel_crm_store.delete_for_lead_ids(cur.connection, lead_ids)
+        _travel_crm_store.delete_for_lead_ids(
+            cur.connection,
+            lead_ids,
+            channel="telegram",
+        )
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
 
 
@@ -1277,6 +1283,11 @@ def save_lead(
                 cur.connection,
                 crm_request,
                 lead_id=lead_id,
+            )
+            _travel_crm_store.ensure_initial_task(
+                cur.connection,
+                crm_request.request_id,
+                datetime.utcnow(),
             )
         except Exception as exc:
             # CRM mirroring is additive. A malformed legacy field must never

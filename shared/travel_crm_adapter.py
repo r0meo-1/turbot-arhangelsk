@@ -81,12 +81,16 @@ def trip_request_from_lead(
     """Build a canonical request from a completed legacy lead dictionary."""
 
     channel = channel.strip().lower()
-    if channel not in {"telegram", "vk"}:
-        raise ValueError("channel must be telegram or vk")
+    if channel not in {"telegram", "vk", "website"}:
+        raise ValueError("channel must be telegram, vk or website")
 
     nights_min, nights_max = _nights(info.get("nights"))
     dates_text = str(info.get("dates") or "").strip()
-    source_tag = str(info.get("source_tag") or "").strip()
+    source_tag = str(
+        info.get("source_tag")
+        or (info.get("utm_campaign") if channel == "website" else "")
+        or ""
+    ).strip()
 
     hotel_refs: tuple[str, ...] = ()
     hotel_query = str(info.get("hotel_query") or "").strip()
@@ -100,7 +104,7 @@ def trip_request_from_lead(
     )
 
     return TripRequest(
-        request_id=f"{'tg' if channel == 'telegram' else 'vk'}-lead-{int(lead_id)}",
+        request_id=f"{'tg' if channel == 'telegram' else ('vk' if channel == 'vk' else 'web')}-lead-{int(lead_id)}",
         departure_city=str(info.get("origin") or "Не указан").strip() or "Не указан",
         adults=max(1, _int_or(info.get("people"), 1)),
         children=_ages(info),
@@ -120,8 +124,16 @@ def trip_request_from_lead(
         attribution=Attribution(
             source_tag=source_tag,
             channel=channel,
-            source=str(info.get("source") or "").strip(),
+            source=str(
+                info.get("source")
+                or (info.get("utm_source") if channel == "website" else "")
+                or ""
+            ).strip(),
             referrer=str(info.get("vk_ref") or info.get("referrer") or "").strip(),
-            campaign=str(info.get("campaign") or "").strip(),
+            campaign=str(
+                info.get("campaign")
+                or (info.get("utm_campaign") if channel == "website" else "")
+                or ""
+            ).strip(),
         ),
     )

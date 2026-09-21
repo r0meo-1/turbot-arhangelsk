@@ -172,6 +172,24 @@ class Activity:
 
 
 @dataclass(frozen=True)
+class QuoteReactionEvent:
+    event_id: str
+    quote_id: str
+    request_id: str
+    reaction: QuoteReaction
+    created_at: datetime
+    note: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.event_id.strip():
+            raise ValueError("event_id is required")
+        if not self.quote_id.strip():
+            raise ValueError("quote_id is required")
+        if not self.request_id.strip():
+            raise ValueError("request_id is required")
+
+
+@dataclass(frozen=True)
 class ManagerTask:
     task_id: str
     request_id: str
@@ -198,6 +216,7 @@ class BookingOutcome:
 class LeadTimeline:
     request: TripRequest
     quotes: tuple[Quote, ...] = ()
+    quote_reactions: tuple[QuoteReactionEvent, ...] = ()
     activities: tuple[Activity, ...] = ()
     tasks: tuple[ManagerTask, ...] = ()
     outcome: BookingOutcome | None = None
@@ -208,6 +227,15 @@ class LeadTimeline:
         if any(item.quote_id == quote.quote_id for item in self.quotes):
             raise ValueError("quote_id already exists")
         return replace(self, quotes=(*self.quotes, quote))
+
+    def with_quote_reaction(self, event: QuoteReactionEvent) -> "LeadTimeline":
+        if event.request_id != self.request.request_id:
+            raise ValueError("quote reaction belongs to another request")
+        if not any(item.quote_id == event.quote_id for item in self.quotes):
+            raise ValueError("quote reaction references an unknown quote")
+        if any(item.event_id == event.event_id for item in self.quote_reactions):
+            raise ValueError("quote reaction event_id already exists")
+        return replace(self, quote_reactions=(*self.quote_reactions, event))
 
     def with_activity(self, activity: Activity) -> "LeadTimeline":
         if activity.request_id != self.request.request_id:
