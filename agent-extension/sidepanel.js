@@ -296,7 +296,7 @@ function renderToday(tasks) {
     const done = document.createElement("button");
     done.className = "secondary";
     done.textContent = "Готово";
-    done.addEventListener("click", () => completeTask(task.taskId, done));
+    done.addEventListener("click", () => completeTask(task.taskId, task.requestId, done));
     actions.append(open, done);
 
     card.append(head, meta, actions);
@@ -315,12 +315,12 @@ async function loadToday() {
   renderToday(data.tasks || []);
 }
 
-async function completeTask(taskId, button) {
+async function completeTask(taskId, requestId, button) {
   button.disabled = true;
   try {
     await crmFetch(CRM_TASK_API, {
       method: "POST",
-      body: JSON.stringify({ taskId, status: "done" })
+      body: JSON.stringify({ taskId, requestId, status: "done" })
     });
     setStatus("Задача закрыта.", true);
     await loadToday();
@@ -468,7 +468,12 @@ async function addReaction(quoteId, reaction, note, button) {
   try {
     await crmFetch(CRM_REACTION_API, {
       method: "POST",
-      body: JSON.stringify({ quoteId, reaction, note })
+      body: JSON.stringify({
+        quoteId,
+        requestId: activeRequestId,
+        reaction,
+        note
+      })
     });
     setStatus("Реакция клиента сохранена.", true);
     await openTimeline(activeRequestId);
