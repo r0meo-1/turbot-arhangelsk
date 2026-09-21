@@ -1,6 +1,7 @@
 """Tests for the public Aprel Tour website lead endpoint."""
 
 import os
+from datetime import datetime, timezone
 
 # Keep imports deterministic and keep the website retry thread out of pytest.
 os.environ.setdefault("BOT_TOKEN", "dummy-token")
@@ -701,6 +702,56 @@ def test_agent_extension_crm_today_quote_reaction_and_activity(client, monkeypat
     )
     assert done.status_code == 200
     assert done.get_json()["status"] == "done"
+
+
+def test_agent_extension_crm_today_uses_manager_local_day(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-crm-local-day-0001"),
+    )
+    assert create.status_code == 202
+    request_id = f"web-lead-{create.get_json()['leadId']}"
+
+    def epoch(value):
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE crm_tasks SET due_at=? WHERE request_id=? AND task_type='build_selection'",
+            (epoch("2026-09-21T20:00:00Z"), request_id),
+        )
+        cur.execute(
+            """
+            INSERT INTO crm_tasks (
+                task_id, request_id, task_type, due_at, created_at,
+                priority, status, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "task-after-moscow-day",
+                request_id,
+                "next_contact",
+                epoch("2026-09-21T21:30:00Z"),
+                epoch("2026-09-20T21:30:00Z"),
+                2,
+                "todo",
+                "Следующий локальный день",
+            ),
+        )
+
+    response = client.get(
+        "/agent-extension/crm/today"
+        "?now=2026-09-20T21:30:00Z&tzOffsetMinutes=-180&limit=100",
+        headers=_agent_headers(),
+    )
+    assert response.status_code == 200
+    ids = {item["taskId"] for item in response.get_json()["tasks"]}
+    assert f"{request_id}:build-selection" in ids
+    assert "task-after-moscow-day" not in ids
 
 
 def test_agent_extension_crm_requires_pairing_token(client, monkeypatch):
