@@ -5,9 +5,8 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Tuple
 
-# Чанки вроде «8 месяцев» содержат цифру, которая возрастом не является —
-# проверяются раньше, иначе младенец превратится в восьмилетнего.
-_UNDER_ONE = re.compile(r"(до\s*год|меньше\s*год|полгод|месяц|мес\b|грудн|младен)", re.I)
+# Возраст в месяцах переводится в полные годы до разбора обычного списка.
+_UNDER_ONE = re.compile(r"(?:до\s*года|меньше\s*года|полгода|грудной|грудничок|младенец)", re.I)
 _SPLIT_AGES = re.compile(r"[,;/]|\s+и\s+|\n")
 _NO_KIDS = re.compile(
     r"\s*(0+|нет(\s+детей)?|нету|неа|без\s+детей|детей\s+нет|не\s+едут|[-—])\s*", re.I
@@ -24,7 +23,7 @@ def parse_kids_ages(text: str) -> Tuple[bool, List[int], str]:
     детей: клиент, выбравший «2» и написавший три возраста, себя поправил, и
     переспрашивать значит спорить с ним о том, сколько у него детей.
     """
-    raw = (text or "").strip()
+    raw = text.strip() if isinstance(text, str) and len(text) <= 500 else ""
     if not raw:
         return False, [], "Напишите возрасты детей через запятую — например: 5, 9"
 
@@ -40,13 +39,21 @@ def parse_kids_ages(text: str) -> Tuple[bool, List[int], str]:
         chunk = chunk.strip()
         if not chunk:
             continue
-        if _UNDER_ONE.search(chunk):
+        if _UNDER_ONE.fullmatch(chunk):
             ages.append(0)
             continue
-        found = re.findall(r"\d{1,2}", chunk)
-        if not found:
+        months = re.fullmatch(
+            r"(?:(?:груднич(?:ок|ку)|младен(?:ец|цу)|грудн(?:ой|ому)\s+реб[её]н(?:ок|ку))\s+)?"
+            r"([0-9]{1,3})\s*(?:месяц(?:а|ев)?|мес\.?)", chunk, re.I,
+        )
+        if months:
+            ages.append(int(months[1]) // 12)
             continue
-        ages.extend(int(value) for value in found)
+        if not re.fullmatch(
+            r"[0-9]{1,3}(?:\s+(?:[0-9]{1,3}|год|года|лет))*", chunk, re.I,
+        ):
+            return False, [], "Не понял возрасты. Напишите целыми числами через запятую — например: 5, 9"
+        ages.extend(int(value) for value in re.findall(r"[0-9]+", chunk))
 
     if not ages:
         return False, [], "Не понял возрасты. Напишите числами через запятую — например: 5, 9"
@@ -150,8 +157,14 @@ def party_text(info: Dict) -> str:
 
 def validate_phone(text: str) -> Tuple[bool, Optional[str]]:
     """Validate a Russian phone number. Returns (ok, normalised E.164-like)."""
-    digits = re.sub(r"[^\d+]", "", text).lstrip("+")
-    if digits.startswith("8"):
+    if not isinstance(text, str) or len(text) > 100:
+        return False, None
+    if not re.fullmatch(r"\+?[0-9][0-9\s()\u2010-\u2014-]*", text.strip()):
+        return False, None
+    digits = re.sub(r"[^0-9]", "", text)
+    if text.strip().startswith("+") and len(digits) != 11:
+        return False, None
+    if len(digits) == 11 and digits.startswith("8"):
         digits = "7" + digits[1:]
     if len(digits) == 11 and digits.startswith("7"):
         return True, "+" + digits
@@ -162,15 +175,18 @@ def validate_phone(text: str) -> Tuple[bool, Optional[str]]:
 
 def validate_people(text: str) -> Tuple[bool, Optional[str]]:
     """Validate number of travellers. Returns (ok, value_str)."""
+    if not isinstance(text, str) or len(text) > 100:
+        return False, None
     cleaned = text.strip()
     if cleaned == "5+":
         return True, "5+"
-    try:
-        value = int(re.sub(r"[^\d]", "", cleaned))
-        if 1 <= value <= 50:
-            return True, str(value)
-    except (ValueError, TypeError):
-        pass
+    match = re.fullmatch(
+        r"([0-9]{1,2})(?:\s*(?:чел\.?|человек(?:а)?|"
+        r"(?:взр\.?|взрослых|взрослый|взрослые)(?:\s+(?:чел\.?|человек(?:а)?))?))?",
+        cleaned, re.I,
+    )
+    if match and 1 <= int(match[1]) <= 50:
+        return True, str(int(match[1]))
     return False, None
 
 
