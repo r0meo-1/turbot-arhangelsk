@@ -64,3 +64,11 @@ def test_deploy_workflow_uses_v4_with_travelpayouts_secret():
     assert "travelata_password_b64" in source
     assert "travelpayouts_token_b64" in source
 
+
+
+def test_deployer_repairs_runtime_directory_before_chdir():
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'chown turbot:turbot "$repo"' in source
+    assert 'chmod 0750 "$repo"' in source
+    assert source.index("ensure_runtime_permissions\ncd") < source.index("apply_stdin_config")
