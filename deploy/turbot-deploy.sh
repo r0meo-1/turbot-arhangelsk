@@ -19,7 +19,7 @@ ensure_runtime_permissions() {
   chmod 0750 "$repo"
 
   local state_file
-  for state_file in "$repo/bot_state.sqlite" "$repo/vk_bot_state.sqlite"; do
+  for state_file in "$repo/bot_state.sqlite" "$repo/bot_state.sqlite-wal" "$repo/bot_state.sqlite-shm" "$repo/vk_bot_state.sqlite" "$repo/vk_bot_state.sqlite-wal" "$repo/vk_bot_state.sqlite-shm"; do
     if [[ -f "$state_file" ]]; then
       chown turbot:turbot "$state_file"
       chmod 0600 "$state_file"
