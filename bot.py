@@ -703,6 +703,9 @@ def _db_cursor(commit: bool = False):
 
 def init_db() -> None:
     """Create SQLite tables if they don't exist and enable WAL mode."""
+    with _db_cursor() as cur:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.fetchone()
     with _db_cursor(commit=True) as cur:
         cur.execute(
             """
@@ -866,10 +869,6 @@ def init_db() -> None:
             )
             """
         )
-        cur.execute("PRAGMA journal_mode=WAL")
-        # PRAGMA journal_mode returns one row. Consume it before the surrounding
-        # transaction commits, otherwise SQLite can report "SQL statements in progress".
-        cur.fetchone()
 
 
 def _safe_ai_metric_label(value: Any, *, default: str, limit: int) -> str:
