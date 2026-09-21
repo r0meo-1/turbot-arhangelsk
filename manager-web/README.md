@@ -14,7 +14,9 @@ Writes are never automatically retried: a network error can occur after a
 successful server commit. The interface asks the manager to inspect history
 before retrying. Buttons disable while their operation is pending.
 
-Remaining before release: browser tests with synthetic CRM data, actual iPhone
+Browser smoke on localhost with an isolated in-memory synthetic API passed: valid/invalid key, queue, request history, note persistence across reconnect, task creation with local time, logout clearing the visible data. At 375px viewport width, no horizontal overflow. This is Chromium evidence, not Safari or production database validation.
+
+Remaining before release: actual iPhone
 verification, quote/reaction editing, task completion, Telegram admin identity
 verification, deployment packaging review, CI and production revision checks.
 Do not claim issue #209 is complete or that this version has been deployed.
