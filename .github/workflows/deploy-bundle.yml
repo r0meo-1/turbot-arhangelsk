@@ -227,7 +227,11 @@ jobs:
             sleep 5
           done
 
-          for path in agent-extension/leads agent-extension/export.csv; do
+          for path in \
+            agent-extension/leads \
+            agent-extension/export.csv \
+            agent-extension/crm/today \
+            'agent-extension/crm/timeline?requestId=vk-lead-synthetic'; do
             status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "$base/$path")"
             if [[ "$status" != "401" ]]; then
               echo "$path returned HTTP $status without auth; expected 401" >&2
@@ -235,13 +239,21 @@ jobs:
             fi
           done
 
-          status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
-            -X POST "$base/agent-extension/status" \
-            -H 'Content-Type: application/json' \
-            --data '{}')"
-          if [[ "$status" != "401" ]]; then
-            echo "agent-extension/status returned HTTP $status without auth; expected 401" >&2
-            exit 1
-          fi
+          for path in \
+            agent-extension/status \
+            agent-extension/crm/task \
+            agent-extension/crm/quote \
+            agent-extension/crm/reaction \
+            agent-extension/crm/activity \
+            agent-extension/crm/outcome; do
+            status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+              -X POST "$base/$path" \
+              -H 'Content-Type: application/json' \
+              --data '{}')"
+            if [[ "$status" != "401" ]]; then
+              echo "$path returned HTTP $status without auth; expected 401" >&2
+              exit 1
+            fi
+          done
 
-          echo "Agent Desk production routes are deployed and fail closed without auth"
+          echo "Agent Desk 0.3.0 production routes are deployed and fail closed without auth"
