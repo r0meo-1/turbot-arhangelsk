@@ -56,6 +56,21 @@ PY
   done
 }
 
+install_systemd_units() {
+  local main_unit="$repo/deploy/turbot.service"
+  local vk_unit="$repo/deploy/vk-turbot.service"
+
+  if [[ ! -f "$main_unit" || ! -f "$vk_unit" ]]; then
+    echo "TurBot systemd unit files are missing from the deployed revision" >&2
+    return 1
+  fi
+
+  install -o root -g root -m 0644 "$main_unit" /etc/systemd/system/turbot.service
+  install -o root -g root -m 0644 "$vk_unit" /etc/systemd/system/vk-turbot.service
+  systemctl daemon-reload
+}
+
+
 # Run before cd so the forced-command deploy entrypoint can recover even when
 # a bad ownership/mode change made WorkingDirectory inaccessible to systemd.
 ensure_runtime_permissions
@@ -167,6 +182,7 @@ if manifest.exists():
 PY
     rm -f "$repo/.deployed-commit" "$repo/.deploy-manifest"
     tar -xzf "$backup" -C "$repo"
+    install_systemd_units 2>/dev/null || true
     systemctl restart turbot 2>/dev/null || true
     systemctl restart vk-turbot 2>/dev/null || true
   }
@@ -174,8 +190,7 @@ PY
 
   ensure_backup_and_restore_drill
   "$venv/pip" install --requirement "$repo/requirements.txt"
-  cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
-  systemctl daemon-reload
+  install_systemd_units
   systemctl restart turbot
   systemctl restart vk-turbot
   source_deployer="$(readlink -f "$repo/deploy/turbot-deploy.sh")"
@@ -547,8 +562,7 @@ PY
   # Keep the live unit in sync with the checked-out repository. This matters
   # when the WSGI entrypoint changes; merely daemon-reloading an old unit does
   # not update ExecStart, a delightful little systemd trap.
-  cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
-  systemctl daemon-reload
+  install_systemd_units
   systemctl restart turbot
   systemctl restart vk-turbot
 
@@ -593,8 +607,7 @@ rollback() {
   git reset --hard "$previous"
   rm -f "$repo/.deployed-commit" "$repo/.deploy-manifest"
   "$venv/pip" install --requirement requirements.txt
-  cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service 2>/dev/null || true
-  systemctl daemon-reload 2>/dev/null || true
+  install_systemd_units 2>/dev/null || true
   systemctl restart turbot
   systemctl restart vk-turbot 2>/dev/null || true
 }
@@ -635,8 +648,7 @@ PY
 git reset --hard "$target"
 rm -f "$repo/.deployed-commit" "$repo/.deploy-manifest"
 "$venv/pip" install --requirement requirements.txt
-cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service
-systemctl daemon-reload 2>/dev/null || true
+install_systemd_units
 systemctl restart turbot 2>/dev/null || true
 systemctl restart vk-turbot 2>/dev/null || true
 systemctl restart turbot-vk 2>/dev/null || true
