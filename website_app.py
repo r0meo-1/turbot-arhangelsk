@@ -48,6 +48,10 @@ from shared.travel_crm import (
 )
 
 app = _bot.app
+from shared.manager_web import manager_web
+
+if "manager_web" not in app.blueprints:
+    app.register_blueprint(manager_web)
 logger = logging.getLogger("turbot.website")
 
 _WEBSITE_SOURCE = os.getenv("WEBSITE_MDT_SOURCE", "Website Aprel Tour").strip() or "Website Aprel Tour"
