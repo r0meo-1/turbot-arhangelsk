@@ -76,7 +76,7 @@ def test_child_ages_preserves_whole_years_and_infants(text, expected):
 
 
 @pytest.mark.parametrize("text", [
-    "7+916123456", "++79161234567", "abc9161234567", "7.9161234567", None, 79161234567,
+    "7+916123456", "++79161234567", "+7916123456", "abc9161234567", "7.9161234567", None, 79161234567,
 ])
 def test_phone_rejects_malformed_numbers(text):
     assert validate_phone(text) == (False, None)
@@ -89,6 +89,49 @@ def test_phone_preserves_formatted_numbers(text):
 
 def test_phone_keeps_leading_eight_in_ten_digit_local_number():
     assert validate_phone("8001234567") == (True, "+78001234567")
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("грудничок 6 месяцев", [0]),
+    ("младенцу 8 месяцев", [0]),
+    ("МЛАДЕНЕЦ 18 мес.", [1]),
+    ("грудному ребенку 6 месяцев и 4 года", [0, 4]),
+])
+def test_child_ages_accepts_complete_infant_descriptions(text, expected):
+    assert parse_kids_ages(text) == (True, expected, "")
+
+
+@pytest.mark.parametrize("text", [
+    "грудничок -6 месяцев", "младенцу 8.5 месяцев",
+    "младенцу 8 месяцев 4 года", "младенцу 216 месяцев",
+])
+def test_child_ages_rejects_invalid_infant_descriptions(text):
+    ok, ages, problem = parse_kids_ages(text)
+    assert not ok and ages == [] and problem
+
+
+@pytest.mark.parametrize("dash", ["\u2010", "\u2011", "\u2012", "\u2013", "\u2014"])
+def test_phone_accepts_typographic_dashes(dash):
+    assert validate_phone(f"+7\u00a0916{dash}123{dash}45{dash}67") == (True, "+79161234567")
+    assert validate_phone(f"+7{dash}916{dash}123{dash}45{dash}67") == (True, "+79161234567")
+    assert validate_phone(f"7{dash}+9161234567") == (False, None)
+    assert validate_phone(f"+7{dash}916123456") == (False, None)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("2 взрослых человека", "2"), ("1 взрослый человек", "1"),
+    ("3 взр. чел.", "3"), ("50 взрослых человек", "50"),
+])
+def test_people_accepts_combined_count_labels(text, expected):
+    assert validate_people(text) == (True, expected)
+
+
+@pytest.mark.parametrize("text", [
+    "2 взрослых человека 1 ребенок", "2.5 взрослых человека",
+    "51 взрослый человек", "2 взрослых взрослых", "2 человека человека",
+])
+def test_people_rejects_ambiguous_combined_count_labels(text):
+    assert validate_people(text) == (False, None)
 
 
 @pytest.mark.parametrize("text,expected", [

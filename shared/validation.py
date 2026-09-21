@@ -43,6 +43,7 @@ def parse_kids_ages(text: str) -> Tuple[bool, List[int], str]:
             ages.append(0)
             continue
         months = re.fullmatch(
+            r"(?:(?:груднич(?:ок|ку)|младен(?:ец|цу)|грудн(?:ой|ому)\s+реб[её]н(?:ок|ку))\s+)?"
             r"([0-9]{1,3})\s*(?:месяц(?:а|ев)?|мес\.?)", chunk, re.I,
         )
         if months:
@@ -158,9 +159,11 @@ def validate_phone(text: str) -> Tuple[bool, Optional[str]]:
     """Validate a Russian phone number. Returns (ok, normalised E.164-like)."""
     if not isinstance(text, str) or len(text) > 100:
         return False, None
-    if not re.fullmatch(r"\+?[0-9][0-9\s()-]*", text.strip()):
+    if not re.fullmatch(r"\+?[0-9][0-9\s()\u2010-\u2014-]*", text.strip()):
         return False, None
     digits = re.sub(r"[^0-9]", "", text)
+    if text.strip().startswith("+") and len(digits) != 11:
+        return False, None
     if len(digits) == 11 and digits.startswith("8"):
         digits = "7" + digits[1:]
     if len(digits) == 11 and digits.startswith("7"):
@@ -178,7 +181,8 @@ def validate_people(text: str) -> Tuple[bool, Optional[str]]:
     if cleaned == "5+":
         return True, "5+"
     match = re.fullmatch(
-        r"([0-9]{1,2})(?:\s*(?:чел\.?|человек(?:а)?|взр\.?|взрослых|взрослый|взрослые))?",
+        r"([0-9]{1,2})(?:\s*(?:чел\.?|человек(?:а)?|"
+        r"(?:взр\.?|взрослых|взрослый|взрослые)(?:\s+(?:чел\.?|человек(?:а)?))?))?",
         cleaned, re.I,
     )
     if match and 1 <= int(match[1]) <= 50:
