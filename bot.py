@@ -3883,11 +3883,16 @@ def _prepare_review(chat_id: int, contact: str, info: Dict[str, Any]) -> None:
     _ask_review(chat_id, info)
 
 
-def _trip_details_text(info: Dict[str, Any]) -> str:
+def _budget_scope_text(info: Dict[str, Any]) -> str:
+    return "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
+
+
+def _trip_details_text(info: Dict[str, Any], *, html: bool = True) -> str:
     """Keep optional Mini App details visible throughout the lead handoff."""
     text = ""
     if info.get("nights") is not None:
-        text += f"🌙 Ночей: {_esc(info['nights'])}\n"
+        nights = _esc(info["nights"]) if html else str(info["nights"])
+        text += f"🌙 Ночей: {nights}\n"
     if "direct_only" in info:
         flight = "только прямой, если доступен" if info["direct_only"] else "прямой или с пересадкой"
         text += f"✈️ Перелёт: {flight}\n"
@@ -3905,7 +3910,7 @@ def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
         f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
         f"{_trip_details_text(info)}"
         f"👥 Состав: {_esc(_party_text(info))}\n"
-        f"💰 Бюджет: {'от' if info.get('budget_open_ended') else 'до'} {budget} ₽ на человека\n"
+        f"💰 Бюджет: {'от' if info.get('budget_open_ended') else 'до'} {budget} ₽ {_budget_scope_text(info)}\n"
         f"📞 Связь: {_esc(info.get('phone', '?'))}\n\n"
         "Заявка ещё не отправлена. Если всё верно, нажмите «Отправить менеджеру».",
         parse_mode="HTML",
@@ -4083,7 +4088,7 @@ def _confirm_to_user(chat_id: int, info: Dict[str, Any], phone: str) -> None:
         + f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
         f"{_trip_details_text(info)}"
         f"👥 Состав: {_esc(_party_text(info))}\n"
-        f"💰 Бюджет: до {_esc(info.get('budget', '?'))} ₽ на человека\n"
+        f"💰 Бюджет: {'от' if info.get('budget_open_ended') else 'до'} {_esc(info.get('budget', '?'))} ₽ {_budget_scope_text(info)}\n"
         f"📞 Связь: {_esc(phone)}\n\n"
         "Спасибо, что выбрали нас 🌺",
         reply_markup=hide_keyboard(),
@@ -4127,7 +4132,7 @@ def _format_lead_notify_text(
         + f"📅 {_esc(info.get('dates', '?'))}\n"
         f"{_trip_details_text(info)}"
         f"👥 {_esc(_party_text(info))}\n"
-        f"💰 {'от' if info.get('budget_open_ended') else 'до'} {_esc(info.get('budget', '?'))} ₽ на человека\n"
+        f"💰 {'от' if info.get('budget_open_ended') else 'до'} {_esc(info.get('budget', '?'))} ₽ {_budget_scope_text(info)}\n"
         f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
         f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}\n\n"
         f"⚡ SLA: {_esc(MANAGER_SLA_HINT)}\n"
@@ -4190,8 +4195,9 @@ def _notify_admin(
         + f"📍 {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
         + f"📅 {info.get('dates', '?')}\n"
+        + _trip_details_text(info, html=False)
         + f"👥 {_party_text(info)}\n"
-        + f"💰 {info.get('budget', '?')} ₽\n"
+        + f"💰 {'от' if info.get('budget_open_ended') else 'до'} {info.get('budget', '?')} ₽ {_budget_scope_text(info)}\n"
         + f"📞 Связь клиента: {phone}\n\n"
         + "🔎 Подбор менеджеру:\n"
         + f"Tourvisor PRO: {MANAGER_TOURVISOR_URL}\n"
@@ -4231,9 +4237,11 @@ def _notify_admin(
                 f"ID: {chat_id}\n"
                 + (f"📊 Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
                 + f"📍 {info.get('destination', '?')}\n"
-                f"📅 {info.get('dates', '?')}\n"
-                f"👥 {_party_text(info)}\n"
-                f"💰 {info.get('budget', '?')}₽\n"
+                + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+                + f"📅 {info.get('dates', '?')}\n"
+                + _trip_details_text(info, html=False)
+                + f"👥 {_party_text(info)}\n"
+                f"💰 {'от' if info.get('budget_open_ended') else 'до'} {info.get('budget', '?')} ₽ {_budget_scope_text(info)}\n"
                 f"📞 {phone}\n\n"
                 f"Ответить: /send {chat_id}"
             )

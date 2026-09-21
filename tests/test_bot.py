@@ -2987,3 +2987,31 @@ def test_manager_quick_reply_is_embedded_in_telegram_lead_card():
     assert "💬 Быстрый ответ:" in text
     assert "основные параметры уже сохранены" in text
     assert bot.LEAD_OWNER_NAME in text
+
+
+@pytest.mark.parametrize("scope, label", [("total", "на всю поездку"), ("per_person", "на человека"), (None, "на человека")])
+@pytest.mark.parametrize("direct_only", [True, False])
+@pytest.mark.parametrize("open_ended", [True, False])
+def test_request_details_reach_owner_and_fallback(monkeypatch, scope, label, direct_only, open_ended):
+    sent, owner = [], []
+    def capture(cid, text, **kwargs):
+        sent.append((cid, text, kwargs))
+        return SimpleNamespace(status_code=400 if cid == 999 and kwargs.get("parse_mode") else 200)
+    monkeypatch.setattr(bot, "send_message", capture)
+    monkeypatch.setattr(bot, "send_lead_owner_vk", lambda text: owner.append(text) or True)
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", False)
+    info = dict(destination="Таиланд", origin="Архангельск", dates="2099-10-15",
+                nights=10, people="2", kids=0, budget=300000,
+                budget_scope=scope, direct_only=direct_only,
+                budget_open_ended=open_ended, review_token="test-review", phone="@test")
+    bot._ask_review(88009, info)
+    bot._confirm_to_user(88009, info, "@test")
+    assert bot._notify_admin(88009, info, "@test", "Test") is True
+    assert len(sent) == 4  # review, confirmation, HTML notification, plain fallback
+    assert len(owner) == 1
+    for text in [entry[1] for entry in sent] + owner:
+        assert "Ночей: 10" in text
+        assert "Перелёт: " + ("только прямой, если доступен" if direct_only else "прямой или с пересадкой") in text
+        assert "Архангельск" in text
+        assert f"{'от' if open_ended else 'до'} 300000 ₽ {label}" in text.replace("300 000", "300000")
