@@ -81,3 +81,20 @@ def test_deploy_bootstraps_code_before_protected_config():
     bootstrap = 'root@${{ secrets.DEPLOY_HOST }} true </dev/null'
     assert bootstrap in source
     assert source.index(bootstrap) < source.index("TURBOT_DEPLOY_CONFIG_V4")
+
+
+def test_deployer_repairs_only_live_sqlite_state_files():
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert '"$repo/bot_state.sqlite" "$repo/vk_bot_state.sqlite"' in source
+    assert 'chown turbot:turbot "$state_file"' in source
+    assert 'chmod 0600 "$state_file"' in source
+    assert 'chown -R turbot:turbot "$repo"' not in source
+
+
+def test_git_deploy_prints_vk_diagnostics_before_rollback():
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert "TurBot VK verification failed; collecting bounded diagnostics" in source
+    assert "systemctl status vk-turbot --no-pager -l || true" in source
+    assert "journalctl -u vk-turbot -n 120 --no-pager || true" in source
