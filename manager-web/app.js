@@ -2,10 +2,13 @@
 const $ = id => document.getElementById(id);
 let activeRequestId = '';
 let token = '', generation = 0, detailGeneration = 0;
+let demoMode = false;
 const taskNames = {build_selection:'Подбор',send_options:'Отправить варианты',call_back:'Позвонить',flights:'Авиабилеты',visa:'Виза',documents:'Документы',check_price:'Проверить цену',next_contact:'Следующий контакт'};
 function say(message){$('status').textContent=message;}
 function clearData(){activeRequestId='';for(const id of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(id).value='';for(const id of ['tasks','summary','quotes','activities'])$(id).replaceChildren();$('detail').hidden=true;}
 function logout(){$('refresh').disabled=false;generation++;detailGeneration++;token='';$('token').value='';clearData();$('desk').hidden=true;$('login').hidden=false;say('Вы вышли.');}
+function showDemo(){demoMode=true;generation++;detailGeneration++;clearData();$('login').hidden=true;$('desk').hidden=false;$('refresh').textContent='Обновить пример';$('logout').textContent='Закрыть пример';$('status').textContent='Демо-режим: синтетические данные, CRM не подключена.';renderDemo();}
+function renderDemo(){const item=document.createElement('article');paragraph(item,'Следующий контакт · ДЕМО: Кипр · Москва · 10 ночей · 2 взрослых + дети 3, 9 · 150 000 ₽');const button=document.createElement('button');button.textContent='Открыть карточку';button.addEventListener('click',()=>{activeRequestId='demo';$('detail').hidden=false;for(const id of ['summary','quotes','activities'])$(id).replaceChildren();paragraph($('summary'),'ДЕМО: Кипр · 2 взрослых · дети: 3, 9 · 10 ночей · бюджет 150 000 RUB');paragraph($('quotes'),'ДЕМО отель · 150000 RUB · AI · пример предложения');paragraph($('activities'),'Пример заметки: уточнить прямой перелёт.');});item.append(button);$('tasks').append(item);}
 async function api(path,body){
  const response=await fetch('/agent-extension/crm/'+path,{method:body?'POST':'GET',body:body?JSON.stringify(body):undefined,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},cache:'no-store',credentials:'omit'});
  if(response.status===401)throw Error('Ключ доступа не принят. Выйдите и проверьте ключ.');
@@ -27,6 +30,7 @@ async function openRequest(id){
  }catch(e){if(run===generation&&detailRun===detailGeneration)say(e.message);}
 }
 async function refresh(){
+ if(demoMode){clearData();renderDemo();say('Демо обновлено; CRM не подключена.');return;}
  const run=++generation;detailGeneration++;clearData();$('refresh').disabled=true;say('Загрузка очереди…');
  try{const query=new URLSearchParams({now:new Date().toISOString(),tzOffsetMinutes:String(new Date().getTimezoneOffset()),limit:'100'});const data=await api('today?'+query);if(run!==generation)return;
  $('login').hidden=true;$('desk').hidden=false;$('token').value='';
@@ -35,10 +39,12 @@ async function refresh(){
  }catch(e){if(run===generation)say(e.message);}finally{if(run===generation)$('refresh').disabled=false;}
 }
 $('connect').addEventListener('click',async()=>{token=$('token').value.trim();if(!token){say('Введите ключ доступа.');return;}$('connect').disabled=true;try{await refresh();}finally{$('connect').disabled=false;}});
+$('demo').addEventListener('click',showDemo);
 $('refresh').addEventListener('click',refresh);$('logout').addEventListener('click',logout);
 window.addEventListener('pagehide',logout);
 
 async function saveEntry(kind){
+ if(demoMode){say('Демо-режим только для просмотра: изменения не сохраняются.');return;}
  const id=activeRequestId,run=generation,detailRun=detailGeneration;
  if(!id)return;
  const button=$(kind==='activity'?'saveNote':'saveTask');
@@ -73,6 +79,7 @@ function renderReaction(item,quote,events,requestId){
  button.addEventListener('click',()=>writeQuote('reaction',{requestId,quoteId:quote.quote_id,reaction:select.value},button));item.append(label,button);
 }
 async function writeQuote(path,body,button){
+ if(demoMode){say('Демо-режим только для просмотра: изменения не сохраняются.');return;}
  const run=generation,detailRun=detailGeneration;button.disabled=true;say('Сохранение…');
  try{await api(path,body);if(run!==generation||detailRun!==detailGeneration)return;
   if(path==='quote'){for(const id of ['hotel','price','operator','meal','carrier'])$(id).value='';}
