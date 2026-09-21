@@ -298,7 +298,13 @@ function renderToday(tasks) {
 }
 
 async function loadToday() {
-  const data = await crmFetch(CRM_TODAY_API);
+  const now = new Date();
+  const params = new URLSearchParams({
+    now: now.toISOString(),
+    tzOffsetMinutes: String(now.getTimezoneOffset()),
+    limit: "100"
+  });
+  const data = await crmFetch(CRM_TODAY_API + "?" + params.toString());
   renderToday(data.tasks || []);
 }
 
@@ -490,13 +496,14 @@ async function addActivity() {
 async function addTask() {
   if (!activeRequestId) return setStatus("Сначала открой заявку.");
   const dueAt = $("taskDueAt").value;
+  if (!dueAt) return setStatus("Укажи время задачи.");
   try {
     await crmFetch(CRM_TASK_API, {
       method: "POST",
       body: JSON.stringify({
         requestId: activeRequestId,
         type: $("taskType").value,
-        dueAt,
+        dueAt: new Date(dueAt).toISOString(),
         priority: 2,
         note: $("taskNote").value.trim()
       })
