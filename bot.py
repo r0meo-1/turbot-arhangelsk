@@ -28,6 +28,7 @@ from shared.constants import (
     STATE_CONTACT,
     STATE_REVIEW,
     STATE_DATES,
+    STATE_NIGHTS,
     STATE_DESTINATION,
     STATE_ORIGIN,
     STATE_PEOPLE,
@@ -511,6 +512,7 @@ CB_BUDGET_PREFIX = "bd:"
 CB_CONTACT_TG = "ct:tg"
 CB_CONTACT_PHONE = "ct:phone"
 CB_CONTACT_VK = "ct:vk"
+CB_NIGHTS_PREFIX = "nt:"
 CB_BACK = "nav:back"
 CB_CANCEL = "nav:cancel"
 CB_REVIEW_PREFIX = "rv:"
@@ -2412,6 +2414,14 @@ def kb_dates() -> str:
     return inline_keyboard(rows)
 
 
+def kb_nights() -> str:
+    return inline_keyboard([
+        [_inline_btn(f"{n} ночей", f"{CB_NIGHTS_PREFIX}{n}") for n in (7, 10, 14)],
+        [_inline_btn("✏️ Своя длительность", f"{CB_NIGHTS_PREFIX}custom")],
+        [_inline_btn(BACK_BUTTON_TEXT, CB_BACK), _inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],
+    ])
+
+
 def kb_people() -> str:
     """Inline: party size + back/cancel."""
     opts = PEOPLE_OPTIONS
@@ -3518,6 +3528,44 @@ def _ask_dates(chat_id: int) -> None:
     )
 
 
+def _ask_nights(chat_id: int) -> None:
+    send_message(
+        chat_id,
+        "🌙 <b>На сколько ночей планируете поездку?</b>\n\n"
+        "Выберите вариант или напишите число от 1 до 28 — например: 9.",
+        reply_markup=kb_nights(), parse_mode="HTML",
+    )
+
+
+def _duration_from_dates(raw: str) -> Optional[int]:
+    if raw in {value for _, value in DATE_PRESETS}:
+        return None
+    depart, ret = _tutu.resolve_dates(raw)
+    if not depart or not ret:
+        return None
+    try:
+        days = (datetime.strptime(ret, "%Y-%m-%d") - datetime.strptime(depart, "%Y-%m-%d")).days
+    except (TypeError, ValueError):
+        return None
+    return days if 4 <= days <= 28 else None
+
+
+def _step_nights(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    raw = (text or "").strip()
+    if raw.startswith(CB_NIGHTS_PREFIX):
+        raw = raw[len(CB_NIGHTS_PREFIX):]
+    if raw == "custom":
+        _ask_nights(chat_id)
+        return
+    match = re.fullmatch(r"([0-9]{1,2})(?:\s*(?:ночь|ночи|ночей))?", raw, re.I)
+    if not match or not 1 <= int(match[1]) <= 28:
+        send_message(chat_id, "Укажите целое число от 1 до 28 ночей, например: 9.", reply_markup=kb_nights())
+        return
+    info["nights"] = int(match[1])
+    info["state"] = STATE_PEOPLE
+    _ask_people(chat_id)
+
+
 def _ask_people(chat_id: int) -> None:
     send_message(
         chat_id,
@@ -3671,9 +3719,16 @@ def _step_dates(chat_id: int, text: str, message: Dict[str, Any], info: Dict[str
         return
 
     info["dates"] = raw
-    info["state"] = STATE_PEOPLE
+    duration = _duration_from_dates(raw)
     send_message(chat_id, f"📅 Понял: {_esc(_human_dates(depart, ret))}")
-    _ask_people(chat_id)
+    if duration is not None:
+        info["nights"] = duration
+        info["state"] = STATE_PEOPLE
+        _ask_people(chat_id)
+    else:
+        info.pop("nights", None)
+        info["state"] = STATE_NIGHTS
+        _ask_nights(chat_id)
 
 
 def _human_dates(depart: str, ret: Optional[str] = None) -> str:
@@ -3963,6 +4018,7 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
     STATE_DESTINATION: _step_destination,
     STATE_ORIGIN:      _step_origin,
     STATE_DATES:       _step_dates,
+    STATE_NIGHTS:      _step_nights,
     STATE_PEOPLE:      _step_people,
     # Вопрос про количество детей убран; сессии, стоящие на нём, отвечают на
     # следующий вопрос — про возрасты.
@@ -3982,7 +4038,8 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
 PREVIOUS_STATE: Dict[str, str] = {
     STATE_ORIGIN:      STATE_DESTINATION,
     STATE_DATES:       STATE_ORIGIN,
-    STATE_PEOPLE:      STATE_DATES,
+    STATE_NIGHTS:      STATE_DATES,
+    STATE_PEOPLE:      STATE_NIGHTS,
     STATE_KIDS:        STATE_PEOPLE,
     STATE_KIDS_AGES:   STATE_PEOPLE,
     STATE_INFANTS:     STATE_PEOPLE,
@@ -4008,6 +4065,8 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
         _ask_origin(chat_id)
     elif state == STATE_DATES:
         _ask_dates(chat_id)
+    elif state == STATE_NIGHTS:
+        _ask_nights(chat_id)
     elif state == STATE_PEOPLE:
         _ask_people(chat_id)
     elif state in (STATE_KIDS, STATE_KIDS_AGES, STATE_INFANTS):
@@ -4037,6 +4096,8 @@ def _go_back(chat_id: int) -> None:
     info = user_data.get(chat_id, {})
     state = info.get("state")
     previous = PREVIOUS_STATE.get(state)
+    if state == STATE_PEOPLE and _duration_from_dates(info.get("dates", "")) is not None:
+        previous = STATE_DATES
     if previous is None:
         send_message(
             chat_id,
@@ -4923,6 +4984,14 @@ def _process_callback(data: Dict[str, Any]) -> None:
             send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
             return
         _step_dates(chat_id, cb_data, synthetic, info)
+        _mark_dirty(chat_id, user=False)
+        return
+
+    if cb_data.startswith(CB_NIGHTS_PREFIX):
+        if info.get("state") != STATE_NIGHTS:
+            send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
+            return
+        _step_nights(chat_id, cb_data, synthetic, info)
         _mark_dirty(chat_id, user=False)
         return
 
