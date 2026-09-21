@@ -6,17 +6,21 @@ After=network.target
 Type=simple
 User=turbot
 Group=turbot
-WorkingDirectory=/opt/turbot
+# Keep systemd itself in a known-readable directory so ExecStartPre can repair
+# /opt/turbot after an accidental ownership/mode change.
+WorkingDirectory=/
 # See turbot.service: ProtectHome hides /home, gunicorn wants a HOME.
 Environment=HOME=/opt/turbot
 EnvironmentFile=/opt/turbot/.env
+ExecStartPre=+/usr/bin/chown turbot:turbot /opt/turbot
+ExecStartPre=+/usr/bin/chmod 0750 /opt/turbot
 # shared.vk_runtime installs the restart-safe follow-up guard before the
 # background follow-up worker reaches its first scheduled pass.
 # Explicitly disable Gunicorn's implicit ./gunicorn.conf.py loading here.
 # That config belongs to the Telegram/Website service and its post_worker_init
 # imports website_app -> bot, which would start a second Telegram getUpdates
 # poller inside the VK worker and cause permanent Telegram 409 conflicts.
-ExecStart=/opt/turbot/venv/bin/gunicorn shared.vk_runtime:app \
+ExecStart=/opt/turbot/venv/bin/gunicorn --chdir /opt/turbot shared.vk_runtime:app \
     --config /dev/null \
     --bind 127.0.0.1:5100 \
     --workers 1 \
