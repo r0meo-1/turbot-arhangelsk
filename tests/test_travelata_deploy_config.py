@@ -118,3 +118,17 @@ def test_git_deploy_prints_vk_diagnostics_before_explicit_rollback():
     unhealthy = source.rsplit('echo "TurBot did not become healthy" >&2', 1)[1]
     assert "rollback_and_fail" in unhealthy
     assert "\nexit 1" not in unhealthy
+
+def test_deployer_installs_main_and_vk_systemd_units_together():
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    helper = source.split("install_systemd_units() {", 1)[1].split("\n}", 1)[0]
+    assert '"$repo/deploy/turbot.service"' in helper
+    assert '"$repo/deploy/vk-turbot.service"' in helper
+    assert "/etc/systemd/system/turbot.service" in helper
+    assert "/etc/systemd/system/vk-turbot.service" in helper
+    assert "systemctl daemon-reload" in helper
+
+    assert source.count("install_systemd_units") >= 5
+    assert 'cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service' not in source
+
