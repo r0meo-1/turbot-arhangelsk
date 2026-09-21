@@ -81,3 +81,40 @@ def test_deploy_bootstraps_code_before_protected_config():
     bootstrap = 'root@${{ secrets.DEPLOY_HOST }} true </dev/null'
     assert bootstrap in source
     assert source.index(bootstrap) < source.index("TURBOT_DEPLOY_CONFIG_V4")
+
+
+def test_deployer_repairs_only_live_sqlite_state_files():
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    repair = source.split("ensure_runtime_permissions() {", 1)[1].split("\n}", 1)[0]
+    assert '"$repo/bot_state.sqlite"' in repair
+    assert '"$repo/vk_bot_state.sqlite"' in repair
+    assert '"$repo/bot_state.sqlite-wal"' in repair
+    assert '"$repo/vk_bot_state.sqlite-shm"' in repair
+    assert 'os.O_NOFOLLOW' in repair
+    assert 'stat.S_ISREG' in repair
+    assert 'os.fchown(fd, user.pw_uid, group.gr_gid)' in repair
+    assert 'os.fchmod(fd, 0o600)' in repair
+    assert "Refusing symlinked SQLite state path" in repair
+    assert 'chown turbot:turbot "$state_file"' not in repair
+    assert "chown -R" not in repair
+
+
+def test_git_deploy_prints_vk_diagnostics_before_explicit_rollback():
+    source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    message = "TurBot VK verification failed; collecting bounded diagnostics"
+    status = "systemctl status vk-turbot --no-pager -l || true"
+    journal = "journalctl -u vk-turbot -n 120 --no-pager || true"
+    start = source.index(message)
+    assert source.index(status, start) < source.index("rollback_and_fail", start)
+    assert source.index(journal, start) < source.index("rollback_and_fail", start)
+
+    helper = source.split("rollback_and_fail() {", 1)[1].split("\n}", 1)[0]
+    assert "trap - ERR" in helper
+    assert "rollback || true" in helper
+    assert "exit 1" in helper
+
+    unhealthy = source.rsplit('echo "TurBot did not become healthy" >&2', 1)[1]
+    assert "rollback_and_fail" in unhealthy
+    assert "\nexit 1" not in unhealthy

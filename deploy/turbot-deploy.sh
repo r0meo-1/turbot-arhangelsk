@@ -12,10 +12,48 @@ ensure_runtime_permissions() {
     return 1
   fi
 
-  # The services run as the unprivileged turbot user. Repair only the app
-  # directory itself here; database/.env permissions stay intentionally tight.
+  # The services run as the unprivileged turbot user. Repair the app
+  # directory and only the live SQLite state files/sidecars. Do not recursively
+  # chown the tree: backups intentionally have a separate root-owned policy.
   chown turbot:turbot "$repo"
   chmod 0750 "$repo"
+
+  local state_file
+  for state_file in "$repo/bot_state.sqlite" "$repo/bot_state.sqlite-wal" "$repo/bot_state.sqlite-shm" "$repo/vk_bot_state.sqlite" "$repo/vk_bot_state.sqlite-wal" "$repo/vk_bot_state.sqlite-shm"; do
+    python3 - "$state_file" <<'PY'
+import errno
+import grp
+import os
+import pwd
+import stat
+import sys
+
+path = sys.argv[1]
+if not hasattr(os, "O_NOFOLLOW"):
+    raise SystemExit("Refusing state repair without O_NOFOLLOW support")
+
+flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags)
+except FileNotFoundError:
+    raise SystemExit(0)
+except OSError as exc:
+    if exc.errno == errno.ELOOP:
+        raise SystemExit(f"Refusing symlinked SQLite state path: {path}")
+    raise
+
+try:
+    mode = os.fstat(fd).st_mode
+    if not stat.S_ISREG(mode):
+        raise SystemExit(f"Refusing non-regular SQLite state path: {path}")
+    user = pwd.getpwnam("turbot")
+    group = grp.getgrnam("turbot")
+    os.fchown(fd, user.pw_uid, group.gr_gid)
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
+  done
 }
 
 # Run before cd so the forced-command deploy entrypoint can recover even when
@@ -562,6 +600,14 @@ rollback() {
 }
 trap rollback ERR
 
+rollback_and_fail() {
+  # Explicit exit does not trigger ERR. Disable the trap before an explicit
+  # best-effort rollback so a rollback command cannot recurse into the trap.
+  trap - ERR
+  rollback || true
+  exit 1
+}
+
 print_telegram_username() {
   # Resolve only the public @username via Telegram getMe. The BOT_TOKEN stays
   # inside the Python process and is never printed or placed in a shell argv.
@@ -603,13 +649,21 @@ cp "$repo/deploy/turbot-deploy.sh" /root/turbot-deploy.sh 2>/dev/null || true
 for _ in {1..12}; do
   if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/health >/dev/null; then
     chmod +x "$repo/deploy/verify-vk-miniapp.sh"
-    "$repo/deploy/verify-vk-miniapp.sh"
-    print_telegram_username
-    git rev-parse HEAD
-    exit 0
+    if "$repo/deploy/verify-vk-miniapp.sh"; then
+      print_telegram_username
+      git rev-parse HEAD
+      exit 0
+    fi
+
+    echo "TurBot VK verification failed; collecting bounded diagnostics" >&2
+    systemctl status vk-turbot --no-pager -l || true
+    journalctl -u vk-turbot -n 120 --no-pager || true
+    rollback_and_fail
   fi
   sleep 2
 done
 
 echo "TurBot did not become healthy" >&2
-exit 1
+systemctl status turbot --no-pager -l || true
+journalctl -u turbot -n 80 --no-pager || true
+rollback_and_fail
