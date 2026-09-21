@@ -32,3 +32,13 @@ def test_nginx_access_logs_use_only_safe_fields(name, servers):
                       'server_protocol', 'status', 'body_bytes_sent'}
     assert {'request_method', 'uri', 'status'} <= fields
     assert config.count('access_log /var/log/nginx/access.log turbot_safe;') == servers
+
+
+def test_vk_systemd_repairs_runtime_directory_before_gunicorn_chdir():
+    unit = (ROOT / "deploy/vk-turbot.service").read_text()
+
+    assert "WorkingDirectory=/" in unit
+    assert "ExecStartPre=+/usr/bin/chown turbot:turbot /opt/turbot" in unit
+    assert "ExecStartPre=+/usr/bin/chmod 0750 /opt/turbot" in unit
+    assert "--chdir /opt/turbot shared.vk_runtime:app" in unit
+    assert unit.index("ExecStartPre=+/usr/bin/chown") < unit.index("ExecStart=")
