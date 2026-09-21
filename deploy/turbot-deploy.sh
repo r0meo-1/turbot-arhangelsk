@@ -13,17 +13,46 @@ ensure_runtime_permissions() {
   fi
 
   # The services run as the unprivileged turbot user. Repair the app
-  # directory and only the two live SQLite state files. Do not recursively
+  # directory and only the live SQLite state files/sidecars. Do not recursively
   # chown the tree: backups intentionally have a separate root-owned policy.
   chown turbot:turbot "$repo"
   chmod 0750 "$repo"
 
   local state_file
   for state_file in "$repo/bot_state.sqlite" "$repo/bot_state.sqlite-wal" "$repo/bot_state.sqlite-shm" "$repo/vk_bot_state.sqlite" "$repo/vk_bot_state.sqlite-wal" "$repo/vk_bot_state.sqlite-shm"; do
-    if [[ -f "$state_file" ]]; then
-      chown turbot:turbot "$state_file"
-      chmod 0600 "$state_file"
-    fi
+    python3 - "$state_file" <<'PY'
+import errno
+import grp
+import os
+import pwd
+import stat
+import sys
+
+path = sys.argv[1]
+if not hasattr(os, "O_NOFOLLOW"):
+    raise SystemExit("Refusing state repair without O_NOFOLLOW support")
+
+flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags)
+except FileNotFoundError:
+    raise SystemExit(0)
+except OSError as exc:
+    if exc.errno == errno.ELOOP:
+        raise SystemExit(f"Refusing symlinked SQLite state path: {path}")
+    raise
+
+try:
+    mode = os.fstat(fd).st_mode
+    if not stat.S_ISREG(mode):
+        raise SystemExit(f"Refusing non-regular SQLite state path: {path}")
+    user = pwd.getpwnam("turbot")
+    group = grp.getgrnam("turbot")
+    os.fchown(fd, user.pw_uid, group.gr_gid)
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
   done
 }
 
@@ -571,6 +600,14 @@ rollback() {
 }
 trap rollback ERR
 
+rollback_and_fail() {
+  # Explicit exit does not trigger ERR. Disable the trap before an explicit
+  # best-effort rollback so a rollback command cannot recurse into the trap.
+  trap - ERR
+  rollback || true
+  exit 1
+}
+
 print_telegram_username() {
   # Resolve only the public @username via Telegram getMe. The BOT_TOKEN stays
   # inside the Python process and is never printed or placed in a shell argv.
@@ -621,7 +658,7 @@ for _ in {1..12}; do
     echo "TurBot VK verification failed; collecting bounded diagnostics" >&2
     systemctl status vk-turbot --no-pager -l || true
     journalctl -u vk-turbot -n 120 --no-pager || true
-    break
+    rollback_and_fail
   fi
   sleep 2
 done
@@ -629,4 +666,4 @@ done
 echo "TurBot did not become healthy" >&2
 systemctl status turbot --no-pager -l || true
 journalctl -u turbot -n 80 --no-pager || true
-exit 1
+rollback_and_fail
