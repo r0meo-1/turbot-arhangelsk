@@ -208,6 +208,14 @@ function formatRub(value) {
   return new Intl.NumberFormat("ru-RU").format(Number(value || 0)) + " ₽";
 }
 
+function crmDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  const hasZone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+  const date = new Date(hasZone ? raw : raw + "Z");
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 const TASK_LABELS = {
   build_selection: "Сделать подбор",
   send_options: "Отправить варианты",
@@ -260,9 +268,8 @@ function renderToday(tasks) {
     const title = document.createElement("strong");
     title.textContent = TASK_LABELS[task.type] || task.type;
     const due = document.createElement("small");
-    due.textContent = task.dueAt
-      ? new Date(task.dueAt).toLocaleString("ru-RU")
-      : "";
+    const dueDate = crmDate(task.dueAt);
+    due.textContent = dueDate ? dueDate.toLocaleString("ru-RU") : "";
     head.append(title, due);
 
     const meta = document.createElement("p");
@@ -373,7 +380,7 @@ function renderTimeline(timeline) {
       quote.operator,
       quote.carrier,
       quote.meal_plan,
-      quote.calculated_at ? new Date(quote.calculated_at).toLocaleString("ru-RU") : ""
+      crmDate(quote.calculated_at)?.toLocaleString("ru-RU") || ""
     ].filter(Boolean).join(" · ");
 
     const reaction = document.createElement("select");
@@ -411,7 +418,7 @@ function renderTimeline(timeline) {
     const row = document.createElement("p");
     row.className = "activity-row";
     row.textContent = [
-      activity.created_at ? new Date(activity.created_at).toLocaleString("ru-RU") : "",
+      crmDate(activity.created_at)?.toLocaleString("ru-RU") || "",
       activity.summary
     ].filter(Boolean).join(" · ");
     activityBox.append(row);
