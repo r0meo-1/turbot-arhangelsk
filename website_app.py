@@ -1230,17 +1230,21 @@ if "agent_extension_crm_timeline" not in app.view_functions:
             return _agent_json_response(
                 {"ok": False, "error": "invalid_request_id"}, 400
             )
-        with _bot._db_cursor() as cur:
-            timeline = _travel_crm_store.load_timeline(
-                cur.connection, request_id
-            )
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store) as cur:
+            if cur is None:
+                timeline = None
+            else:
+                timeline = _travel_crm_store.load_timeline(
+                    cur.connection, request_id
+                )
+                payload = timeline_to_dict(timeline) if timeline is not None else None
+                if payload is not None:
+                    payload["client"] = _agent_crm_client_summary(cur, request_id)
         if timeline is None:
             return _agent_json_response(
                 {"ok": False, "error": "request_not_found"}, 404
             )
-        payload = timeline_to_dict(timeline)
-        with _bot._db_cursor() as cur:
-            payload["client"] = _agent_crm_client_summary(cur, request_id)
         return _agent_json_response({
             "ok": True,
             "timeline": payload,
