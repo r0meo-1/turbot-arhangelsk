@@ -1133,6 +1133,50 @@ def _agent_crm_client_summary(cur: Any, request_id: str) -> Dict[str, Any]:
     return {"leadId": lead_id, "name": "", "phone": "", "username": ""}
 
 
+def _agent_crm_today_items(store: str, end_of_day: datetime):
+    result = []
+    with _agent_crm_cursor(store) as cur:
+        if cur is None:
+            return result
+        try:
+            tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)
+        except sqlite3.OperationalError:
+            logger.warning("Agent CRM %s store has no readable CRM task schema", store)
+            return result
+
+        for task in tasks:
+            timeline = _travel_crm_store.load_timeline(cur.connection, task.request_id)
+            if timeline is None:
+                continue
+            trip = timeline.request
+            result.append((
+                task.priority,
+                task.due_at,
+                task.created_at,
+                {
+                    "taskId": task.task_id,
+                    "requestId": task.request_id,
+                    "type": task.type.value,
+                    "priority": task.priority,
+                    "dueAt": task.due_at.replace(
+                        tzinfo=timezone.utc
+                    ).isoformat().replace("+00:00", "Z"),
+                    "note": task.note,
+                    "channel": trip.attribution.channel,
+                    "sourceTag": trip.attribution.source_tag,
+                    "destination": trip.primary_destination,
+                    "origin": trip.departure_city,
+                    "dates": trip.dates_text,
+                    "adults": trip.adults,
+                    "childAges": [child.age for child in trip.children],
+                    "budget": trip.budget_amount,
+                    "budgetScope": trip.budget_scope.value,
+                    "client": _agent_crm_client_summary(cur, task.request_id),
+                },
+            ))
+    return result
+
+
 if "agent_extension_crm_today" not in app.view_functions:
 
     @app.route("/agent-extension/crm/today", methods=["GET", "OPTIONS"])
@@ -1163,34 +1207,11 @@ if "agent_extension_crm_today" not in app.view_functions:
         )
         end_of_day = local_end_of_day + timedelta(minutes=tz_offset_minutes)
 
-        with _bot._db_cursor() as cur:
-            tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)
-            items = []
-            for task in tasks[:limit]:
-                timeline = _travel_crm_store.load_timeline(
-                    cur.connection, task.request_id
-                )
-                if timeline is None:
-                    continue
-                trip = timeline.request
-                items.append({
-                    "taskId": task.task_id,
-                    "requestId": task.request_id,
-                    "type": task.type.value,
-                    "priority": task.priority,
-                    "dueAt": task.due_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "note": task.note,
-                    "channel": trip.attribution.channel,
-                    "sourceTag": trip.attribution.source_tag,
-                    "destination": trip.primary_destination,
-                    "origin": trip.departure_city,
-                    "dates": trip.dates_text,
-                    "adults": trip.adults,
-                    "childAges": [child.age for child in trip.children],
-                    "budget": trip.budget_amount,
-                    "budgetScope": trip.budget_scope.value,
-                    "client": _agent_crm_client_summary(cur, task.request_id),
-                })
+        rows = _agent_crm_today_items("main", end_of_day)
+        if not _agent_crm_vk_is_main():
+            rows.extend(_agent_crm_today_items("vk", end_of_day))
+        rows.sort(key=lambda item: (item[0], item[1], item[2], item[3]["requestId"]))
+        items = [item[3] for item in rows[:limit]]
         return _agent_json_response({"ok": True, "tasks": items})
 
 
