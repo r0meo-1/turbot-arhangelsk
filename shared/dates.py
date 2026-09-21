@@ -30,7 +30,7 @@ def parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
     Handles "15-22 июня", "15-22 июня 2026", "15 июня - 22 июля",
     "с 1 по 15 августа". Returns (None, None) if parsing fails.
     """
-    if not text:
+    if not isinstance(text, str) or not text or len(text) > 200:
         return None, None
 
     now = time.localtime()
@@ -54,8 +54,8 @@ def parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) < 2:
         single = re.fullmatch(
-            r"\s*(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+(20\d{2}))?\s*",
-            text, re.I,
+            r"([0-9]{1,2}) (января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?: (20[0-9]{2}))?",
+            " ".join(text.split()), re.I,
         )
         if not single:
             return None, None

@@ -470,3 +470,7 @@ def test_create_lead_keeps_real_phone_in_phone_field():
 ])
 def test_single_departure_date_without_invented_return(text, expected):
     assert parse_russian_dates(text) == expected
+
+@pytest.mark.parametrize("raw", [None, 123, " " * 10000, "15 января " + " " * 10000 + "2030"])
+def test_date_input_is_bounded(raw):
+    assert parse_russian_dates(raw) == (None, None)
