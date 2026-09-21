@@ -106,4 +106,3 @@ def parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
         to_date = _to_ymd(to_day, to_month, year + 1)
 
     return from_date, to_date
-
