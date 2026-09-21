@@ -1,6 +1,6 @@
 """Unit tests for shared package (validators, dates, templates, MDT helpers)."""
 
-from shared.validation import validate_phone, validate_people, validate_budget
+from shared.validation import validate_phone, validate_people, validate_budget, parse_kids_ages
 import pytest
 from shared.templates import template_selection
 from shared.dates import parse_russian_dates
@@ -27,6 +27,68 @@ def test_validate_people_and_budget():
     assert validate_people("0") == (False, None)
     assert validate_budget("60 000") == (True, 60000)
     assert validate_budget("0") == (False, None)
+
+
+@pytest.mark.parametrize("text", [
+    "-2", "+2", "2.5", "2 и 3", "2-3", "abc2", "2 взрослых 1 ребенок", "51", "", None, 2,
+])
+def test_people_rejects_ambiguous_counts(text):
+    assert validate_people(text) == (False, None)
+
+
+@pytest.mark.parametrize("text,expected", [
+    (" 2 ", "2"),
+    ("2 человека", "2"),
+    ("3 взрослых", "3"),
+    ("2 чел.", "2"),
+    ("50", "50"),
+    ("5+", "5+"),
+])
+def test_people_accepts_one_whole_count(text, expected):
+    assert validate_people(text) == (True, expected)
+
+
+@pytest.mark.parametrize("text", [
+    "100", "-5", "5.5", "5, неизвестно", "18", "216 месяцев", "8 месяцев 4 года", None, 5, "5," * 11,
+])
+def test_child_ages_rejects_invalid_or_ambiguous_values(text):
+    ok, ages, problem = parse_kids_ages(text)
+    assert not ok
+    assert ages == []
+    assert problem
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("5, 9", [5, 9]),
+    ("5 и 9", [5, 9]),
+    ("5 9", [5, 9]),
+    ("5 лет, 9 лет", [5, 9]),
+    ("до года и 4", [0, 4]),
+    ("8 месяцев и 4", [0, 4]),
+    ("18 месяцев", [1]),
+    ("24 мес.", [2]),
+    ("0, 5", [0, 5]),
+    ("нет детей", []),
+    ("0", []),
+])
+def test_child_ages_preserves_whole_years_and_infants(text, expected):
+    assert parse_kids_ages(text) == (True, expected, "")
+
+
+@pytest.mark.parametrize("text", [
+    "7+916123456", "++79161234567", "abc9161234567", "7.9161234567", None, 79161234567,
+])
+def test_phone_rejects_malformed_numbers(text):
+    assert validate_phone(text) == (False, None)
+
+
+@pytest.mark.parametrize("text", ["+7 (916) 123-45-67", "8 (916) 123 45 67", "9161234567"])
+def test_phone_preserves_formatted_numbers(text):
+    assert validate_phone(text) == (True, "+79161234567")
+
+
+def test_phone_keeps_leading_eight_in_ten_digit_local_number():
+    assert validate_phone("8001234567") == (True, "+78001234567")
 
 
 @pytest.mark.parametrize("text,expected", [
