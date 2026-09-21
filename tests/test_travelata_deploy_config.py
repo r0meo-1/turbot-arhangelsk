@@ -86,10 +86,11 @@ def test_deploy_bootstraps_code_before_protected_config():
 def test_deployer_repairs_only_live_sqlite_state_files():
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
-    assert '"$repo/bot_state.sqlite" "$repo/vk_bot_state.sqlite"' in source
-    assert 'chown turbot:turbot "$state_file"' in source
-    assert 'chmod 0600 "$state_file"' in source
-    assert 'chown -R turbot:turbot "$repo"' not in source
+    repair = source.split("ensure_runtime_permissions() {", 1)[1].split("\n}", 1)[0]
+    assert '"$repo/bot_state.sqlite" "$repo/vk_bot_state.sqlite"' in repair
+    assert 'chown turbot:turbot "$state_file"' in repair
+    assert 'chmod 0600 "$state_file"' in repair
+    assert "chown -R" not in repair
 
 
 def test_git_deploy_prints_vk_diagnostics_before_rollback():
