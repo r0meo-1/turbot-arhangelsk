@@ -12,10 +12,19 @@ ensure_runtime_permissions() {
     return 1
   fi
 
-  # The services run as the unprivileged turbot user. Repair only the app
-  # directory itself here; database/.env permissions stay intentionally tight.
+  # The services run as the unprivileged turbot user. Repair the app
+  # directory and only the two live SQLite state files. Do not recursively
+  # chown the tree: backups intentionally have a separate root-owned policy.
   chown turbot:turbot "$repo"
   chmod 0750 "$repo"
+
+  local state_file
+  for state_file in "$repo/bot_state.sqlite" "$repo/vk_bot_state.sqlite"; do
+    if [[ -f "$state_file" ]]; then
+      chown turbot:turbot "$state_file"
+      chmod 0600 "$state_file"
+    fi
+  done
 }
 
 # Run before cd so the forced-command deploy entrypoint can recover even when
@@ -603,13 +612,21 @@ cp "$repo/deploy/turbot-deploy.sh" /root/turbot-deploy.sh 2>/dev/null || true
 for _ in {1..12}; do
   if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8000/health >/dev/null; then
     chmod +x "$repo/deploy/verify-vk-miniapp.sh"
-    "$repo/deploy/verify-vk-miniapp.sh"
-    print_telegram_username
-    git rev-parse HEAD
-    exit 0
+    if "$repo/deploy/verify-vk-miniapp.sh"; then
+      print_telegram_username
+      git rev-parse HEAD
+      exit 0
+    fi
+
+    echo "TurBot VK verification failed; collecting bounded diagnostics" >&2
+    systemctl status vk-turbot --no-pager -l || true
+    journalctl -u vk-turbot -n 120 --no-pager || true
+    break
   fi
   sleep 2
 done
 
 echo "TurBot did not become healthy" >&2
+systemctl status turbot --no-pager -l || true
+journalctl -u turbot -n 80 --no-pager || true
 exit 1
