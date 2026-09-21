@@ -867,7 +867,10 @@ def init_db() -> None:
             """
         )
         cur.execute("PRAGMA journal_mode=WAL")
-        # PRAGMA journal_mode returns one row. Consume it before the surrounding\n        # transaction commits, otherwise SQLite can report "SQL statements in progress".\n        cur.fetchone()\n
+        # PRAGMA journal_mode returns one row. Consume it before the surrounding
+        # transaction commits, otherwise SQLite can report "SQL statements in progress".
+        cur.fetchone()
+
 
 def _safe_ai_metric_label(value: Any, *, default: str, limit: int) -> str:
     return (
