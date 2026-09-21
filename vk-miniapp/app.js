@@ -68,20 +68,6 @@
     departure.insertAdjacentElement('afterend', suggestions);
   };
 
-  if (!inVK && bridge) {
-    try {
-      const bridgeParams = await bridge.send('VKWebAppGetLaunchParams');
-      const qp = new URLSearchParams();
-      Object.entries(bridgeParams || {}).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) qp.set(key, String(value));
-      });
-      effectiveLaunchParams = qp.toString();
-      const effectiveParams = new URLSearchParams(effectiveLaunchParams);
-      inVK = effectiveParams.has('sign') && effectiveParams.has('vk_app_id');
-    } catch (_) {
-      effectiveLaunchParams = launchParams;
-    }
-  }
 
   const money = (n) => `${Number(n).toLocaleString('ru-RU')} ₽`;
   const localDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -272,6 +258,28 @@
 
   installDestinationAutocomplete();
   installDepartureAutocomplete();
+
+  // Install the form before awaiting the bridge: ordinary browsers may never reply.
+  if (!inVK && bridge) {
+    try {
+      const bridgeParams = await bridge.send('VKWebAppGetLaunchParams');
+      const qp = new URLSearchParams();
+      Object.entries(bridgeParams || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) qp.set(key, String(value));
+      });
+      effectiveLaunchParams = qp.toString();
+      const effectiveParams = new URLSearchParams(effectiveLaunchParams);
+      inVK = effectiveParams.has('sign') && effectiveParams.has('vk_app_id');
+    } catch (_) {
+      effectiveLaunchParams = launchParams;
+    }
+  }
+
+  // A delayed bridge response may arrive after the customer opens review.
+  if (inVK && payload && !$('review').hidden) {
+    $('status').textContent = '';
+    $('save').disabled = false;
+  }
 
   if (inVK && bridge) {
     bridge.send('VKWebAppInit').catch(() => {
