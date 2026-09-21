@@ -66,30 +66,40 @@ jobs:
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
 
-      - name: Enable guarded Telegram AI lead assist
+      - name: Apply guarded Telegram AI lead assist state
         shell: bash
         env:
-          AI_LEAD_ASSIST_ENABLED: "true"
+          AI_LEAD_ASSIST_ENABLED: ${{ vars.AI_LEAD_ASSIST_ENABLED || 'false' }}
         run: |
           set -Eeuo pipefail
-          printf 'TURBOT_AI_LEAD_ASSIST_CONFIG_V1\n%s\n' "$AI_LEAD_ASSIST_ENABLED" |
+          desired="$(printf '%s' "$AI_LEAD_ASSIST_ENABLED" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$desired" != "true" && "$desired" != "false" ]]; then
+            echo "AI_LEAD_ASSIST_ENABLED must be true or false" >&2
+            exit 1
+          fi
+
+          printf 'TURBOT_AI_LEAD_ASSIST_CONFIG_V1\n%s\n' "$desired" |
             ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
               root@${{ secrets.DEPLOY_HOST }} true
 
           health="$(curl -fsSL --max-time 15 https://bot.r0meo1.ru/health)"
-          HEALTH_JSON="$health" python - <<'PY'
+          DESIRED="$desired" HEALTH_JSON="$health" python - <<'PY'
           import json
           import os
 
           data = json.loads(os.environ["HEALTH_JSON"])
           ai = data.get("ai_selection") or {}
-          if ai.get("ready") is not True:
-              raise SystemExit("Production AI provider is not ready")
-          if ai.get("lead_assist_enabled") is not True:
-              raise SystemExit("Production AI lead assist is not enabled")
+          desired = os.environ["DESIRED"] == "true"
+          if ai.get("lead_assist_enabled") != desired:
+              raise SystemExit(
+                  "Production AI lead assist state mismatch: "
+                  f"expected={desired} actual={ai.get('lead_assist_enabled')}"
+              )
           print(
               "Production AI lead assist: "
-              f"enabled=yes mode={ai.get('mode') or 'unknown'} "
+              f"enabled={'yes' if desired else 'no'} "
+              f"provider_ready={'yes' if ai.get('ready') is True else 'no'} "
+              f"mode={ai.get('mode') or 'unknown'} "
               f"model={ai.get('model') or 'unknown'}"
           )
           PY
