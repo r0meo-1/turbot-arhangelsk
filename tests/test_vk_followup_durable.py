@@ -155,4 +155,8 @@ def test_production_entrypoints_use_guarded_vk_runtime():
 
     assert "shared.vk_runtime:app" in unit
     assert "gunicorn shared.vk_runtime:app" in compose
-    assert 'cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service' in deploy
+    assert "install_systemd_units() {" in deploy
+    assert '"$repo/deploy/turbot.service"' in deploy
+    assert '"$repo/deploy/vk-turbot.service"' in deploy
+    assert "/etc/systemd/system/turbot.service" in deploy
+    assert "/etc/systemd/system/vk-turbot.service" in deploy
