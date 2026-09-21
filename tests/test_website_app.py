@@ -1,6 +1,7 @@
 """Tests for the public Aprel Tour website lead endpoint."""
 
 import os
+import sqlite3
 from datetime import datetime, timezone
 
 # Keep imports deterministic and keep the website retry thread out of pytest.
@@ -16,6 +17,8 @@ import pytest
 
 import bot
 import website_app
+from shared import travel_crm_store as crm_store
+from shared.travel_crm import Attribution, TripRequest
 
 
 ORIGIN = "https://r0meo1.ru"
@@ -40,9 +43,14 @@ def _payload(request_id="website-test-0001"):
 
 
 @pytest.fixture(autouse=True)
-def clean_website_state(monkeypatch):
+def clean_website_state(monkeypatch, tmp_path):
     website_app._rate_hits.clear()
     monkeypatch.setattr(bot, "DEMO_MODE", False)
+    monkeypatch.setattr(
+        website_app,
+        "_VK_DATABASE_PATH",
+        str(tmp_path / "vk-agent-crm.sqlite"),
+    )
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM crm_quote_reactions")
         cur.execute("DELETE FROM crm_quotes")
@@ -752,6 +760,157 @@ def test_agent_extension_crm_today_uses_manager_local_day(client, monkeypatch):
     ids = {item["taskId"] for item in response.get_json()["tasks"]}
     assert f"{request_id}:build-selection" in ids
     assert "task-after-moscow-day" not in ids
+
+
+def test_agent_extension_crm_unifies_main_and_vk_stores(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    now = datetime(2026, 9, 21, 9, 0, 0)
+
+    main_request = TripRequest(
+        request_id="tg-lead-77",
+        departure_city="Москва",
+        adults=2,
+        primary_destination="Таиланд",
+        attribution=Attribution(
+            source_tag="video_dream",
+            channel="telegram",
+        ),
+    )
+    with bot._db_cursor(commit=True) as cur:
+        crm_store.upsert_request(
+            cur.connection,
+            main_request,
+            lead_id=77,
+            now=now,
+        )
+        crm_store.ensure_initial_task(
+            cur.connection,
+            main_request.request_id,
+            now,
+        )
+
+    vk_path = website_app._agent_crm_db_path("vk")
+    conn = sqlite3.connect(str(vk_path))
+    try:
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        crm_store.init_schema(cur)
+        cur.execute(
+            """
+            CREATE TABLE leads (
+                id INTEGER PRIMARY KEY,
+                first_name TEXT,
+                phone TEXT,
+                username TEXT
+            )
+            """
+        )
+        cur.execute(
+            "INSERT INTO leads (id, first_name, phone, username) VALUES (?, ?, ?, ?)",
+            (77, "VK Test", "", "vk_test"),
+        )
+        vk_request = TripRequest(
+            request_id="vk-lead-77",
+            departure_city="Архангельск",
+            adults=2,
+            primary_destination="Вьетнам",
+            attribution=Attribution(
+                source_tag="video_pain",
+                channel="vk",
+            ),
+        )
+        crm_store.upsert_request(
+            conn,
+            vk_request,
+            lead_id=77,
+            now=now,
+        )
+        crm_store.ensure_initial_task(
+            conn,
+            vk_request.request_id,
+            now,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    today = client.get(
+        "/agent-extension/crm/today"
+        "?now=2026-09-21T09:30:00Z&tzOffsetMinutes=0&limit=100",
+        headers=_agent_headers(),
+    )
+    assert today.status_code == 200
+    tasks = today.get_json()["tasks"]
+    by_request = {item["requestId"]: item for item in tasks}
+    assert by_request["tg-lead-77"]["sourceTag"] == "video_dream"
+    assert by_request["vk-lead-77"]["sourceTag"] == "video_pain"
+    assert by_request["vk-lead-77"]["client"]["name"] == "VK Test"
+
+    timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=vk-lead-77",
+        headers=_agent_headers(),
+    )
+    assert timeline.status_code == 200
+    assert timeline.get_json()["timeline"]["request"]["primary_destination"] == "Вьетнам"
+
+    quote = client.post(
+        "/agent-extension/crm/quote",
+        headers=_agent_headers(),
+        json={
+            "requestId": "vk-lead-77",
+            "hotel": "Synthetic VK Resort 5*",
+            "priceAmount": 210000,
+            "currency": "RUB",
+        },
+    )
+    assert quote.status_code == 200
+    quote_id = quote.get_json()["quoteId"]
+
+    reaction = client.post(
+        "/agent-extension/crm/reaction",
+        headers=_agent_headers(),
+        json={
+            "requestId": "vk-lead-77",
+            "quoteId": quote_id,
+            "reaction": "thinking",
+            "note": "synthetic",
+        },
+    )
+    assert reaction.status_code == 200
+
+    initial_task = next(
+        item for item in tasks if item["requestId"] == "vk-lead-77"
+    )
+    done = client.post(
+        "/agent-extension/crm/task",
+        headers=_agent_headers(),
+        json={
+            "requestId": "vk-lead-77",
+            "taskId": initial_task["taskId"],
+            "status": "done",
+        },
+    )
+    assert done.status_code == 200
+
+    conn = sqlite3.connect(str(vk_path))
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM crm_quotes WHERE request_id='vk-lead-77'"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM crm_quote_reactions WHERE request_id='vk-lead-77'"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT status FROM crm_tasks WHERE task_id=?",
+            (initial_task["taskId"],),
+        ).fetchone()[0] == "done"
+    finally:
+        conn.close()
+
+    with bot._db_cursor() as cur:
+        assert cur.execute(
+            "SELECT COUNT(*) FROM crm_quotes WHERE request_id='vk-lead-77'"
+        ).fetchone()[0] == 0
 
 
 def test_agent_extension_crm_requires_pairing_token(client, monkeypatch):
