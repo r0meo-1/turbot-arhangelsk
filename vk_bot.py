@@ -554,6 +554,9 @@ def _db_cursor(commit: bool = False):
 
 
 def init_db() -> None:
+    with _db_cursor() as cur:
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.fetchone()
     with _db_cursor(commit=True) as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -748,8 +751,6 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_ops_metric_events_created_at "
             "ON ops_metric_events(created_at)"
         )
-        cur.execute("PRAGMA journal_mode=WAL")
-        cur.fetchone()
 
 
 # --- session helpers ---
