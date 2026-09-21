@@ -235,3 +235,62 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
     assert info["origin"] == "Архангельск"
     assert info["source"] == "vk_mini_app"
     assert info["budget_scope"] == "total"
+
+@pytest.mark.parametrize('bridge_result', ['pending', 'rejected', 'delayed'])
+def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
+    """An unanswered bridge must not freeze the unsigned preview form."""
+    from urllib.parse import parse_qsl
+
+    saved = []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(
+        lambda uid, info: saved.append((uid, info)),
+        lambda: (SECRET, APP_ID, GROUP_ID),
+    ))
+    server = make_server('127.0.0.1', 0, app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(channel='msedge', headless=True)
+            page = browser.new_page()
+            page.route('**/vk-bridge.js', lambda route: route.fulfill(
+                content_type='application/javascript',
+                body='''window.vkBridge = {send(method) {
+                  if (method === 'VKWebAppGetLaunchParams') {
+                    return new Promise((resolve, reject) => {
+                      window.resolveLaunch = resolve;
+                      window.rejectLaunch = reject;
+                    });
+                  }
+                  return Promise.resolve({});
+                }};''',
+            ))
+            page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/')
+            page.wait_for_function("document.getElementById('date').value !== ''", timeout=2000)
+            page.get_by_role('button', name='Таиланд', exact=True).click()
+            assert page.locator('#destination').input_value() == 'Таиланд'
+            page.locator('#children').fill('2')
+            assert page.locator('#children-ages input').count() == 2
+            page.locator('#children-ages input').nth(0).fill('4')
+            page.locator('#children-ages input').nth(1).fill('9')
+            page.locator('#consent').check()
+            page.locator('#terms-accepted').check()
+            page.locator('#submit').click()
+            assert page.locator('#review').is_visible()
+            assert '4 лет, 9 лет' in page.locator('#summary').inner_text()
+            assert page.locator('#save').is_disabled()
+            assert not saved
+            if bridge_result == 'rejected':
+                page.evaluate("window.rejectLaunch(new Error('not available'))")
+                assert page.locator('#save').is_disabled()
+            elif bridge_result == 'delayed':
+                page.evaluate('(params) => window.resolveLaunch(params)', dict(parse_qsl(_signed_launch_params())))
+                page.wait_for_function("!document.getElementById('save').disabled")
+                page.locator('#save').click()
+                page.locator('#chat').wait_for(state='visible')
+                assert len(saved) == 1
+            browser.close()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
