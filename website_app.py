@@ -18,9 +18,12 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -989,6 +992,89 @@ def _agent_crm_guard() -> Response | None:
         )
     if not _agent_extension_authorized():
         return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+    return None
+
+
+_VK_DATABASE_PATH = (
+    os.getenv("VK_DATABASE_PATH", "vk_bot_state.sqlite").strip()
+    or "vk_bot_state.sqlite"
+)
+
+
+def _agent_crm_db_path(store: str) -> Path:
+    if store == "main":
+        raw = Path(str(_bot.DATABASE_PATH)).expanduser()
+        return raw if raw.is_absolute() else (Path.cwd() / raw).resolve()
+    if store != "vk":
+        raise ValueError("unsupported CRM store")
+    raw = Path(str(_VK_DATABASE_PATH)).expanduser()
+    if raw.is_absolute():
+        return raw
+    main = _agent_crm_db_path("main")
+    return (main.parent / raw).resolve()
+
+
+def _agent_crm_vk_is_main() -> bool:
+    return _agent_crm_db_path("vk") == _agent_crm_db_path("main")
+
+
+def _agent_crm_store_for_request(request_id: str) -> str:
+    return "vk" if request_id.startswith("vk-lead-") and not _agent_crm_vk_is_main() else "main"
+
+
+@contextmanager
+def _agent_crm_cursor(store: str, *, commit: bool = False):
+    """Yield a cursor for the CRM store without allowing client-chosen DB paths."""
+
+    if store == "main" or _agent_crm_vk_is_main():
+        with _bot._db_cursor(commit=commit) as cur:
+            yield cur
+        return
+
+    path = _agent_crm_db_path("vk")
+    if not path.exists():
+        yield None
+        return
+
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        yield cur
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _agent_crm_find_entity_store(table: str, key_column: str, key_value: str):
+    if table not in {"crm_tasks", "crm_quotes"}:
+        raise ValueError("unsupported CRM lookup table")
+    if key_column not in {"task_id", "quote_id"}:
+        raise ValueError("unsupported CRM lookup key")
+
+    matches = []
+    stores = ("main",) if _agent_crm_vk_is_main() else ("main", "vk")
+    for store in stores:
+        with _agent_crm_cursor(store) as cur:
+            if cur is None:
+                continue
+            try:
+                row = cur.execute(
+                    f"SELECT request_id FROM {table} WHERE {key_column} = ?",
+                    (key_value,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                logger.warning("Agent CRM %s store schema unavailable", store)
+                continue
+            if row is not None:
+                matches.append((store, str(row[0])))
+    if len(matches) == 1:
+        return matches[0]
     return None
 
 
