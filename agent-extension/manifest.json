@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TurBot Agent Desk",
-  "version": "0.2.0",
-  "description": "Бесплатный пульт турагента: лиды, подборки, mini-CRM, follow-up, CSV, Tourvisor, Sletat и Qui-Quo.",
+  "version": "0.3.0",
+  "description": "Пульт турагента: лиды, Today-очередь, история подборов/реакций, follow-up, CSV и рабочие ссылки.",
   "permissions": [
     "sidePanel",
     "storage",

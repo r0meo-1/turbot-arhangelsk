@@ -8,6 +8,7 @@ EXT = ROOT / "agent-extension"
 def test_agent_extension_manifest_is_mv3_side_panel():
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["manifest_version"] == 3
+    assert manifest["version"] == "0.3.0"
     assert manifest["side_panel"]["default_path"] == "sidepanel.html"
     assert "sidePanel" in manifest["permissions"]
     assert "contextMenus" in manifest["permissions"]
