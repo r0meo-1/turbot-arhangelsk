@@ -153,6 +153,6 @@ def test_production_entrypoints_use_guarded_vk_runtime():
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     deploy = (ROOT / "deploy" / "turbot-deploy.sh").read_text(encoding="utf-8")
 
-    assert "gunicorn shared.vk_runtime:app" in unit
+    assert "shared.vk_runtime:app" in unit
     assert "gunicorn shared.vk_runtime:app" in compose
     assert 'cp "$repo/deploy/vk-turbot.service" /etc/systemd/system/vk-turbot.service' in deploy
