@@ -6,6 +6,21 @@ repo=/opt/turbot
 branch=main
 venv="$repo/venv/bin"
 
+ensure_runtime_permissions() {
+  if [[ ! -d "$repo" ]]; then
+    echo "TurBot runtime directory is missing: $repo" >&2
+    return 1
+  fi
+
+  # The services run as the unprivileged turbot user. Repair only the app
+  # directory itself here; database/.env permissions stay intentionally tight.
+  chown turbot:turbot "$repo"
+  chmod 0750 "$repo"
+}
+
+# Run before cd so the forced-command deploy entrypoint can recover even when
+# a bad ownership/mode change made WorkingDirectory inaccessible to systemd.
+ensure_runtime_permissions
 cd "$repo"
 
 deploy_bundle() {
