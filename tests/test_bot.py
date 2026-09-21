@@ -649,12 +649,12 @@ def test_miniapp_details_survive_review_and_manager_handoff(client, monkeypatch,
     assert bot.count_leads() == 1
 
 
-def test_classic_review_does_not_invent_miniapp_details(client, monkeypatch):
+def test_classic_review_derives_nights_but_does_not_invent_flight_preference(client, monkeypatch):
     sent = []
     monkeypatch.setattr(bot, "send_message", lambda cid, text, **kw: sent.append(text) or _OkResp())
     _reach_contact(client, 88003)
     _callback(client, 88003, bot.CB_CONTACT_TG)
-    assert "Ночей:" not in sent[-1]
+    assert "Ночей: 7" in sent[-1]
     assert "Перелёт:" not in sent[-1]
 
 
@@ -966,6 +966,9 @@ def test_full_flow_all_buttons(client):
     assert bot.user_data[910]["state"] == bot.STATE_DATES
     assert bot.user_data[910]["origin"] == "Москва"
     _callback(client, 910, f"{bot.CB_DATE_PREFIX}0")
+    assert bot.user_data[910]["state"] == bot.STATE_NIGHTS
+    _callback(client, 910, f"{bot.CB_NIGHTS_PREFIX}7")
+    assert bot.user_data[910]["nights"] == 7
     assert bot.user_data[910]["state"] == bot.STATE_PEOPLE
     assert "выходные" in bot.user_data[910]["dates"]
     _callback(client, 910, f"{bot.CB_PEOPLE_PREFIX}2")
@@ -3015,3 +3018,55 @@ def test_request_details_reach_owner_and_fallback(monkeypatch, scope, label, dir
         assert "Перелёт: " + ("только прямой, если доступен" if direct_only else "прямой или с пересадкой") in text
         assert "Архангельск" in text
         assert f"{'от' if open_ended else 'до'} 300000 ₽ {label}" in text.replace("300 000", "300000")
+
+
+@pytest.mark.parametrize("raw", ["0", "29", "2.5", "7-10", "7 10", "-7", "7abc", "100"])
+def test_nights_rejects_ambiguous_answers_without_advancing(raw):
+    info = {"state": bot.STATE_NIGHTS}
+    bot._step_nights(88010, raw, {}, info)
+    assert info == {"state": bot.STATE_NIGHTS}
+
+
+def test_single_date_duration_survives_review_and_lead_save(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda cid, text, **kw: sent.append(text) or _OkResp())
+    monkeypatch.setattr(bot, "_post_completion_side_effects", lambda *a, **k: None)
+    chat = 88011
+    _consent(client, chat)
+    for answer in ("Турция", "Москва", "15 января 2030"):
+        _post(client, chat, answer)
+    assert bot.user_data[chat]["state"] == bot.STATE_NIGHTS
+    assert "nights" not in bot.user_data[chat]
+    _callback(client, chat, f"{bot.CB_NIGHTS_PREFIX}custom")
+    assert bot.user_data[chat]["state"] == bot.STATE_NIGHTS
+    _post(client, chat, "9 ночей")
+    assert bot.user_data[chat]["state"] == bot.STATE_PEOPLE
+    _callback(client, chat, bot.CB_BACK)
+    assert bot.user_data[chat]["state"] == bot.STATE_NIGHTS
+    _callback(client, chat, f"{bot.CB_NIGHTS_PREFIX}10")
+    for answer in ("2", "4, 9", "100000"):
+        _post(client, chat, answer)
+    _callback(client, chat, bot.CB_CONTACT_TG)
+    assert "Ночей: 10" in sent[-1]
+    _confirm_draft(client, chat)
+    with bot._db_cursor() as cur:
+        row = cur.execute("SELECT nights FROM leads WHERE chat_id=?", (chat,)).fetchone()
+    assert row["nights"] == 10
+    assert any("Ночей: 10" in text and "Заявка принята" in text for text in sent)
+
+
+def test_changed_dates_clear_old_duration_and_ignore_stale_nights_callback(client):
+    chat = 88012
+    _consent(client, chat)
+    for answer in ("Турция", "Москва", "15-22 января 2030"):
+        _post(client, chat, answer)
+    assert bot.user_data[chat]["nights"] == 7
+    _callback(client, chat, f"{bot.CB_NIGHTS_PREFIX}14")
+    assert bot.user_data[chat]["nights"] == 7
+    _callback(client, chat, bot.CB_BACK)
+    assert bot.user_data[chat]["state"] == bot.STATE_DATES
+    _post(client, chat, "20 января 2030")
+    assert bot.user_data[chat]["state"] == bot.STATE_NIGHTS
+    assert "nights" not in bot.user_data[chat]
+    _callback(client, chat, bot.CB_BACK)
+    assert bot.user_data[chat]["state"] == bot.STATE_DATES

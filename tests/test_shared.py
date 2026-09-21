@@ -459,3 +459,14 @@ def test_create_lead_keeps_real_phone_in_phone_field():
     assert ok is True
     assert captured["phone"] == "+7 (900) 123-45-67"
     assert "content" not in captured
+
+@pytest.mark.parametrize("text, expected", [
+    ("15 января 2030", ("2030-01-15", None)),
+    ("29 февраля 2032", ("2032-02-29", None)),
+    ("29 февраля 2030", (None, None)),
+    ("31 апреля 2030", (None, None)),
+    ("0 мая 2030", (None, None)),
+    ("15 января 2030 мусор", (None, None)),
+])
+def test_single_departure_date_without_invented_return(text, expected):
+    assert parse_russian_dates(text) == expected

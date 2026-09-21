@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from datetime import date
 from typing import Dict, Optional, Tuple
 
 # Longer prefixes first to avoid false matches (e.g. "март" before "ма").
@@ -52,7 +53,21 @@ def parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
     parts = re.split(r"\s*(?:-|–|—|\bпо\b)\s*", text)
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) < 2:
-        return None, None
+        single = re.fullmatch(
+            r"\s*(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)(?:\s+(20\d{2}))?\s*",
+            text, re.I,
+        )
+        if not single:
+            return None, None
+        day = int(single[1])
+        month = _month_from_text(single[2])
+        single_year = int(single[3]) if single[3] else current_year
+        if not single[3] and (month, day) < (current_month, current_day):
+            single_year += 1
+        try:
+            return date(single_year, month, day).isoformat(), None
+        except ValueError:
+            return None, None
 
     def _parse_part(s: str) -> Optional[Tuple[int, int]]:
         day_match = re.search(r"\b(\d{1,2})\b", s)
@@ -91,3 +106,4 @@ def parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
         to_date = _to_ymd(to_day, to_month, year + 1)
 
     return from_date, to_date
+
