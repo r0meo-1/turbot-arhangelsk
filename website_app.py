@@ -18,9 +18,12 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -992,6 +995,89 @@ def _agent_crm_guard() -> Response | None:
     return None
 
 
+_VK_DATABASE_PATH = (
+    os.getenv("VK_DATABASE_PATH", "vk_bot_state.sqlite").strip()
+    or "vk_bot_state.sqlite"
+)
+
+
+def _agent_crm_db_path(store: str) -> Path:
+    if store == "main":
+        raw = Path(str(_bot.DATABASE_PATH)).expanduser()
+        return raw if raw.is_absolute() else (Path.cwd() / raw).resolve()
+    if store != "vk":
+        raise ValueError("unsupported CRM store")
+    raw = Path(str(_VK_DATABASE_PATH)).expanduser()
+    if raw.is_absolute():
+        return raw
+    main = _agent_crm_db_path("main")
+    return (main.parent / raw).resolve()
+
+
+def _agent_crm_vk_is_main() -> bool:
+    return _agent_crm_db_path("vk") == _agent_crm_db_path("main")
+
+
+def _agent_crm_store_for_request(request_id: str) -> str:
+    return "vk" if request_id.startswith("vk-lead-") and not _agent_crm_vk_is_main() else "main"
+
+
+@contextmanager
+def _agent_crm_cursor(store: str, *, commit: bool = False):
+    """Yield a cursor for the CRM store without allowing client-chosen DB paths."""
+
+    if store == "main" or _agent_crm_vk_is_main():
+        with _bot._db_cursor(commit=commit) as cur:
+            yield cur
+        return
+
+    path = _agent_crm_db_path("vk")
+    if not path.exists():
+        yield None
+        return
+
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=5)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        yield cur
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _agent_crm_find_entity_store(table: str, key_column: str, key_value: str):
+    if table not in {"crm_tasks", "crm_quotes"}:
+        raise ValueError("unsupported CRM lookup table")
+    if key_column not in {"task_id", "quote_id"}:
+        raise ValueError("unsupported CRM lookup key")
+
+    matches = []
+    stores = ("main",) if _agent_crm_vk_is_main() else ("main", "vk")
+    for store in stores:
+        with _agent_crm_cursor(store) as cur:
+            if cur is None:
+                continue
+            try:
+                row = cur.execute(
+                    f"SELECT request_id FROM {table} WHERE {key_column} = ?",
+                    (key_value,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                logger.warning("Agent CRM %s store schema unavailable", store)
+                continue
+            if row is not None:
+                matches.append((store, str(row[0])))
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def _agent_parse_datetime(value: Any) -> datetime:
     raw = str(value or "").strip()
     if not raw:
@@ -1047,6 +1133,50 @@ def _agent_crm_client_summary(cur: Any, request_id: str) -> Dict[str, Any]:
     return {"leadId": lead_id, "name": "", "phone": "", "username": ""}
 
 
+def _agent_crm_today_items(store: str, end_of_day: datetime):
+    result = []
+    with _agent_crm_cursor(store) as cur:
+        if cur is None:
+            return result
+        try:
+            tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)
+        except sqlite3.OperationalError:
+            logger.warning("Agent CRM %s store has no readable CRM task schema", store)
+            return result
+
+        for task in tasks:
+            timeline = _travel_crm_store.load_timeline(cur.connection, task.request_id)
+            if timeline is None:
+                continue
+            trip = timeline.request
+            result.append((
+                task.priority,
+                task.due_at,
+                task.created_at,
+                {
+                    "taskId": task.task_id,
+                    "requestId": task.request_id,
+                    "type": task.type.value,
+                    "priority": task.priority,
+                    "dueAt": task.due_at.replace(
+                        tzinfo=timezone.utc
+                    ).isoformat().replace("+00:00", "Z"),
+                    "note": task.note,
+                    "channel": trip.attribution.channel,
+                    "sourceTag": trip.attribution.source_tag,
+                    "destination": trip.primary_destination,
+                    "origin": trip.departure_city,
+                    "dates": trip.dates_text,
+                    "adults": trip.adults,
+                    "childAges": [child.age for child in trip.children],
+                    "budget": trip.budget_amount,
+                    "budgetScope": trip.budget_scope.value,
+                    "client": _agent_crm_client_summary(cur, task.request_id),
+                },
+            ))
+    return result
+
+
 if "agent_extension_crm_today" not in app.view_functions:
 
     @app.route("/agent-extension/crm/today", methods=["GET", "OPTIONS"])
@@ -1077,34 +1207,11 @@ if "agent_extension_crm_today" not in app.view_functions:
         )
         end_of_day = local_end_of_day + timedelta(minutes=tz_offset_minutes)
 
-        with _bot._db_cursor() as cur:
-            tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)
-            items = []
-            for task in tasks[:limit]:
-                timeline = _travel_crm_store.load_timeline(
-                    cur.connection, task.request_id
-                )
-                if timeline is None:
-                    continue
-                trip = timeline.request
-                items.append({
-                    "taskId": task.task_id,
-                    "requestId": task.request_id,
-                    "type": task.type.value,
-                    "priority": task.priority,
-                    "dueAt": task.due_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "note": task.note,
-                    "channel": trip.attribution.channel,
-                    "sourceTag": trip.attribution.source_tag,
-                    "destination": trip.primary_destination,
-                    "origin": trip.departure_city,
-                    "dates": trip.dates_text,
-                    "adults": trip.adults,
-                    "childAges": [child.age for child in trip.children],
-                    "budget": trip.budget_amount,
-                    "budgetScope": trip.budget_scope.value,
-                    "client": _agent_crm_client_summary(cur, task.request_id),
-                })
+        rows = _agent_crm_today_items("main", end_of_day)
+        if not _agent_crm_vk_is_main():
+            rows.extend(_agent_crm_today_items("vk", end_of_day))
+        rows.sort(key=lambda item: (item[0], item[1], item[2], item[3]["requestId"]))
+        items = [item[3] for item in rows[:limit]]
         return _agent_json_response({"ok": True, "tasks": items})
 
 
@@ -1123,17 +1230,21 @@ if "agent_extension_crm_timeline" not in app.view_functions:
             return _agent_json_response(
                 {"ok": False, "error": "invalid_request_id"}, 400
             )
-        with _bot._db_cursor() as cur:
-            timeline = _travel_crm_store.load_timeline(
-                cur.connection, request_id
-            )
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store) as cur:
+            if cur is None:
+                timeline = None
+            else:
+                timeline = _travel_crm_store.load_timeline(
+                    cur.connection, request_id
+                )
+                payload = timeline_to_dict(timeline) if timeline is not None else None
+                if payload is not None:
+                    payload["client"] = _agent_crm_client_summary(cur, request_id)
         if timeline is None:
             return _agent_json_response(
                 {"ok": False, "error": "request_not_found"}, 404
             )
-        payload = timeline_to_dict(timeline)
-        with _bot._db_cursor() as cur:
-            payload["client"] = _agent_crm_client_summary(cur, request_id)
         return _agent_json_response({
             "ok": True,
             "timeline": payload,
@@ -1164,8 +1275,19 @@ if "agent_extension_crm_task" not in app.view_functions:
                 return _agent_json_response(
                     {"ok": False, "error": "invalid_task_status"}, 400
                 )
-            with _bot._db_cursor(commit=True) as cur:
-                changed = _travel_crm_store.set_task_status(
+            request_id = str(raw.get("requestId") or "").strip()
+            resolved = (
+                (_agent_crm_store_for_request(request_id), request_id)
+                if request_id
+                else _agent_crm_find_entity_store("crm_tasks", "task_id", task_id)
+            )
+            if resolved is None:
+                return _agent_json_response(
+                    {"ok": False, "error": "task_not_found_or_ambiguous"}, 404
+                )
+            store, request_id = resolved
+            with _agent_crm_cursor(store, commit=True) as cur:
+                changed = bool(cur) and _travel_crm_store.set_task_status(
                     cur.connection, task_id, status
                 )
             if not changed:
@@ -1203,8 +1325,9 @@ if "agent_extension_crm_task" not in app.view_functions:
                 {"ok": False, "error": "invalid_task"}, 400
             )
 
-        with _bot._db_cursor(commit=True) as cur:
-            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store, commit=True) as cur:
+            if cur is None or _travel_crm_store.load_timeline(cur.connection, request_id) is None:
                 return _agent_json_response(
                     {"ok": False, "error": "request_not_found"}, 404
                 )
@@ -1261,8 +1384,9 @@ if "agent_extension_crm_quote" not in app.view_functions:
                 {"ok": False, "error": "invalid_quote"}, 400
             )
 
-        with _bot._db_cursor(commit=True) as cur:
-            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store, commit=True) as cur:
+            if cur is None or _travel_crm_store.load_timeline(cur.connection, request_id) is None:
                 return _agent_json_response(
                     {"ok": False, "error": "request_not_found"}, 404
                 )
@@ -1300,16 +1424,30 @@ if "agent_extension_crm_reaction" not in app.view_functions:
             return _agent_json_response(
                 {"ok": False, "error": "invalid_quote_id"}, 400
             )
-        with _bot._db_cursor(commit=True) as cur:
+        request_id = str(raw.get("requestId") or "").strip()
+        resolved = (
+            (_agent_crm_store_for_request(request_id), request_id)
+            if request_id
+            else _agent_crm_find_entity_store("crm_quotes", "quote_id", quote_id)
+        )
+        if resolved is None:
+            return _agent_json_response(
+                {"ok": False, "error": "quote_not_found_or_ambiguous"}, 404
+            )
+        store, request_id = resolved
+        with _agent_crm_cursor(store, commit=True) as cur:
+            if cur is None:
+                return _agent_json_response(
+                    {"ok": False, "error": "quote_not_found"}, 404
+                )
             quote_row = cur.execute(
                 "SELECT request_id FROM crm_quotes WHERE quote_id = ?",
                 (quote_id,),
             ).fetchone()
-            if quote_row is None:
+            if quote_row is None or str(quote_row[0]) != request_id:
                 return _agent_json_response(
                     {"ok": False, "error": "quote_not_found"}, 404
                 )
-            request_id = str(quote_row[0])
             event = QuoteReactionEvent(
                 event_id="reaction-" + secrets.token_hex(10),
                 quote_id=quote_id,
@@ -1361,8 +1499,9 @@ if "agent_extension_crm_activity" not in app.view_functions:
             summary=summary,
             created_at=datetime.utcnow(),
         )
-        with _bot._db_cursor(commit=True) as cur:
-            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store, commit=True) as cur:
+            if cur is None or _travel_crm_store.load_timeline(cur.connection, request_id) is None:
                 return _agent_json_response(
                     {"ok": False, "error": "request_not_found"}, 404
                 )
@@ -1403,8 +1542,9 @@ if "agent_extension_crm_outcome" not in app.view_functions:
             )
 
         now = datetime.utcnow()
-        with _bot._db_cursor(commit=True) as cur:
-            if _travel_crm_store.load_timeline(cur.connection, request_id) is None:
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store, commit=True) as cur:
+            if cur is None or _travel_crm_store.load_timeline(cur.connection, request_id) is None:
                 return _agent_json_response(
                     {"ok": False, "error": "request_not_found"}, 404
                 )
