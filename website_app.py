@@ -20,7 +20,7 @@ import re
 import secrets
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -1057,12 +1057,30 @@ if "agent_extension_crm_today" not in app.view_functions:
         if denied is not None:
             return denied
 
-        now = datetime.utcnow()
-        end_of_day = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        try:
+            now_raw = str(request.args.get("now") or "").strip()
+            now = _agent_parse_datetime(now_raw) if now_raw else datetime.utcnow()
+            tz_offset_minutes = int(request.args.get("tzOffsetMinutes") or 0)
+            if not -840 <= tz_offset_minutes <= 840:
+                raise ValueError("timezone offset out of range")
+            limit = max(1, min(100, int(request.args.get("limit") or 100)))
+        except (TypeError, ValueError):
+            return _agent_json_response(
+                {"ok": False, "error": "invalid_today_query"}, 400
+            )
+
+        # Browser getTimezoneOffset() is UTC - local time. Compute the manager's
+        # local end-of-day, then convert that boundary back to UTC for storage.
+        local_now = now - timedelta(minutes=tz_offset_minutes)
+        local_end_of_day = local_now.replace(
+            hour=23, minute=59, second=59, microsecond=999999
+        )
+        end_of_day = local_end_of_day + timedelta(minutes=tz_offset_minutes)
+
         with _bot._db_cursor() as cur:
             tasks = _travel_crm_store.due_tasks(cur.connection, end_of_day)
             items = []
-            for task in tasks[:100]:
+            for task in tasks[:limit]:
                 timeline = _travel_crm_store.load_timeline(
                     cur.connection, task.request_id
                 )
@@ -1074,7 +1092,7 @@ if "agent_extension_crm_today" not in app.view_functions:
                     "requestId": task.request_id,
                     "type": task.type.value,
                     "priority": task.priority,
-                    "dueAt": task.due_at.isoformat(),
+                    "dueAt": task.due_at.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
                     "note": task.note,
                     "channel": trip.attribution.channel,
                     "sourceTag": trip.attribution.source_tag,
