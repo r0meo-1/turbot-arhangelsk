@@ -4,7 +4,7 @@ let activeRequestId = '';
 let token = '', generation = 0, detailGeneration = 0;
 const taskNames = {build_selection:'Подбор',send_options:'Отправить варианты',call_back:'Позвонить',flights:'Авиабилеты',visa:'Виза',documents:'Документы',check_price:'Проверить цену',next_contact:'Следующий контакт'};
 function say(message){$('status').textContent=message;}
-function clearData(){activeRequestId='';for(const id of ['note','due','taskNote'])$(id).value='';for(const id of ['tasks','summary','quotes','activities'])$(id).replaceChildren();$('detail').hidden=true;}
+function clearData(){activeRequestId='';for(const id of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(id).value='';for(const id of ['tasks','summary','quotes','activities'])$(id).replaceChildren();$('detail').hidden=true;}
 function logout(){$('refresh').disabled=false;generation++;detailGeneration++;token='';$('token').value='';clearData();$('desk').hidden=true;$('login').hidden=false;say('Вы вышли.');}
 async function api(path,body){
  const response=await fetch('/agent-extension/crm/'+path,{method:body?'POST':'GET',body:body?JSON.stringify(body):undefined,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},cache:'no-store',credentials:'omit'});
@@ -15,11 +15,11 @@ async function api(path,body){
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);}
 function date(value){if(!value)return '';const raw=String(value);const d=new Date(typeof value==='number'?value*1000:(/(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)?raw:raw+'Z'));return Number.isNaN(d.getTime())?'Дата не указана':d.toLocaleString('ru-RU');}
 async function openRequest(id){
- activeRequestId='';for(const field of ['note','due','taskNote'])$(field).value='';const run=generation,detailRun=++detailGeneration;$('detail').hidden=true;say('Загрузка карточки…');
+ activeRequestId='';for(const field of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(field).value='';const run=generation,detailRun=++detailGeneration;$('detail').hidden=true;say('Загрузка карточки…');
  try{const data=await api('timeline?requestId='+encodeURIComponent(id));if(run!==generation||detailRun!==detailGeneration)return;
  const t=data.timeline||{},r=t.request||{};for(const key of ['summary','quotes','activities'])$(key).replaceChildren();
  paragraph($('summary'),[r.primary_destination,r.departure_city,r.dates_text,r.adults?`${r.adults} взрослых`:'',(r.children||[]).length?'Дети: '+r.children.map(c=>c.age).join(', '):'',r.budget_amount?`Бюджет: ${r.budget_amount} ${r.budget_currency||''}`:''].filter(Boolean).join(' · '));
- for(const q of t.quotes||[]){const item=document.createElement('article');paragraph(item,[q.hotel,q.operator,q.meal_plan,`${q.price_amount??'Уточнить'} ${q.currency||''}`,date(q.calculated_at)].filter(Boolean).join(' · '));$('quotes').append(item);}
+ for(const q of t.quotes||[]){const item=document.createElement('article');paragraph(item,[q.hotel,q.operator,q.meal_plan,`${q.price_amount??'Уточнить'} ${q.currency||''}`,date(q.calculated_at)].filter(Boolean).join(' · '));renderReaction(item,q,t.quote_reactions||[],id);$('quotes').append(item);}
  if(!(t.quotes||[]).length)paragraph($('quotes'),'Предложений пока нет.');
  for(const a of [...(t.activities||[])].reverse().slice(0,20))paragraph($('activities'),[date(a.created_at),a.summary].filter(Boolean).join(' · '));
  if(!(t.activities||[]).length)paragraph($('activities'),'Действий пока нет.');
@@ -62,3 +62,27 @@ async function saveEntry(kind){
 }
 $('saveNote').addEventListener('click',()=>saveEntry('activity'));
 $('saveTask').addEventListener('click',()=>saveEntry('task'));
+
+const reactions={draft:'Черновик',sent:'Отправлено',viewed:'Просмотрено',too_expensive:'Дорого',thinking:'Думает',wants_alternative:'Другой вариант',accepted:'Подходит',rejected:'Отказ'};
+function renderReaction(item,quote,events,requestId){
+ const label=document.createElement('label');label.textContent='Реакция клиента';
+ const select=document.createElement('select');select.setAttribute('aria-label','Реакция клиента');const matches=events.filter(e=>e.quote_id===quote.quote_id);
+ const current=matches.length?matches[matches.length-1].reaction:quote.reaction;
+ for(const [value,text] of Object.entries(reactions)){const option=document.createElement('option');option.value=value;option.textContent=text;option.selected=value===current;select.append(option);}
+ label.append(select);const button=document.createElement('button');button.textContent='Сохранить реакцию';
+ button.addEventListener('click',()=>writeQuote('reaction',{requestId,quoteId:quote.quote_id,reaction:select.value},button));item.append(label,button);
+}
+async function writeQuote(path,body,button){
+ const run=generation,detailRun=detailGeneration;button.disabled=true;say('Сохранение…');
+ try{await api(path,body);if(run!==generation||detailRun!==detailGeneration)return;
+  if(path==='quote'){for(const id of ['hotel','price','operator','meal','carrier'])$(id).value='';}
+  say('Сохранено. Откройте карточку заново для обновления истории.');
+ }catch(e){if(run===generation&&detailRun===detailGeneration)say('Сохранение не подтверждено. Проверьте историю перед повтором.');}
+ finally{button.disabled=false;}
+}
+$('saveQuote').addEventListener('click',()=>{
+ if(!activeRequestId)return;
+ const hotel=$('hotel').value.trim(),price=$('price').value.trim();
+ if(!hotel||!/^\d+$/.test(price)||!Number.isSafeInteger(Number(price))||Number(price)<=0){say('Укажите отель и положительную целую стоимость на всех.');return;}
+ writeQuote('quote',{requestId:activeRequestId,hotel,priceAmount:Number(price),currency:$('currency').value,operator:$('operator').value.trim(),mealPlan:$('meal').value.trim(),carrier:$('carrier').value.trim()},$('saveQuote'));
+});
