@@ -59,6 +59,7 @@ def test_deploy_workflow_uses_v4_with_travelpayouts_secret():
     assert "TRAVELATA_PASSWORD: ${{ secrets.TRAVELATA_PASSWORD }}" in source
     assert "TRAVELPAYOUTS_API_TOKEN: ${{ secrets.TRAVELPAYOUTS_API_TOKEN }}" in source
     assert "TURBOT_DEPLOY_CONFIG_V4" in source
+    assert "TURBOT_DEPLOY_CONFIG_V1" not in source
     assert "Travelata GitHub secrets must be configured as a complete pair" in source
     assert "travelata_user_b64" in source
     assert "travelata_password_b64" in source
@@ -72,3 +73,11 @@ def test_deployer_repairs_runtime_directory_before_chdir():
     assert 'chown turbot:turbot "$repo"' in source
     assert 'chmod 0750 "$repo"' in source
     assert source.index("ensure_runtime_permissions\ncd") < source.index("apply_stdin_config")
+
+
+def test_deploy_bootstraps_code_before_protected_config():
+    source = WORKFLOW.read_text(encoding="utf-8")
+
+    bootstrap = 'root@${{ secrets.DEPLOY_HOST }} true </dev/null'
+    assert bootstrap in source
+    assert source.index(bootstrap) < source.index("TURBOT_DEPLOY_CONFIG_V4")
