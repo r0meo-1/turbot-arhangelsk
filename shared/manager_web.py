@@ -11,7 +11,7 @@ _ROOT = Path(__file__).resolve().parents[1] / "manager-web"
 @manager_web.get("/manager/")
 @manager_web.get("/manager/<name>")
 def manager_asset(name="index.html"):
-    if name not in {"index.html", "app.js", "styles.css"}:
+    if name not in {"index.html", "app.js", "demo-fixture.js", "styles.css"}:
         abort(404)
     response = send_from_directory(_ROOT, name)
     response.headers["Cache-Control"] = "no-store"

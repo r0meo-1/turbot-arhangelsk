@@ -10,6 +10,23 @@ pairing key; it is held in memory and cleared on logout/pagehide. No persistent
 browser token storage, external scripts, or customer-message sends are used.
 This key has the existing shared Agent Desk privileges, not per-manager roles.
 
+## Secure local-owner workflow
+
+`BOT_TOKEN`, `ADMIN_ID`, and `AGENT_EXTENSION_TOKEN` are server-only settings.
+They must be supplied through the service environment or an owner-only `.env`
+file; none is embedded in `manager-web/`, sent to the browser, or stored in
+browser storage. `BOT_TOKEN` and `ADMIN_ID` enable `/agentdesk`; the optional
+`AGENT_EXTENSION_TOKEN` overrides the derived pairing key. Restart the service
+after changing any of them and retrieve the pairing key through the owner
+Telegram session. Paste it manually into the local manager page, and use
+logout/page reload to clear it. Do not automate key entry or submit an external
+application from tests.
+
+The local application-status fixture at
+`tests/fixtures/application_status.json` is intentionally `draft` with
+`submitted: false`; it is not an employer response and does not call TurBot,
+Habr, or any external vacancy service.
+
 Writes are never automatically retried: a network error can occur after a
 successful server commit. The interface asks the manager to inspect history
 before retrying. Buttons disable while their operation is pending.
