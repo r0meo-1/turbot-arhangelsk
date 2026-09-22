@@ -14,16 +14,22 @@ const LIVE_CHECKS = Object.freeze({
   PRIVATE_KEY: 'private-key',
 });
 
+function isLiveStagingAllowed(env = process.env) {
+  return env.LUNA_ALLOW_LIVE_STAGING === 'true';
+}
+
 function createValidationHooks({
   ownerSession,
   onManualIntervention = () => {},
   onManualInput = async () => {},
+  env = process.env,
 } = {}) {
   if (!ownerSession || typeof ownerSession.getState !== 'function') {
     throw new Error('ownerSession is required.');
   }
 
   const pending = new Map();
+  const liveStagingAllowed = isLiveStagingAllowed(env);
 
   return Object.freeze({
     requestManualCheck(check, details = '') {
@@ -32,6 +38,20 @@ function createValidationHooks({
       }
 
       const requestId = randomUUID();
+      if (!liveStagingAllowed) {
+        const fallback = Object.freeze({
+          requestId,
+          check,
+          phase: 'mock-fallback',
+          requiresManualInput: false,
+          fallback: 'synthetic-fixture',
+          details: String(details),
+          session: ownerSession.getState(),
+        });
+        onManualIntervention(fallback);
+        return fallback;
+      }
+
       const event = Object.freeze({
         requestId,
         check,
@@ -99,6 +119,7 @@ function createValidationHooks({
 
     getStatus() {
       return Object.freeze({
+        liveStagingAllowed,
         iphone: 'not-verified',
         privateKey: 'not-provided',
         ownerSession: ownerSession.getState(),
@@ -107,4 +128,4 @@ function createValidationHooks({
   });
 }
 
-module.exports = {LIVE_CHECKS, createValidationHooks};
+module.exports = {LIVE_CHECKS, createValidationHooks, isLiveStagingAllowed};

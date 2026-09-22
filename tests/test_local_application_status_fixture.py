@@ -76,6 +76,7 @@ const {createValidationHooks} = require('./manager-web/live-validation');
 const events = [];
 const hooks = createValidationHooks({
   ownerSession: createOwnerSession(),
+  env: {LUNA_ALLOW_LIVE_STAGING: 'true'},
   onManualIntervention: (event) => events.push(event),
 });
 console.log(JSON.stringify({event: hooks.requestManualCheck('iphone', 'Safari check'), status: hooks.getStatus(), events}));
@@ -103,6 +104,7 @@ const {createValidationHooks} = require('./manager-web/live-validation');
 let seen = '';
 const hooks = createValidationHooks({
   ownerSession: createOwnerSession(),
+  env: {LUNA_ALLOW_LIVE_STAGING: 'true'},
   onManualInput: async ({inputBuffer}) => { seen = inputBuffer.toString('utf8'); },
 });
 (async () => {
@@ -126,3 +128,33 @@ const hooks = createValidationHooks({
     assert output["consumed"]["phase"] == "manual-input-consumed"
     assert output["timeout"]["phase"] == "manual-input-timeout"
     assert output["seen"] == "temporary-private-key"
+
+
+def test_staging_gate_falls_back_without_network_and_probe_is_head_only():
+    root = Path(__file__).parents[1]
+    script = """
+const {main} = require('./tools/check_staging_readiness');
+(async () => {
+  let calls = 0;
+  const fetchImpl = async (_url, options) => {
+    calls += 1;
+    if (options.method !== 'HEAD' || options.body || options.headers.Authorization) throw new Error('unsafe probe');
+    return {status: 204, ok: true};
+  };
+  const mock = await main({LUNA_ALLOW_LIVE_STAGING: 'false', STAGING_HEALTH_ENDPOINTS: 'https://example.test/health'}, fetchImpl);
+  const live = await main({LUNA_ALLOW_LIVE_STAGING: 'true', STAGING_HEALTH_ENDPOINTS: 'https://example.test/health'}, fetchImpl);
+  console.log(JSON.stringify({mock, live, calls}));
+})();
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    output = json.loads(result.stdout)
+    assert output["mock"] == {"mode": "mock", "networkAttempted": False, "checks": []}
+    assert output["live"]["networkAttempted"] is True
+    assert output["live"]["checks"][0]["ok"] is True
+    assert output["calls"] == 1

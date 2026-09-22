@@ -108,6 +108,24 @@ The key is never placed in JSON fixtures, command arguments, browser storage,
 source control, or application logs. The endpoint is not configured in CI.
 No live command is run by automated tests.
 
+### Staging safety gate and readiness probe
+
+The live-validation hooks require the exact environment value
+`LUNA_ALLOW_LIVE_STAGING=true`. Missing, empty, or any other value forces
+`mock-fallback` to the synthetic fixture. The browser cannot enable this gate.
+
+The non-destructive pre-flight command is:
+
+```powershell
+node tools/check_staging_readiness.js
+```
+
+It reads comma-separated `STAGING_HEALTH_ENDPOINTS` and, only when the gate is
+open, sends unauthenticated `HEAD` requests with a bounded timeout. It never
+uses `OWNER_SESSION_ENDPOINT`, sends a request body, submits an application,
+or transmits a private key. With the default closed gate it reports
+`networkAttempted: false`.
+
 The website Flask app serves `/manager/`. This interface uses the existing
 Agent Desk bearer-protected CRM endpoints and database. It does not create a
 second customer store. It currently supports the today/overdue queue, request
