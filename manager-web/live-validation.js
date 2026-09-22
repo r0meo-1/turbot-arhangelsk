@@ -1,6 +1,7 @@
 'use strict';
 
 const {randomUUID} = require('node:crypto');
+const readline = require('node:readline');
 
 /*
  * Validation orchestration scaffold. It deliberately does not own a key and
@@ -29,11 +30,32 @@ function parseRuntimeConfig(env = process.env) {
   return Object.freeze({mode: 'live-staging', liveStagingAllowed: true, healthEndpoints, ownerSessionConfigured: Boolean(String(env.OWNER_SESSION_ENDPOINT || '').trim()), configError: null});
 }
 
+function listenForManualInput({requestId, submit, input = process.stdin, output = process.stdout} = {}) {
+  if (typeof submit !== 'function') throw new Error('submit callback is required.');
+  output.write(`Owner input for ${requestId} (hidden, memory only): `);
+  const silentOutput = {write() {}};
+  const rl = readline.createInterface({input, output: silentOutput, terminal: false});
+  return new Promise((resolve, reject) => {
+    rl.question('', async (value) => {
+      rl.close();
+      const buffer = Buffer.from(value, 'utf8');
+      try {
+        resolve(await submit(buffer));
+      } catch (error) {
+        reject(error);
+      } finally {
+        buffer.fill(0);
+      }
+    });
+  });
+}
+
 function createValidationHooks({
   ownerSession,
   onManualIntervention = () => {},
   onManualInput = async () => {},
   env = process.env,
+  telemetry = null,
 } = {}) {
   if (!ownerSession || typeof ownerSession.getState !== 'function') {
     throw new Error('ownerSession is required.');
@@ -42,6 +64,9 @@ function createValidationHooks({
   const pending = new Map();
   const runtimeConfig = parseRuntimeConfig(env);
   const liveStagingAllowed = runtimeConfig.mode === 'live-staging';
+  const emit = (phase, details) => {
+    if (telemetry && typeof telemetry.emit === 'function') telemetry.emit(phase, details);
+  };
 
   return Object.freeze({
     requestManualCheck(check, details = '') {
@@ -62,6 +87,7 @@ function createValidationHooks({
           runtime: runtimeConfig,
         });
         onManualIntervention(fallback);
+        emit(fallback.phase, fallback);
         return fallback;
       }
 
@@ -76,6 +102,7 @@ function createValidationHooks({
 
       // The callback receives status only; it never receives a private key.
       onManualIntervention(event);
+      emit(event.phase, event);
       pending.set(requestId, {check, event, consumer: null, timer: null});
       return event;
     },
@@ -93,8 +120,10 @@ function createValidationHooks({
               check: request.check,
               inputBuffer,
             });
+            emit('manual-input-consumed', {requestId, check: request.check});
             resolve({requestId, check: request.check, phase: 'manual-input-consumed'});
           } catch (error) {
+            emit('manual-input-rejected', {requestId, check: request.check});
             resolve({
               requestId,
               check: request.check,
@@ -105,6 +134,7 @@ function createValidationHooks({
         };
         request.timer = setTimeout(() => {
           pending.delete(requestId);
+          emit('manual-input-timeout', {requestId, check: request.check});
           resolve({requestId, check: request.check, phase: 'manual-input-timeout'});
         }, timeoutMs);
       });
@@ -115,11 +145,11 @@ function createValidationHooks({
       if (!request || !request.consumer) {
         throw new Error('Manual request is not awaiting input.');
       }
-      if (typeof value !== 'string' || value.length === 0) {
+      if (!(typeof value === 'string' || Buffer.isBuffer(value)) || value.length === 0) {
         throw new Error('Manual input must be a non-empty string.');
       }
 
-      const inputBuffer = Buffer.from(value, 'utf8');
+      const inputBuffer = Buffer.isBuffer(value) ? Buffer.from(value) : Buffer.from(value, 'utf8');
       clearTimeout(request.timer);
       pending.delete(requestId);
       try {
@@ -142,4 +172,4 @@ function createValidationHooks({
   });
 }
 
-module.exports = {LIVE_CHECKS, createValidationHooks, isLiveStagingAllowed, parseRuntimeConfig};
+module.exports = {LIVE_CHECKS, createValidationHooks, isLiveStagingAllowed, listenForManualInput, parseRuntimeConfig};

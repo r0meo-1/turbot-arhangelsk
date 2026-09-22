@@ -158,3 +158,34 @@ const {main} = require('./tools/check_staging_readiness');
     assert output["live"]["networkAttempted"] is True
     assert output["live"]["checks"][0]["ok"] is True
     assert output["calls"] == 1
+
+
+def test_live_input_listener_and_telemetry_never_print_payload():
+    root = Path(__file__).parents[1]
+    script = """
+const {Readable} = require('node:stream');
+const {listenForManualInput} = require('./manager-web/live-validation');
+const {createRuntimeTelemetry} = require('./manager-web/runtime-telemetry');
+(async () => {
+  let received = '';
+  let screen = '';
+  await listenForManualInput({
+    requestId: 'req-1',
+    input: Readable.from(['temporary-secret\\n']),
+    output: {write: (value) => { screen += value; }},
+    submit: async (buffer) => { received = buffer.toString('utf8'); },
+  });
+  let telemetry = '';
+  const log = createRuntimeTelemetry({write: (line) => { telemetry += line; }});
+  log.emit('manual-input-consumed', {requestId: 'req-1', check: 'private-key', secret: received});
+  console.log(JSON.stringify({received, screen, telemetry}));
+})();
+"""
+    result = subprocess.run(
+        ["node", "-e", script], cwd=root, check=True, capture_output=True, text=True,
+    )
+    output = json.loads(result.stdout)
+    assert output["received"] == "temporary-secret"
+    assert "temporary-secret" not in output["screen"]
+    assert "temporary-secret" not in output["telemetry"]
+    assert output["telemetry"].count('manual-input-consumed') == 1
