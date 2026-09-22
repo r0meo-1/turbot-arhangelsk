@@ -57,6 +57,28 @@ The current status of the real dependencies is intentionally explicit:
 sanitized status and never receives the private key. It does not claim that a
 field check occurred and does not submit an application.
 
+The interactive lifecycle is bounded and one-shot:
+
+1. `requestManualCheck()` creates a non-secret request id and emits the
+   `awaiting-owner-session` event.
+2. `waitForManualInput()` waits for a matching request and returns an explicit
+   `manual-input-timeout` if no owner input arrives before the deadline.
+3. `submitManualInput()` accepts input only for an actively awaited request.
+   It exposes a temporary `Buffer` only to the registered consumer and clears
+   that buffer in `finally`; the returned lifecycle result never contains the
+   input.
+
+The isolated verification script uses a synthetic value and does not contact
+any service:
+
+```powershell
+node tools/verify_manual_session.js
+```
+
+Its output reports only the request id, lifecycle phase, check name, and
+consumed byte count. Replace its synthetic adapter with a human-controlled
+terminal/UI adapter only during an explicitly authorized field session.
+
 ### Manual live transition
 
 The only supported transition is:

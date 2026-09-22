@@ -93,3 +93,36 @@ console.log(JSON.stringify({event: hooks.requestManualCheck('iphone', 'Safari ch
     assert output["status"]["iphone"] == "not-verified"
     assert output["status"]["privateKey"] == "not-provided"
     assert "temporary-private-key" not in result.stdout
+
+
+def test_manual_input_transition_is_consumed_in_memory_and_timeout_is_explicit():
+    root = Path(__file__).parents[1]
+    script = """
+const {createOwnerSession} = require('./manager-web/owner-session');
+const {createValidationHooks} = require('./manager-web/live-validation');
+let seen = '';
+const hooks = createValidationHooks({
+  ownerSession: createOwnerSession(),
+  onManualInput: async ({inputBuffer}) => { seen = inputBuffer.toString('utf8'); },
+});
+(async () => {
+  const event = hooks.requestManualCheck('private-key');
+  const waiting = hooks.waitForManualInput(event.requestId, {timeoutMs: 100});
+  await hooks.submitManualInput(event.requestId, 'temporary-private-key');
+  const consumed = await waiting;
+  const timeoutEvent = hooks.requestManualCheck('iphone');
+  const timeout = await hooks.waitForManualInput(timeoutEvent.requestId, {timeoutMs: 1});
+  console.log(JSON.stringify({consumed, timeout, seen}));
+})();
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    output = json.loads(result.stdout)
+    assert output["consumed"]["phase"] == "manual-input-consumed"
+    assert output["timeout"]["phase"] == "manual-input-timeout"
+    assert output["seen"] == "temporary-private-key"
