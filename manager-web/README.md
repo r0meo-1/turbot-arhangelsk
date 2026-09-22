@@ -16,9 +16,7 @@ before retrying. Buttons disable while their operation is pending.
 
 Browser smoke on localhost with an isolated in-memory synthetic API passed: valid/invalid key, queue, request history, note persistence across reconnect, task creation with local time, logout clearing the visible data. At 375px viewport width, no horizontal overflow. This is Chromium evidence, not Safari or production database validation.
 
-Remaining before release: actual iPhone
-verification, task completion, Telegram admin identity
-verification, deployment packaging review, CI and production revision checks.
+Remaining before release: actual iPhone verification, task completion, Telegram admin identity, deployment packaging review, CI and production revision checks.
 Do not claim issue #209 is complete or that this version has been deployed.
 
 Validation so far: `python -m pytest tests/test_manager_web.py
