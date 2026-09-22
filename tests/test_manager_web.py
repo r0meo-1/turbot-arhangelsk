@@ -13,7 +13,7 @@ def test_mobile_shell_serves_only_allowlisted_assets():
         assert response.headers["Cache-Control"] == "no-store"
         assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
-    for path in ["/manager/.env", "/manager/owner-session.js", "/manager/website_app.py", "/manager/../bot.py"]:
+    for path in ["/manager/.env", "/manager/owner-session.js", "/manager/live-validation.js", "/manager/website_app.py", "/manager/../bot.py"]:
         assert client.get(path).status_code == 404
 
 

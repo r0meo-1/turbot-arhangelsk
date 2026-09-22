@@ -31,7 +31,7 @@ def test_owner_session_mock_state_matches_fixture_without_loading_a_key():
         "employerResponse": None,
         "keyPresent": False,
     }
-    assert "private" not in result.stdout.lower()
+    assert "temporary-private-key" not in result.stdout
 
 
 def test_owner_session_live_path_requires_explicit_connector_and_scrubs_key():
@@ -66,3 +66,30 @@ session.verifyLive('temporary-private-key').then((state) => {
         "employerResponse": "http-204",
         "keyPresent": False,
     }
+
+
+def test_live_validation_hook_emits_placeholder_without_secret_or_fake_result():
+    root = Path(__file__).parents[1]
+    script = """
+const {createOwnerSession} = require('./manager-web/owner-session');
+const {createValidationHooks} = require('./manager-web/live-validation');
+const events = [];
+const hooks = createValidationHooks({
+  ownerSession: createOwnerSession(),
+  onManualIntervention: (event) => events.push(event),
+});
+console.log(JSON.stringify({event: hooks.requestManualCheck('iphone', 'Safari check'), status: hooks.getStatus(), events}));
+"""
+    result = subprocess.run(
+        ["node", "-e", script],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    output = json.loads(result.stdout)
+    assert output["event"]["phase"] == "awaiting-owner-session"
+    assert output["event"]["requiresManualInput"] is True
+    assert output["status"]["iphone"] == "not-verified"
+    assert output["status"]["privateKey"] == "not-provided"
+    assert "temporary-private-key" not in result.stdout

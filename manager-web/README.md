@@ -1,5 +1,91 @@
 # Mobile manager journal (work in progress)
 
+## Architecture and live-validation boundary
+
+This directory contains the browser shell and owner-controlled local tooling.
+The browser shell is allowed to display synthetic demo data and, after a
+manager manually enters an Agent Desk pairing key, use the existing protected
+CRM routes. It must never contain Telegram bot credentials, private keys, or a
+live-field-testing result that has not actually happened.
+
+The implementation is intentionally split into three layers:
+
+| Layer | Location | Responsibility | External writes |
+| --- | --- | --- | --- |
+| Browser shell | `index.html`, `app.js`, `styles.css` | Render manager UI and read-only demo | None in demo mode |
+| Synthetic fixtures | `../tests/fixtures/` | Deterministic local contracts | None |
+| Owner tools | `owner-session.js`, `live-validation.js` | Manual transition to a real check | Only after explicit owner invocation |
+
+`owner-session.js` and `live-validation.js` are deliberately excluded from
+the Flask static-asset allowlist. They run in an owner-controlled local Node
+process, never in the browser.
+
+### Synthetic fixture isolation
+
+`tests/fixtures/manager_demo.json` is the expected rendering contract for the
+manager demo. It contains fictional Cyprus travel data and is consumed only by
+the local browser test. `tests/fixtures/application_status.json` is a separate
+local status contract for the external application workflow:
+
+```json
+{
+  "source": "local-fixture",
+  "status": "draft",
+  "submitted": false,
+  "employer_response": null
+}
+```
+
+These fixtures are not a cache, inbox, CRM export, or employer API response.
+Tests use a local Flask server and synthetic browser data; they do not call
+Turbot, Habr, an employer, Telegram, or an iPhone. A fixture may never be
+promoted to `submitted`, `accepted`, `rejected`, or an employer response as a
+side effect of a test.
+
+### Real-world checks are structural placeholders
+
+The current status of the real dependencies is intentionally explicit:
+
+- iPhone verification: `not-verified` / waiting for an owner session;
+- private-key verification: `not-provided` until manually entered locally;
+- external application: `draft`, `submitted: false`;
+- employer response: `null` until a real response is manually observed and
+  recorded through an approved workflow.
+
+`live-validation.js` exposes hooks that can emit an
+`awaiting-owner-session` event for these checks. The hook receives only
+sanitized status and never receives the private key. It does not claim that a
+field check occurred and does not submit an application.
+
+### Manual live transition
+
+The only supported transition is:
+
+```text
+mock fixture
+  -> explicit owner command
+  -> hidden local key prompt
+  -> configured live connector
+  -> sanitized in-memory result
+```
+
+Run the safe default with:
+
+```powershell
+node manager-web/owner-session.js
+```
+
+Live mode requires both an explicit flag and a server-side endpoint:
+
+```powershell
+$env:OWNER_SESSION_ENDPOINT = "https://owner-controlled-endpoint.example/check"
+node manager-web/owner-session.js --live --confirm-live
+```
+
+The key is never placed in JSON fixtures, command arguments, browser storage,
+source control, or application logs. The endpoint is not configured in CI.
+No live command is run by automated tests.
+
 The website Flask app serves `/manager/`. This interface uses the existing
 Agent Desk bearer-protected CRM endpoints and database. It does not create a
 second customer store. It currently supports the today/overdue queue, request
