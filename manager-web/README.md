@@ -113,6 +113,9 @@ No live command is run by automated tests.
 The live-validation hooks require the exact environment value
 `LUNA_ALLOW_LIVE_STAGING=true`. Missing, empty, or any other value forces
 `mock-fallback` to the synthetic fixture. The browser cannot enable this gate.
+The hooks and readiness probe share one sanitized runtime parser: malformed
+health URLs also fail closed to mock, while a valid opt-in with no health URLs
+reports an incomplete `live-staging` configuration without making a request.
 
 The non-destructive pre-flight command is:
 

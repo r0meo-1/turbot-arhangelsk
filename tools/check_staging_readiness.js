@@ -6,7 +6,7 @@
  * network calls and reports mock fallback.
  */
 
-const {isLiveStagingAllowed} = require('../manager-web/live-validation');
+const {parseRuntimeConfig} = require('../manager-web/live-validation');
 
 function endpointsFrom(env) {
   return String(env.STAGING_HEALTH_ENDPOINTS || '')
@@ -34,9 +34,10 @@ async function checkEndpoint(value, fetchImpl = globalThis.fetch) {
 }
 
 async function main(env = process.env, fetchImpl = globalThis.fetch) {
-  const endpoints = endpointsFrom(env);
-  if (!isLiveStagingAllowed(env)) {
-    return {mode: 'mock', networkAttempted: false, checks: []};
+  const config = parseRuntimeConfig(env);
+  const endpoints = config.healthEndpoints;
+  if (config.mode === 'mock') {
+    return {mode: 'mock', networkAttempted: false, checks: [], configError: config.configError};
   }
   if (!endpoints.length) {
     return {mode: 'live-staging', networkAttempted: false, checks: [], error: 'STAGING_HEALTH_ENDPOINTS is empty'};

@@ -18,6 +18,17 @@ function isLiveStagingAllowed(env = process.env) {
   return env.LUNA_ALLOW_LIVE_STAGING === 'true';
 }
 
+function parseRuntimeConfig(env = process.env) {
+  if (!isLiveStagingAllowed(env)) {
+    return Object.freeze({mode: 'mock', liveStagingAllowed: false, healthEndpoints: [], ownerSessionConfigured: false, configError: null});
+  }
+  const healthEndpoints = String(env.STAGING_HEALTH_ENDPOINTS || '').split(',').map((value) => value.trim()).filter(Boolean);
+  if (healthEndpoints.some((value) => !/^https?:\/\//i.test(value))) {
+    return Object.freeze({mode: 'mock', liveStagingAllowed: false, healthEndpoints: [], ownerSessionConfigured: false, configError: 'invalid staging endpoint'});
+  }
+  return Object.freeze({mode: 'live-staging', liveStagingAllowed: true, healthEndpoints, ownerSessionConfigured: Boolean(String(env.OWNER_SESSION_ENDPOINT || '').trim()), configError: null});
+}
+
 function createValidationHooks({
   ownerSession,
   onManualIntervention = () => {},
@@ -29,7 +40,8 @@ function createValidationHooks({
   }
 
   const pending = new Map();
-  const liveStagingAllowed = isLiveStagingAllowed(env);
+  const runtimeConfig = parseRuntimeConfig(env);
+  const liveStagingAllowed = runtimeConfig.mode === 'live-staging';
 
   return Object.freeze({
     requestManualCheck(check, details = '') {
@@ -47,6 +59,7 @@ function createValidationHooks({
           fallback: 'synthetic-fixture',
           details: String(details),
           session: ownerSession.getState(),
+          runtime: runtimeConfig,
         });
         onManualIntervention(fallback);
         return fallback;
@@ -120,6 +133,7 @@ function createValidationHooks({
     getStatus() {
       return Object.freeze({
         liveStagingAllowed,
+        runtime: runtimeConfig,
         iphone: 'not-verified',
         privateKey: 'not-provided',
         ownerSession: ownerSession.getState(),
@@ -128,4 +142,4 @@ function createValidationHooks({
   });
 }
 
-module.exports = {LIVE_CHECKS, createValidationHooks, isLiveStagingAllowed};
+module.exports = {LIVE_CHECKS, createValidationHooks, isLiveStagingAllowed, parseRuntimeConfig};

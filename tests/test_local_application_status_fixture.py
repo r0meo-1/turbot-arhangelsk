@@ -154,7 +154,7 @@ const {main} = require('./tools/check_staging_readiness');
         text=True,
     )
     output = json.loads(result.stdout)
-    assert output["mock"] == {"mode": "mock", "networkAttempted": False, "checks": []}
+    assert output["mock"] == {"mode": "mock", "networkAttempted": False, "checks": [], "configError": None}
     assert output["live"]["networkAttempted"] is True
     assert output["live"]["checks"][0]["ok"] is True
     assert output["calls"] == 1
