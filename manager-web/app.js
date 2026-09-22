@@ -62,7 +62,6 @@ async function saveEntry(kind){
 }
 $('saveNote').addEventListener('click',()=>saveEntry('activity'));
 $('saveTask').addEventListener('click',()=>saveEntry('task'));
-
 const reactions={draft:'Черновик',sent:'Отправлено',viewed:'Просмотрено',too_expensive:'Дорого',thinking:'Думает',wants_alternative:'Другой вариант',accepted:'Подходит',rejected:'Отказ'};
 function renderReaction(item,quote,events,requestId){
  const label=document.createElement('label');label.textContent='Реакция клиента';
