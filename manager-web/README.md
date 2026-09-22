@@ -27,6 +27,14 @@ The local application-status fixture at
 `submitted: false`; it is not an employer response and does not call TurBot,
 Habr, or any external vacancy service.
 
+`owner-session.js` is intentionally not a served manager asset. Run it only
+from an owner-controlled terminal. Its default command prints the synthetic
+state. Live verification requires both `--live` and `--confirm-live`, plus a
+server-side `OWNER_SESSION_ENDPOINT`; the private-key prompt is hidden, and
+the key is passed only to the injected live connector and then discarded. A
+live response updates only the in-memory status returned by that process. It
+does not rewrite `application_status.json` or create a browser session.
+
 Writes are never automatically retried: a network error can occur after a
 successful server commit. The interface asks the manager to inspect history
 before retrying. Buttons disable while their operation is pending.
