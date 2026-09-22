@@ -64,8 +64,24 @@ function createValidationHooks({
   const pending = new Map();
   const runtimeConfig = parseRuntimeConfig(env);
   const liveStagingAllowed = runtimeConfig.mode === 'live-staging';
+  let activeMode = runtimeConfig.mode;
   const emit = (phase, details) => {
     if (telemetry && typeof telemetry.emit === 'function') telemetry.emit(phase, details);
+  };
+  const rollbackToMock = (request, reason) => {
+    activeMode = 'mock';
+    const fallback = Object.freeze({
+      requestId: request.event.requestId,
+      check: request.check,
+      phase: 'mock-fallback',
+      requiresManualInput: false,
+      fallback: 'synthetic-fixture',
+      reason,
+      runtime: Object.freeze({...runtimeConfig, mode: 'mock'}),
+    });
+    onManualIntervention(fallback);
+    emit('mock-fallback', fallback);
+    return fallback;
   };
 
   return Object.freeze({
@@ -75,7 +91,7 @@ function createValidationHooks({
       }
 
       const requestId = randomUUID();
-      if (!liveStagingAllowed) {
+      if (activeMode !== 'live-staging') {
         const fallback = Object.freeze({
           requestId,
           check,
@@ -84,7 +100,7 @@ function createValidationHooks({
           fallback: 'synthetic-fixture',
           details: String(details),
           session: ownerSession.getState(),
-          runtime: runtimeConfig,
+          runtime: Object.freeze({...runtimeConfig, mode: activeMode}),
         });
         onManualIntervention(fallback);
         emit(fallback.phase, fallback);
@@ -124,6 +140,7 @@ function createValidationHooks({
             resolve({requestId, check: request.check, phase: 'manual-input-consumed'});
           } catch (error) {
             emit('manual-input-rejected', {requestId, check: request.check});
+            rollbackToMock(request, 'manual-input-rejected');
             resolve({
               requestId,
               check: request.check,
@@ -135,6 +152,7 @@ function createValidationHooks({
         request.timer = setTimeout(() => {
           pending.delete(requestId);
           emit('manual-input-timeout', {requestId, check: request.check});
+          rollbackToMock(request, 'manual-input-timeout');
           resolve({requestId, check: request.check, phase: 'manual-input-timeout'});
         }, timeoutMs);
       });
@@ -163,7 +181,7 @@ function createValidationHooks({
     getStatus() {
       return Object.freeze({
         liveStagingAllowed,
-        runtime: runtimeConfig,
+        runtime: Object.freeze({...runtimeConfig, mode: activeMode}),
         iphone: 'not-verified',
         privateKey: 'not-provided',
         ownerSession: ownerSession.getState(),
