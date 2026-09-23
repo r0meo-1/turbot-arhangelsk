@@ -12,6 +12,7 @@ def test_mobile_shell_serves_only_allowlisted_assets():
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "no-store"
         assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
+        assert "script-src 'self' https://telegram.org" in response.headers["Content-Security-Policy"]
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
     for path in ["/manager/.env", "/manager/owner-session.js", "/manager/live-validation.js", "/manager/website_app.py", "/manager/../bot.py"]:
         assert client.get(path).status_code == 404
@@ -24,6 +25,7 @@ def test_public_shell_contains_no_customer_records():
     assert b'id="desk" hidden' in response.data
     assert b'id="token" type="password"' in response.data
     assert b"/agentdesk" in response.data
+    assert b"https://telegram.org/js/telegram-web-app.js" in response.data
 
 
 def test_client_bundle_never_contains_server_only_secret_names():
@@ -34,3 +36,12 @@ def test_client_bundle_never_contains_server_only_secret_names():
         body = client.get(path).data
         for forbidden in [b"BOT_TOKEN", b"ADMIN_ID", b"AGENT_EXTENSION_TOKEN"]:
             assert forbidden not in body
+
+
+def test_client_uses_signed_telegram_header_without_persisting_it():
+    app = Flask(__name__)
+    app.register_blueprint(manager_web)
+    body = app.test_client().get("/manager/app.js").data
+    assert b"X-Telegram-Init-Data" in body
+    assert b"localStorage" not in body
+    assert b"sessionStorage" not in body

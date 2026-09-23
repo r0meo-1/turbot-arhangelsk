@@ -16,7 +16,7 @@ def manager_asset(name="index.html"):
     response = send_from_directory(_ROOT, name)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; script-src 'self'; style-src 'self'; "
+        "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self'; "
         "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     )
     response.headers["Referrer-Policy"] = "no-referrer"
