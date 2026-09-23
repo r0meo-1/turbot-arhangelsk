@@ -33,6 +33,7 @@ try:
 except ImportError:  # groq may not be installed in all environments
     Groq = None  # type: ignore
 
+from shared.utc_time import utc_now_naive
 from shared.constants import (
     STATE_BUDGET,
     STATE_CONSENT,
@@ -987,7 +988,7 @@ def save_lead(
             _travel_crm_store.ensure_initial_task(
                 cur.connection,
                 crm_request.request_id,
-                datetime.utcnow(),
+                utc_now_naive(),
             )
         except Exception as exc:
             # CRM mirroring is additive. A malformed legacy field must never

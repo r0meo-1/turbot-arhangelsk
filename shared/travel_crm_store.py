@@ -13,6 +13,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
+from shared.utc_time import utc_now_naive
 from shared.travel_crm import (
     Activity,
     ActivityType,
@@ -239,7 +240,7 @@ def upsert_request(
     lead_id: int | None = None,
     now: datetime | None = None,
 ) -> None:
-    stamp = _to_epoch(now or datetime.utcnow())
+    stamp = _to_epoch(now or utc_now_naive())
     payload = json.dumps(
         _request_payload(request),
         ensure_ascii=False,

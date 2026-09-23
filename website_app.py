@@ -30,6 +30,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from flask import Response, jsonify, request
 
 import bot as _bot
+from shared.utc_time import utc_now_naive
 from shared import mdt as mdt_shared
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import travel_crm_store as _travel_crm_store
@@ -772,7 +773,7 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
                 _travel_crm_store.ensure_initial_task(
                     cur.connection,
                     crm_request.request_id,
-                    datetime.utcnow(),
+                    utc_now_naive(),
                 )
             except Exception as crm_exc:
                 logger.warning(
@@ -987,7 +988,7 @@ if "agent_extension_status" not in app.view_functions:
                         request_id=request_id,
                         type=ActivityType.STATUS_CHANGE,
                         summary=summary,
-                        created_at=datetime.utcnow(),
+                        created_at=utc_now_naive(),
                     ),
                 )
                 if follow_up_on:
@@ -999,7 +1000,7 @@ if "agent_extension_status" not in app.view_functions:
                             request_id=request_id,
                             type=TaskType.NEXT_CONTACT,
                             due_at=datetime.combine(follow_date, datetime.min.time()),
-                            created_at=datetime.utcnow(),
+                            created_at=utc_now_naive(),
                             priority=2,
                             note="Связаться с клиентом",
                         ),
@@ -1016,7 +1017,7 @@ if "agent_extension_status" not in app.view_functions:
                         BookingOutcome(
                             status=outcome_status,
                             reason=note,
-                            decided_at=datetime.utcnow(),
+                            decided_at=utc_now_naive(),
                         ),
                     )
                 if status in {"won", "lost"}:
@@ -1144,7 +1145,7 @@ def _agent_crm_find_entity_store(table: str, key_column: str, key_value: str):
 def _agent_parse_datetime(value: Any) -> datetime:
     raw = str(value or "").strip()
     if not raw:
-        return datetime.utcnow()
+        return utc_now_naive()
     parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
@@ -1373,7 +1374,7 @@ if "agent_extension_crm_today" not in app.view_functions:
 
         try:
             now_raw = str(request.args.get("now") or "").strip()
-            now = _agent_parse_datetime(now_raw) if now_raw else datetime.utcnow()
+            now = _agent_parse_datetime(now_raw) if now_raw else utc_now_naive()
             tz_offset_minutes = int(request.args.get("tzOffsetMinutes") or 0)
             if not -840 <= tz_offset_minutes <= 840:
                 raise ValueError("timezone offset out of range")
@@ -1672,7 +1673,7 @@ if "agent_extension_crm_task" not in app.view_functions:
                 request_id=request_id,
                 type=task_type,
                 due_at=due_at,
-                created_at=datetime.utcnow(),
+                created_at=utc_now_naive(),
                 priority=priority,
                 note=note,
             )
@@ -1732,7 +1733,7 @@ if "agent_extension_crm_quote" not in app.view_functions:
                 meal_plan=meal_plan,
                 price_amount=price_amount,
                 currency=currency,
-                calculated_at=datetime.utcnow(),
+                calculated_at=utc_now_naive(),
                 reaction=reaction,
             )
         except (TypeError, ValueError):
@@ -1810,7 +1811,7 @@ if "agent_extension_crm_reaction" not in app.view_functions:
                 request_id=request_id,
                 reaction=reaction,
                 note=note,
-                created_at=datetime.utcnow(),
+                created_at=utc_now_naive(),
             )
             _travel_crm_store.append_quote_reaction(cur.connection, event)
         return _agent_json_response({
@@ -1853,7 +1854,7 @@ if "agent_extension_crm_activity" not in app.view_functions:
             request_id=request_id,
             type=activity_type,
             summary=summary,
-            created_at=datetime.utcnow(),
+            created_at=utc_now_naive(),
         )
         store = _agent_crm_store_for_request(request_id)
         with _agent_crm_cursor(store, commit=True) as cur:
@@ -1897,7 +1898,7 @@ if "agent_extension_crm_outcome" not in app.view_functions:
                 {"ok": False, "error": "invalid_request_id"}, 400
             )
 
-        now = datetime.utcnow()
+        now = utc_now_naive()
         store = _agent_crm_store_for_request(request_id)
         with _agent_crm_cursor(store, commit=True) as cur:
             if cur is None or _travel_crm_store.load_timeline(cur.connection, request_id) is None:

@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from shared.utc_time import utc_now_naive
 
 
 class BudgetType(str, Enum):
@@ -144,7 +145,7 @@ class Quote:
     meal_plan: str = ""
     price_amount: int = 0
     currency: str = "RUB"
-    calculated_at: datetime = field(default_factory=datetime.utcnow)
+    calculated_at: datetime = field(default_factory=utc_now_naive)
     reaction: QuoteReaction = QuoteReaction.DRAFT
 
     def __post_init__(self) -> None:
@@ -209,7 +210,7 @@ class ManagerTask:
 class BookingOutcome:
     status: OutcomeStatus
     reason: str = ""
-    decided_at: datetime = field(default_factory=datetime.utcnow)
+    decided_at: datetime = field(default_factory=utc_now_naive)
 
 
 @dataclass(frozen=True)
