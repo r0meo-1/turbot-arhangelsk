@@ -4,6 +4,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 
 import pytest
 
@@ -19,7 +20,7 @@ def test_receipts_survive_a_new_process_and_do_not_store_payloads(tmp_path):
         "assert run_once(sys.argv[1], sys.argv[2], lambda: sys.exit(8)) is False",
         str(path), key], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         assert conn.execute("SELECT * FROM webhook_receipts").fetchone()[:2] == (key, "complete")
         assert [r[1] for r in conn.execute("PRAGMA table_info(webhook_receipts)")] == [
             "event_key", "state", "updated_at"]
@@ -61,7 +62,7 @@ run_once(sys.argv[1], 'crash', effect)
     assert marker.read_text() == "sent"
     with pytest.raises(DeliveryPending):
         run_once(path, "crash", lambda: pytest.fail("would duplicate external effect"))
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         assert conn.execute("SELECT state FROM webhook_receipts").fetchone()[0] == "processing"
 
 
@@ -79,7 +80,7 @@ def test_uncertain_side_effect_keeps_receipt_fenced(tmp_path, fault):
 def test_database_lock_prevents_processing_then_allows_safe_retry(tmp_path):
     path = tmp_path / "state.sqlite"
     run_once(path, "setup", lambda: None)
-    with sqlite3.connect(path) as blocker:
+    with closing(sqlite3.connect(path)) as blocker, blocker:
         blocker.execute("BEGIN IMMEDIATE")
         with pytest.raises(sqlite3.OperationalError, match="locked"):
             run_once(path, "next", lambda: pytest.fail("no receipt committed"))
@@ -108,7 +109,7 @@ def test_reconciliation_does_not_reopen_completed_deliveries(tmp_path):
     key = event_key("vk", 99, 33)
     with pytest.raises(TimeoutError):
         run_once(path, key, lambda: (_ for _ in ()).throw(TimeoutError()))
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         reconcile(conn, key, "complete")
         with pytest.raises(ValueError, match="already complete"):
             reconcile(conn, key, "retry")
@@ -121,6 +122,6 @@ def test_reconciliation_can_allow_a_proven_safe_redelivery(tmp_path):
     key = event_key("vk", 99, 34)
     with pytest.raises(RuntimeError):
         run_once(path, key, lambda: (_ for _ in ()).throw(RuntimeError()))
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         reconcile(conn, key, "retry")
     assert run_once(path, key, lambda: None)

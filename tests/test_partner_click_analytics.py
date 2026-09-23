@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 
 import bot
 
@@ -13,7 +14,7 @@ def _use_temp_db(monkeypatch, tmp_path):
 def test_partner_click_schema_contains_no_identity_columns(monkeypatch, tmp_path):
     path = _use_temp_db(monkeypatch, tmp_path)
 
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         columns = {
             row[1]
             for row in conn.execute("PRAGMA table_info(partner_clicks)").fetchall()
@@ -31,7 +32,7 @@ def test_record_partner_click_persists_anonymous_dimensions(monkeypatch, tmp_pat
 
     bot.record_partner_click("hotel", "Таиланд", "api")
 
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         row = conn.execute(
             "SELECT service, destination, mode, source FROM partner_clicks"
         ).fetchone()
@@ -45,7 +46,7 @@ def test_record_partner_click_rejects_unknown_dimensions(monkeypatch, tmp_path):
     bot.record_partner_click("unknown", "Таиланд", "api")
     bot.record_partner_click("hotel", "Таиланд", "mystery")
 
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         count = conn.execute("SELECT COUNT(*) FROM partner_clicks").fetchone()[0]
 
     assert count == 0
@@ -119,7 +120,7 @@ def test_admin_analytics_includes_partner_click_summary(monkeypatch, tmp_path):
 def test_partner_analytics_respects_requested_window(monkeypatch, tmp_path):
     path = _use_temp_db(monkeypatch, tmp_path)
     now = 2_000_000_000
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.executemany(
             "INSERT INTO partner_clicks "
             "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -154,7 +155,7 @@ def test_cleanup_partner_clicks_honors_retention(monkeypatch, tmp_path):
     now = 2_000_000_000
     monkeypatch.setattr(bot, "PARTNER_ANALYTICS_RETENTION_DAYS", 30)
 
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.executemany(
             "INSERT INTO partner_clicks "
             "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -166,7 +167,7 @@ def test_cleanup_partner_clicks_honors_retention(monkeypatch, tmp_path):
         conn.commit()
 
     assert bot.cleanup_partner_clicks(now=now) == 1
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         rows = conn.execute(
             "SELECT service FROM partner_clicks ORDER BY service"
         ).fetchall()
@@ -176,7 +177,7 @@ def test_cleanup_partner_clicks_honors_retention(monkeypatch, tmp_path):
 def test_cleanup_partner_clicks_can_be_disabled(monkeypatch, tmp_path):
     path = _use_temp_db(monkeypatch, tmp_path)
     monkeypatch.setattr(bot, "PARTNER_ANALYTICS_RETENTION_DAYS", 0)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.execute(
             "INSERT INTO partner_clicks "
             "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -185,7 +186,7 @@ def test_cleanup_partner_clicks_can_be_disabled(monkeypatch, tmp_path):
         conn.commit()
 
     assert bot.cleanup_partner_clicks(now=2_000_000_000) == 0
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         assert conn.execute("SELECT COUNT(*) FROM partner_clicks").fetchone()[0] == 1
 
 
@@ -194,7 +195,7 @@ def test_admin_partners_reports_aggregate_not_attribution(monkeypatch, tmp_path)
     now = 2_000_000_000
     monkeypatch.setattr(bot.time, "time", lambda: now)
 
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.executemany(
             "INSERT INTO partner_clicks "
             "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",
@@ -245,7 +246,7 @@ def test_admin_partners_includes_travelpayouts_money(monkeypatch, tmp_path):
     now = 2_000_000_000
     monkeypatch.setattr(bot.time, "time", lambda: now)
 
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn, conn:
         conn.executemany(
             "INSERT INTO partner_clicks "
             "(service, destination, mode, source, created_at) VALUES (?, ?, ?, ?, ?)",

@@ -1,4 +1,5 @@
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta
 
 import pytest
@@ -35,10 +36,16 @@ from shared.travel_crm_store import (
 )
 
 
-def _db():
-    conn = sqlite3.connect(":memory:")
-    init_schema(conn.cursor())
-    return conn
+@pytest.fixture
+def raw_conn():
+    with closing(sqlite3.connect(":memory:")) as connection:
+        yield connection
+
+
+@pytest.fixture
+def conn(raw_conn):
+    init_schema(raw_conn.cursor())
+    return raw_conn
 
 
 def _request():
@@ -64,8 +71,7 @@ def _request():
     )
 
 
-def test_schema_is_idempotent_and_preserves_attribution():
-    conn = _db()
+def test_schema_is_idempotent_and_preserves_attribution(conn):
     init_schema(conn.cursor())
     request = _request()
 
@@ -77,8 +83,8 @@ def test_schema_is_idempotent_and_preserves_attribution():
     assert row == (123, "video_pain", "telegram", "winter_test")
 
 
-def test_schema_adds_manager_assignment_columns_to_existing_request_table():
-    conn = sqlite3.connect(":memory:")
+def test_schema_adds_manager_assignment_columns_to_existing_request_table(raw_conn):
+    conn = raw_conn
     conn.execute(
         """
         CREATE TABLE crm_trip_requests (
@@ -102,8 +108,7 @@ def test_schema_adds_manager_assignment_columns_to_existing_request_table():
     assert {"assigned_manager_id", "assigned_manager_name", "assigned_at"} <= columns
 
 
-def test_timeline_round_trip_keeps_append_only_history():
-    conn = _db()
+def test_timeline_round_trip_keeps_append_only_history(conn):
     request = _request()
     upsert_request(conn, request)
 
@@ -158,8 +163,7 @@ def test_timeline_round_trip_keeps_append_only_history():
     assert [child.age for child in timeline.request.children] == [4, 9]
 
 
-def test_duplicate_quote_id_is_rejected_instead_of_overwriting_history():
-    conn = _db()
+def test_duplicate_quote_id_is_rejected_instead_of_overwriting_history(conn):
     request = _request()
     upsert_request(conn, request)
     quote = Quote(
@@ -174,8 +178,7 @@ def test_duplicate_quote_id_is_rejected_instead_of_overwriting_history():
         append_quote(conn, quote)
 
 
-def test_due_tasks_returns_today_queue_by_priority():
-    conn = _db()
+def test_due_tasks_returns_today_queue_by_priority(conn):
     request = _request()
     upsert_request(conn, request)
     now = datetime(2026, 9, 21, 12, 0)
@@ -216,8 +219,7 @@ def test_due_tasks_returns_today_queue_by_priority():
     assert [task.task_id for task in due_tasks(conn, now)] == ["send", "callback"]
 
 
-def test_delete_for_lead_ids_erases_whole_crm_timeline():
-    conn = _db()
+def test_delete_for_lead_ids_erases_whole_crm_timeline(conn):
     request = _request()
     upsert_request(conn, request, lead_id=77)
     append_quote(
@@ -247,8 +249,7 @@ def test_delete_for_lead_ids_erases_whole_crm_timeline():
 
 
 
-def test_quote_reaction_history_is_append_only_and_round_trips():
-    conn = _db()
+def test_quote_reaction_history_is_append_only_and_round_trips(conn):
     request = _request()
     upsert_request(conn, request)
     quote = Quote(
@@ -293,8 +294,7 @@ def test_quote_reaction_history_is_append_only_and_round_trips():
     assert timeline.quote_reactions[-1].reaction is QuoteReaction.WANTS_ALTERNATIVE
 
 
-def test_initial_task_is_idempotent_and_can_be_completed():
-    conn = _db()
+def test_initial_task_is_idempotent_and_can_be_completed(conn):
     request = _request()
     upsert_request(conn, request)
     now = datetime(2026, 9, 21, 9, 0)
@@ -312,8 +312,7 @@ def test_initial_task_is_idempotent_and_can_be_completed():
     assert due_tasks(conn, now + timedelta(hours=1)) == []
 
 
-def test_channel_scoped_delete_does_not_erase_same_numeric_id_from_another_channel():
-    conn = _db()
+def test_channel_scoped_delete_does_not_erase_same_numeric_id_from_another_channel(conn):
     telegram = _request()
     website = TripRequest(
         request_id="web-lead-77",
