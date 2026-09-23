@@ -713,7 +713,9 @@ def test_agent_extension_crm_today_quote_reaction_and_activity(client, monkeypat
         headers=_agent_headers(),
     )
     assert timeline.status_code == 200
-    payload = timeline.get_json()["timeline"]
+    timeline_body = timeline.get_json()
+    payload = timeline_body["timeline"]
+    assert timeline_body["replyTemplate"] == bot._manager_quick_reply_text()
     assert payload["request"]["attribution"]["channel"] == "website"
     assert payload["quotes"][0]["hotel"] == "Synthetic Family Resort 5*"
     assert payload["quote_reactions"][-1]["reaction"] == "too_expensive"

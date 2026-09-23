@@ -27,7 +27,9 @@ def test_public_shell_contains_no_customer_records():
     assert b"/agentdesk" in response.data
     assert b"https://telegram.org/js/telegram-web-app.js" in response.data
     assert b'id="analytics"' in response.data
+    assert b'id="replyTemplate"' in response.data
     assert "время системной доставки менеджеру" in response.get_data(as_text=True)
+    assert "Кнопка только копирует текст" in response.get_data(as_text=True)
 
 
 def test_client_bundle_never_contains_server_only_secret_names():
@@ -50,3 +52,7 @@ def test_client_uses_signed_telegram_header_without_persisting_it():
     assert b"api('summary')" in body
     assert b"api('assign'" in body
     assert "Взять в работу" in body.decode("utf-8")
+    assert b"navigator.clipboard.writeText" in body
+    assert b"api.telegram.org" not in body
+    assert b"sendMessage" not in body
+    assert b"window.open" not in body

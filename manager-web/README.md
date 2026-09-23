@@ -146,6 +146,10 @@ explicitly system create-to-manager-delivery latency, not human response time.
 An authenticated manager may atomically claim an unassigned request. The API
 is idempotent for the same manager and returns a conflict instead of silently
 overwriting another manager's assignment.
+The request card also renders the same server-side first-reply template used in
+Telegram/VK lead notifications. The browser may copy it to the local clipboard
+but never sends a customer message; the manager reviews the text and chooses
+the destination channel manually.
 
 The public HTML contains no CRM data. The user supplies an existing Agent Desk
 pairing key; it is held in memory and cleared on logout/pagehide. No persistent

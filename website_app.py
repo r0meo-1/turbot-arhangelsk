@@ -1414,6 +1414,7 @@ if "agent_extension_crm_timeline" not in app.view_functions:
         return _agent_json_response({
             "ok": True,
             "timeline": payload,
+            "replyTemplate": _bot._manager_quick_reply_text(),
         })
 
 
