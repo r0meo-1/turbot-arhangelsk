@@ -1006,7 +1006,8 @@ def test_agent_extension_crm_assignment_is_atomic_and_idempotent(client, monkeyp
     monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
     monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
     monkeypatch.setattr(bot, "BOT_TOKEN", "manager-test-token")
-    monkeypatch.setattr(website_app, "_MANAGER_TELEGRAM_IDS", {4242, 4343})
+    monkeypatch.setattr(bot, "ADMIN_ID", 999)
+    monkeypatch.setattr(website_app, "_MANAGER_TELEGRAM_IDS", {4242, 4343, 999})
     create = client.post(
         "/agent-extension/lead",
         headers=_agent_headers(),
@@ -1031,6 +1032,8 @@ def test_agent_extension_crm_assignment_is_atomic_and_idempotent(client, monkeyp
     )
     assert claimed.status_code == 200
     assert claimed.get_json()["assignment"]["name"] == "Manager One"
+    assert claimed.get_json()["assignment"]["mine"] is True
+    assert claimed.get_json()["assignment"]["canRelease"] is True
 
     duplicate = client.post(
         "/agent-extension/crm/assign",
@@ -1055,6 +1058,14 @@ def test_agent_extension_crm_assignment_is_atomic_and_idempotent(client, monkeyp
     ).get_json()["timeline"]
     assert timeline["assignment"]["assigned"] is True
     assert timeline["assignment"]["name"] == "Manager One"
+    assert timeline["assignment"]["mine"] is True
+    assert timeline["assignment"]["canRelease"] is True
+    foreign_timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=" + request_id,
+        headers=manager_two,
+    ).get_json()["timeline"]
+    assert foreign_timeline["assignment"]["mine"] is False
+    assert foreign_timeline["assignment"]["canRelease"] is False
     today = client.get(
         "/agent-extension/crm/today",
         headers=manager_one,
@@ -1073,6 +1084,62 @@ def test_agent_extension_crm_assignment_is_atomic_and_idempotent(client, monkeyp
     assert stored[0] == 4242
     assert stored[1] == "Manager One"
     assert stored[2] > 0
+
+    forbidden_release = client.post(
+        "/agent-extension/crm/unassign",
+        headers=manager_two,
+        json={"requestId": request_id},
+    )
+    assert forbidden_release.status_code == 403
+    assert forbidden_release.get_json()["error"] == "release_forbidden"
+
+    released = client.post(
+        "/agent-extension/crm/unassign",
+        headers=manager_one,
+        json={"requestId": request_id},
+    )
+    assert released.status_code == 200
+    assert released.get_json()["assignment"]["assigned"] is False
+    duplicate_release = client.post(
+        "/agent-extension/crm/unassign",
+        headers=manager_one,
+        json={"requestId": request_id},
+    )
+    assert duplicate_release.status_code == 200
+    assert duplicate_release.get_json()["duplicate"] is True
+
+    reclaimed = client.post(
+        "/agent-extension/crm/assign",
+        headers=manager_one,
+        json={"requestId": request_id},
+    )
+    assert reclaimed.status_code == 200
+    admin = {
+        "X-Telegram-Init-Data": _signed_manager_init_data(
+            999, first_name="Admin"
+        )
+    }
+    admin_timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=" + request_id,
+        headers=admin,
+    ).get_json()["timeline"]
+    assert admin_timeline["assignment"]["mine"] is False
+    assert admin_timeline["assignment"]["canRelease"] is True
+    admin_release = client.post(
+        "/agent-extension/crm/unassign",
+        headers=admin,
+        json={"requestId": request_id},
+    )
+    assert admin_release.status_code == 200
+    with bot._db_cursor() as cur:
+        cleared = cur.execute(
+            """
+            SELECT assigned_manager_id, assigned_manager_name, assigned_at
+            FROM crm_trip_requests WHERE request_id=?
+            """,
+            (request_id,),
+        ).fetchone()
+    assert tuple(cleared) == (None, None, None)
 
 
 def test_agent_extension_crm_rejects_valid_non_manager_telegram_identity(client, monkeypatch):

@@ -1196,25 +1196,42 @@ def _agent_crm_client_summary(cur: Any, request_id: str) -> Dict[str, Any]:
     return {"leadId": lead_id, "name": "", "phone": "", "username": ""}
 
 
-def _agent_crm_assignment(cur: Any, request_id: str) -> Dict[str, Any]:
+def _agent_crm_assignment(
+    cur: Any,
+    request_id: str,
+    identity: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     row = cur.execute(
         """
-        SELECT assigned_manager_name, assigned_at
+        SELECT assigned_manager_id, assigned_manager_name, assigned_at
         FROM crm_trip_requests
         WHERE request_id=?
         """,
         (request_id,),
     ).fetchone()
-    if not row or not row[0]:
-        return {"assigned": False, "name": "", "assignedAt": None}
+    if not row or not row[1]:
+        return {
+            "assigned": False, "name": "", "assignedAt": None,
+            "mine": False, "canRelease": False,
+        }
+    manager_id = int(row[0] or 0)
+    viewer_id = int(identity["id"]) if identity is not None else 0
+    mine = bool(viewer_id and manager_id == viewer_id)
+    is_admin = bool(_bot.ADMIN_ID and viewer_id == int(_bot.ADMIN_ID))
     return {
         "assigned": True,
-        "name": str(row[0]),
-        "assignedAt": int(row[1]) if row[1] is not None else None,
+        "name": str(row[1]),
+        "assignedAt": int(row[2]) if row[2] is not None else None,
+        "mine": mine,
+        "canRelease": mine or is_admin,
     }
 
 
-def _agent_crm_today_items(store: str, end_of_day: datetime):
+def _agent_crm_today_items(
+    store: str,
+    end_of_day: datetime,
+    identity: Optional[Dict[str, Any]] = None,
+):
     result = []
     with _agent_crm_cursor(store) as cur:
         if cur is None:
@@ -1253,7 +1270,9 @@ def _agent_crm_today_items(store: str, end_of_day: datetime):
                     "budget": trip.budget_amount,
                     "budgetScope": trip.budget_scope.value,
                     "client": _agent_crm_client_summary(cur, task.request_id),
-                    "assignment": _agent_crm_assignment(cur, task.request_id),
+                    "assignment": _agent_crm_assignment(
+                        cur, task.request_id, identity
+                    ),
                 },
             ))
     return result
@@ -1371,10 +1390,11 @@ if "agent_extension_crm_today" not in app.view_functions:
             hour=23, minute=59, second=59, microsecond=999999
         )
         end_of_day = local_end_of_day + timedelta(minutes=tz_offset_minutes)
+        identity = _agent_manager_identity()
 
-        rows = _agent_crm_today_items("main", end_of_day)
+        rows = _agent_crm_today_items("main", end_of_day, identity)
         if not _agent_crm_vk_is_main():
-            rows.extend(_agent_crm_today_items("vk", end_of_day))
+            rows.extend(_agent_crm_today_items("vk", end_of_day, identity))
         rows.sort(key=lambda item: (item[0], item[1], item[2], item[3]["requestId"]))
         items = [item[3] for item in rows[:limit]]
         return _agent_json_response({"ok": True, "tasks": items})
@@ -1396,6 +1416,7 @@ if "agent_extension_crm_timeline" not in app.view_functions:
                 {"ok": False, "error": "invalid_request_id"}, 400
             )
         store = _agent_crm_store_for_request(request_id)
+        identity = _agent_manager_identity()
         with _agent_crm_cursor(store) as cur:
             if cur is None:
                 timeline = None
@@ -1406,7 +1427,9 @@ if "agent_extension_crm_timeline" not in app.view_functions:
                 payload = timeline_to_dict(timeline) if timeline is not None else None
                 if payload is not None:
                     payload["client"] = _agent_crm_client_summary(cur, request_id)
-                    payload["assignment"] = _agent_crm_assignment(cur, request_id)
+                    payload["assignment"] = _agent_crm_assignment(
+                        cur, request_id, identity
+                    )
         if timeline is None:
             return _agent_json_response(
                 {"ok": False, "error": "request_not_found"}, 404
@@ -1467,6 +1490,8 @@ if "agent_extension_crm_assign" not in app.view_functions:
                         "assigned": True,
                         "name": identity["name"],
                         "assignedAt": assigned_at,
+                        "mine": True,
+                        "canRelease": True,
                     },
                 })
             row = cur.execute(
@@ -1484,6 +1509,14 @@ if "agent_extension_crm_assign" not in app.view_functions:
                 "assigned": True,
                 "name": str(row[1] or ""),
                 "assignedAt": int(row[2]) if row[2] is not None else None,
+                "mine": int(row[0] or 0) == int(identity["id"]),
+                "canRelease": (
+                    int(row[0] or 0) == int(identity["id"])
+                    or bool(
+                        _bot.ADMIN_ID
+                        and int(identity["id"]) == int(_bot.ADMIN_ID)
+                    )
+                ),
             }
             if int(row[0] or 0) == int(identity["id"]):
                 return _agent_json_response({
@@ -1496,6 +1529,82 @@ if "agent_extension_crm_assign" not in app.view_functions:
                 "error": "already_assigned",
                 "assignment": assignment,
             }, 409)
+
+
+if "agent_extension_crm_unassign" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/unassign", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_unassign() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        denied = _agent_crm_guard()
+        if denied is not None:
+            return denied
+        identity = _agent_manager_identity()
+        if identity is None:
+            return _agent_json_response(
+                {"ok": False, "error": "manager_identity_unavailable"}, 503
+            )
+        if not request.is_json:
+            return _agent_json_response({"ok": False, "error": "json_required"}, 415)
+        raw = request.get_json(silent=True)
+        request_id = str(raw.get("requestId") if isinstance(raw, dict) else "").strip()
+        if not request_id or len(request_id) > 120:
+            return _agent_json_response(
+                {"ok": False, "error": "invalid_request_id"}, 400
+            )
+
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store, commit=True) as cur:
+            if cur is None:
+                return _agent_json_response(
+                    {"ok": False, "error": "request_not_found"}, 404
+                )
+            row = cur.execute(
+                "SELECT assigned_manager_id FROM crm_trip_requests WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                return _agent_json_response(
+                    {"ok": False, "error": "request_not_found"}, 404
+                )
+            assigned_manager_id = int(row[0] or 0)
+            if not assigned_manager_id:
+                return _agent_json_response({
+                    "ok": True,
+                    "duplicate": True,
+                    "assignment": {
+                        "assigned": False, "name": "", "assignedAt": None,
+                        "mine": False, "canRelease": False,
+                    },
+                })
+            is_admin = bool(
+                _bot.ADMIN_ID and int(identity["id"]) == int(_bot.ADMIN_ID)
+            )
+            if assigned_manager_id != int(identity["id"]) and not is_admin:
+                return _agent_json_response(
+                    {"ok": False, "error": "release_forbidden"}, 403
+                )
+            cur.execute(
+                """
+                UPDATE crm_trip_requests
+                SET assigned_manager_id=NULL, assigned_manager_name=NULL,
+                    assigned_at=NULL, updated_at=MAX(updated_at, ?)
+                WHERE request_id=? AND assigned_manager_id=?
+                """,
+                (int(time.time()), request_id, assigned_manager_id),
+            )
+            if not int(cur.rowcount or 0):
+                return _agent_json_response(
+                    {"ok": False, "error": "assignment_changed"}, 409
+                )
+        return _agent_json_response({
+            "ok": True,
+            "assignment": {
+                "assigned": False, "name": "", "assignedAt": None,
+                "mine": False, "canRelease": False,
+            },
+        })
 
 
 if "agent_extension_crm_task" not in app.view_functions:

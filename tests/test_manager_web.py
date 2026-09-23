@@ -51,7 +51,9 @@ def test_client_uses_signed_telegram_header_without_persisting_it():
     assert b"sessionStorage" not in body
     assert b"api('summary')" in body
     assert b"api('assign'" in body
+    assert b"api('unassign'" in body
     assert "Взять в работу" in body.decode("utf-8")
+    assert "Освободить заявку" in body.decode("utf-8")
     assert b"navigator.clipboard.writeText" in body
     assert b"api.telegram.org" not in body
     assert b"sendMessage" not in body
