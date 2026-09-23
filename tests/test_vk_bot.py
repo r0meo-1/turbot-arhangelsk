@@ -7,18 +7,18 @@ import tempfile
 
 # Configure the VK bot before it is imported.
 os.environ.setdefault("VK_ACCESS_TOKEN", "dummy-token")
-os.environ.setdefault("VK_GROUP_ID", "999")
+os.environ["VK_GROUP_ID"] = "999"
 os.environ.setdefault("VK_CONFIRMATION", "confirm123")
-os.environ.setdefault("VK_SECRET_KEY", "vk-test-secret")
+os.environ["VK_SECRET_KEY"] = "vk-test-secret"
 os.environ.setdefault("TUTU_ENABLED", "false")
 os.environ.setdefault("VK_DEMO_MODE", "false")
-os.environ.setdefault("ADMIN_ID", "999")
+os.environ["ADMIN_ID"] = "999"
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 os.environ.setdefault("VK_MDT_RETRY_ENABLED", "false")
 os.environ.setdefault("ADMIN_ERROR_ALERTS", "false")
 os.environ.setdefault("AI_MODE", "template")
-os.environ.setdefault("CONSENT_MODE", "strict")  # classic consent in unit tests
+os.environ["CONSENT_MODE"] = "strict"  # classic consent in unit tests
 # Присваивание, а не setdefault: test_bot.py импортируется раньше и уже задал
 # DATABASE_PATH, из-за чего обе сюиты работали в одном файле. Миграция VK-бота
 # при этом никогда не выполнялась целиком — таблицы успевал создать Telegram-бот,
