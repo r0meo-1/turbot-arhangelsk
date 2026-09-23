@@ -20,6 +20,15 @@ os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"turbot_suite_{
 for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
     os.environ[setting] = ""
 
+# Pin critical test-only configuration before bot modules are imported.
+# Do not use setdefault here: production .env values must never leak into tests.
+os.environ["ADMIN_ID"] = "999"
+os.environ["VK_GROUP_ID"] = "999"
+os.environ["VK_SECRET_KEY"] = "vk-test-secret"
+os.environ["TELEGRAM_SECRET_TOKEN"] = "secret123"
+os.environ["AI_MODE"] = "template"
+os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"
+
 
 _connect = socket.socket.connect
 _connect_ex = socket.socket.connect_ex
