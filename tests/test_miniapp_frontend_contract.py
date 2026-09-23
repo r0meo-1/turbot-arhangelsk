@@ -11,7 +11,8 @@ def test_miniapp_frontend_matches_production_v2_contract():
     assert "YOUR-DOMAIN" not in APP
     assert "version: 2" in APP
     assert "type: 'trip_request'" in APP
-    assert "body: JSON.stringify({ initData: tg.initData, payload })" in APP
+    assert "body: JSON.stringify({ initData: tg.initData, payload, submissionId })" in APP
+    assert "pendingSubmissionId = createSubmissionId()" in APP
 
     for field in (
         "destination",
@@ -52,6 +53,7 @@ def test_miniapp_save_flow_is_recoverable_on_slow_network():
     assert "tg?.BackButton?.hide?.()" in APP
     assert "tg?.BackButton?.show?.()" in APP
     assert "Повторить сохранение" in APP
+    assert "submitViaBackend(pendingPayload, pendingSubmissionId)" in APP
 
 
 def test_miniapp_destination_chips_expose_pressed_state():
