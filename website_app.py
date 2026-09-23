@@ -33,6 +33,7 @@ import bot as _bot
 from shared import mdt as mdt_shared
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import travel_crm_store as _travel_crm_store
+from shared.telegram_webapp import MiniAppValidationError, validate_init_data
 from shared.travel_crm import (
     Activity,
     ActivityType,
@@ -69,6 +70,14 @@ _WORKER_ENABLED = os.getenv("WEBSITE_LEAD_WORKER_ENABLED", "true").lower().strip
     "1", "true", "yes", "on"
 }
 _AGENT_EXTENSION_TOKEN = _bot.agent_extension_token()
+_MANAGER_TELEGRAM_IDS = set(
+    _bot._parse_chat_ids(
+        os.getenv("MANAGER_TELEGRAM_IDS", ""),
+        env_name="MANAGER_TELEGRAM_IDS",
+    )
+)
+if _bot.ADMIN_ID:
+    _MANAGER_TELEGRAM_IDS.add(_bot.ADMIN_ID)
 
 _rate_lock = threading.Lock()
 _rate_hits: Dict[str, List[float]] = {}
@@ -229,7 +238,9 @@ def _agent_json_response(body: Dict[str, Any], status: int = 200) -> Response:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type, Authorization, X-Telegram-Init-Data"
+        )
         response.headers["Access-Control-Max-Age"] = "600"
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -257,6 +268,18 @@ def _agent_extension_authorized() -> bool:
         and bool(value)
         and secrets.compare_digest(value.strip(), _AGENT_EXTENSION_TOKEN)
     )
+
+
+def _telegram_manager_authorization_error() -> str:
+    """Validate a short-lived Telegram Mini App identity for manager CRM access."""
+    init_data = request.headers.get("X-Telegram-Init-Data", "")
+    if not init_data:
+        return "missing"
+    try:
+        user = validate_init_data(init_data, _bot.BOT_TOKEN, max_age=3600)
+    except MiniAppValidationError:
+        return "invalid"
+    return "" if int(user["id"]) in _MANAGER_TELEGRAM_IDS else "forbidden"
 
 
 def _json_response(body: Dict[str, Any], status: int = 200) -> Response:
@@ -990,13 +1013,21 @@ if "agent_extension_status" not in app.view_functions:
 
 
 def _agent_crm_guard() -> Response | None:
-    if not _AGENT_EXTENSION_TOKEN:
+    if _agent_extension_authorized():
+        return None
+
+    telegram_error = _telegram_manager_authorization_error()
+    if telegram_error == "":
+        return None
+    if telegram_error == "forbidden":
+        return _agent_json_response(
+            {"ok": False, "error": "manager_forbidden"}, 403
+        )
+    if not _AGENT_EXTENSION_TOKEN and not _bot.BOT_TOKEN:
         return _agent_json_response(
             {"ok": False, "error": "agent_extension_disabled"}, 503
         )
-    if not _agent_extension_authorized():
-        return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
-    return None
+    return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
 
 
 _VK_DATABASE_PATH = (

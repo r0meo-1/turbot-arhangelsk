@@ -3,6 +3,8 @@ const $ = id => document.getElementById(id);
 let activeRequestId = '';
 let token = '', generation = 0, detailGeneration = 0;
 let demoMode = false;
+const telegram = window.Telegram?.WebApp;
+const telegramInitData = telegram?.initData || '';
 const taskNames = {build_selection:'Подбор',send_options:'Отправить варианты',call_back:'Позвонить',flights:'Авиабилеты',visa:'Виза',documents:'Документы',check_price:'Проверить цену',next_contact:'Следующий контакт'};
 function say(message){$('status').textContent=message;}
 function clearData(){activeRequestId='';for(const id of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(id).value='';for(const id of ['tasks','summary','quotes','activities'])$(id).replaceChildren();$('detail').hidden=true;}
@@ -10,8 +12,10 @@ function logout(){$('refresh').disabled=false;generation++;detailGeneration++;to
 function showDemo(){demoMode=true;generation++;detailGeneration++;clearData();$('login').hidden=true;$('desk').hidden=false;$('refresh').textContent='Обновить пример';$('logout').textContent='Закрыть пример';$('status').textContent='Демо-режим: синтетические данные, CRM не подключена.';renderDemo();}
 function renderDemo(){const fixture=window.MANAGER_DEMO_FIXTURE;const task=fixture.task;const item=document.createElement('article');paragraph(item,[taskNames[task.type]||task.type,task.destination,task.origin,task.dates,task.note,task.budget].filter(Boolean).join(' · '));const button=document.createElement('button');button.textContent='Открыть карточку';button.addEventListener('click',()=>{activeRequestId='demo';$('detail').hidden=false;for(const id of ['summary','quotes','activities'])$(id).replaceChildren();paragraph($('summary'),fixture.summary);paragraph($('quotes'),fixture.quote);paragraph($('activities'),fixture.activity);});item.append(button);$('tasks').append(item);}
 async function api(path,body){
- const response=await fetch('/agent-extension/crm/'+path,{method:body?'POST':'GET',body:body?JSON.stringify(body):undefined,headers:{Authorization:'Bearer '+token,...(body?{'Content-Type':'application/json'}:{})},cache:'no-store',credentials:'omit'});
+ const authHeaders=telegramInitData?{'X-Telegram-Init-Data':telegramInitData}:{Authorization:'Bearer '+token};
+ const response=await fetch('/agent-extension/crm/'+path,{method:body?'POST':'GET',body:body?JSON.stringify(body):undefined,headers:{...authHeaders,...(body?{'Content-Type':'application/json'}:{})},cache:'no-store',credentials:'omit'});
  if(response.status===401)throw Error('Ключ доступа не принят. Выйдите и проверьте ключ.');
+ if(response.status===403)throw Error('Этот Telegram-пользователь не имеет доступа менеджера.');
  if(!response.ok)throw Error('Не удалось загрузить данные. Повторите попытку.');
  const data=await response.json();if(!data.ok)throw Error('Сервер не подтвердил результат.');return data;
 }
@@ -92,3 +96,9 @@ $('saveQuote').addEventListener('click',()=>{
  if(!hotel||!/^\d+$/.test(price)||!Number.isSafeInteger(Number(price))||Number(price)<=0){say('Укажите отель и положительную целую стоимость на всех.');return;}
  writeQuote('quote',{requestId:activeRequestId,hotel,priceAmount:Number(price),currency:$('currency').value,operator:$('operator').value.trim(),mealPlan:$('meal').value.trim(),carrier:$('carrier').value.trim()},$('saveQuote'));
 });
+
+if(telegramInitData){
+ telegram.ready();telegram.expand();
+ $('loginHint').textContent='Проверяем подписанный доступ менеджера через Telegram…';
+ refresh();
+}

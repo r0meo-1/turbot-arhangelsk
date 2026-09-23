@@ -134,10 +134,14 @@ uses `OWNER_SESSION_ENDPOINT`, sends a request body, submits an application,
 or transmits a private key. With the default closed gate it reports
 `networkAttempted: false`.
 
-The website Flask app serves `/manager/`. This interface uses the existing
-Agent Desk bearer-protected CRM endpoints and database. It does not create a
-second customer store. It currently supports the today/overdue queue, request
-history, adding a note, and scheduling a next task in the device's timezone.
+The website Flask app serves `/manager/`. This interface uses the existing CRM
+endpoints and database. It does not create a second customer store. Inside a
+Telegram Mini App it sends the short-lived, signed `Telegram.WebApp.initData`
+with every request; the server validates the HMAC and accepts only `ADMIN_ID`
+or a user listed in `MANAGER_TELEGRAM_IDS`. Manual Agent Desk bearer entry
+remains available as a fallback. The journal currently supports the
+today/overdue queue, request history, adding a note, and scheduling a next task
+in the device's timezone.
 
 The public HTML contains no CRM data. The user supplies an existing Agent Desk
 pairing key; it is held in memory and cleared on logout/pagehide. No persistent
@@ -146,7 +150,8 @@ This key has the existing shared Agent Desk privileges, not per-manager roles.
 
 ## Secure local-owner workflow
 
-`BOT_TOKEN`, `ADMIN_ID`, and `AGENT_EXTENSION_TOKEN` are server-only settings.
+`BOT_TOKEN`, `ADMIN_ID`, `MANAGER_TELEGRAM_IDS`, and
+`AGENT_EXTENSION_TOKEN` are server-only settings.
 They must be supplied through the service environment or an owner-only `.env`
 file; none is embedded in `manager-web/`, sent to the browser, or stored in
 browser storage. `BOT_TOKEN` and `ADMIN_ID` enable `/agentdesk`; the optional

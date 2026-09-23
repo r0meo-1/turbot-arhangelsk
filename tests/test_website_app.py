@@ -1,8 +1,13 @@
 """Tests for the public Aprel Tour website lead endpoint."""
 
+import hashlib
+import hmac
+import json
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 # Keep imports deterministic and keep the website retry thread out of pytest.
 os.environ.setdefault("BOT_TOKEN", "dummy-token")
@@ -22,6 +27,18 @@ from shared.travel_crm import Attribution, TripRequest
 
 
 ORIGIN = "https://r0meo1.ru"
+
+
+def _signed_manager_init_data(user_id, token="manager-test-token"):
+    fields = {
+        "auth_date": str(int(time.time())),
+        "query_id": "manager-query",
+        "user": json.dumps({"id": user_id, "first_name": "Manager"}, separators=(",", ":")),
+    }
+    check = "\n".join(f"{key}={fields[key]}" for key in sorted(fields))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
+    return urlencode(fields)
 
 
 def _payload(request_id="website-test-0001"):
@@ -923,6 +940,46 @@ def test_agent_extension_crm_requires_pairing_token(client, monkeypatch):
         "/agent-extension/crm/timeline?requestId=web-lead-1"
     )
     assert denied_timeline.status_code == 401
+
+
+def test_agent_extension_crm_accepts_allowlisted_telegram_manager(client, monkeypatch):
+    monkeypatch.setattr(bot, "BOT_TOKEN", "manager-test-token")
+    monkeypatch.setattr(website_app, "_MANAGER_TELEGRAM_IDS", {4242})
+
+    response = client.get(
+        "/agent-extension/crm/today",
+        headers={"X-Telegram-Init-Data": _signed_manager_init_data(4242)},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "tasks": []}
+
+
+def test_agent_extension_crm_rejects_valid_non_manager_telegram_identity(client, monkeypatch):
+    monkeypatch.setattr(bot, "BOT_TOKEN", "manager-test-token")
+    monkeypatch.setattr(website_app, "_MANAGER_TELEGRAM_IDS", {4242})
+
+    response = client.get(
+        "/agent-extension/crm/today",
+        headers={"X-Telegram-Init-Data": _signed_manager_init_data(31337)},
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "manager_forbidden"
+
+
+def test_agent_extension_crm_rejects_tampered_telegram_identity(client, monkeypatch):
+    monkeypatch.setattr(bot, "BOT_TOKEN", "manager-test-token")
+    monkeypatch.setattr(website_app, "_MANAGER_TELEGRAM_IDS", {4242})
+    tampered = _signed_manager_init_data(4242).replace("4242", "31337")
+
+    response = client.get(
+        "/agent-extension/crm/today",
+        headers={"X-Telegram-Init-Data": tampered},
+    )
+
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
 
 
 def test_agent_extension_won_status_closes_tasks_and_sets_outcome(client, monkeypatch):
