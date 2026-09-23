@@ -64,6 +64,13 @@ def test_backup_and_restore_drill_are_isolated_and_do_not_print_row_values(tmp_p
     for copy in copies:
         assert stat.S_IMODE(copy.stat().st_mode) == 0o600
 
+    # A long backup history must not trip `set -o pipefail`. The former
+    # `sort | head -n 1` selector closed stdout early and made sort exit with
+    # SIGPIPE (141) once its output exceeded the pipe buffer.
+    main_copy = next(path for path in copies if path.name.startswith("bot_state_"))
+    for index in range(900):
+        shutil.copy2(main_copy, backup_dir / f"bot_state_history_{index:04d}.sqlite")
+
     restore = subprocess.run(
         ["bash", str(RESTORE)],
         cwd=ROOT,

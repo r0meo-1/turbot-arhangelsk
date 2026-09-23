@@ -20,7 +20,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 latest_backup() {
     local stem="$1"
     find "$BACKUP_DIR" -maxdepth 1 -type f -name "${stem}_*.sqlite" -printf '%T@ %p\n' \
-        | sort -nr | head -n 1 | cut -d' ' -f2-
+        | sort -nr | sed -n '1s/^[^ ]* //p'
 }
 
 quote_identifier() {
