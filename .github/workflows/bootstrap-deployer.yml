@@ -11,25 +11,32 @@ permissions:
   contents: read
 
 concurrency:
-  group: turbot-bootstrap-deployer
+  group: turbot-production
   cancel-in-progress: false
 
 jobs:
   bootstrap:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 35
     steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/regression
       - name: Load restricted deploy key
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
         with:
           ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
 
-      - name: Run legacy fetch path once
+      - name: Deploy tested revision
         shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
-          set -Eeuo pipefail
-          ssh -n -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-            root@${{ secrets.DEPLOY_HOST }} true
+          bash deploy/send-tested-bundle.sh "$EXPECTED_SHA"
+          python3 deploy/verify_revision.py --expected "$EXPECTED_SHA"
+          python3 deploy/verify_revision.py --expected "$EXPECTED_SHA" --url https://bot.r0meo1.ru/vk/health
 
       - name: Verify production health
         shell: bash

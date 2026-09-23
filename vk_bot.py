@@ -72,6 +72,7 @@ from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import provider_status as _provider_status
+from shared import webhook_delivery as _webhook_delivery
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -3994,6 +3995,10 @@ def handle_completion(user_id: int, phone: str, message: Dict[str, Any]) -> None
     except Exception as exc:
         _record_ops_metric("lead", "vk", "save_failure")
         logger.error("Failed to save VK lead for %s: %s", _log_correlation(user_id, namespace="vk-user"), exc)
+        with _lock:
+            live.pop("_completing", None)
+        # Preserve the review and stop before any success/manager/CRM action.
+        raise
 
     _confirm_to_user(user_id, info, phone)
     manager_delivered = _notify_admin(user_id, info, phone, client_name)
@@ -4226,6 +4231,8 @@ def _process_message(message: Dict[str, Any]) -> None:
     try:
         button_payload = json.loads(msg.get("payload") or "{}")
     except (TypeError, ValueError):
+        button_payload = {}
+    if not isinstance(button_payload, dict):
         button_payload = {}
     if button_payload.get("command") == "tour_select" and button_payload.get("number"):
         text = f"Выбрать №{button_payload['number']}"
@@ -4592,11 +4599,18 @@ def health() -> Any:
 @app.route("/vk/webhook", methods=["POST"])
 def vk_webhook() -> Any:
     """Handle VK Callback API events."""
-    data = request.get_json(silent=True)
-    if not data or "type" not in data:
-        return "ok", 200
+    try:
+        data = request.get_json(silent=True)
+    except (ValueError, RecursionError):
+        return "Bad request", 400
+    if not isinstance(data, dict) or not isinstance(data.get("type"), str):
+        return "Bad request", 400
 
     event_type = data["type"]
+    if VK_GROUP_ID <= 0:
+        return "Service unavailable", 503
+    if type(data.get("group_id")) is not int or data["group_id"] != VK_GROUP_ID:
+        return "Forbidden", 403
 
     # VK's address-verification payload contains no secret. It must be
     # answered before validating regular event deliveries.
@@ -4604,38 +4618,51 @@ def vk_webhook() -> Any:
         if VK_CONFIRMATION:
             return VK_CONFIRMATION, 200
         logger.warning("VK confirmation request but VK_CONFIRMATION not set")
-        return "ok", 200
+        return "Service unavailable", 503
 
     if not VK_SECRET_KEY:
         logger.error("VK webhook rejected: VK_SECRET_KEY is not configured")
         return "Service unavailable", 503
     received_secret = data.get("secret", "")
-    if not hmac.compare_digest(received_secret, VK_SECRET_KEY):
+    if not isinstance(received_secret, str) or not hmac.compare_digest(
+        received_secret.encode(), VK_SECRET_KEY.encode()
+    ):
         logger.warning("VK webhook: invalid secret key")
         return "Forbidden", 403
 
-    if event_type == "app_payload":
-        # ACK the Callback API immediately. The user-facing VK API call runs
-        # off the request thread, so a slow messages.send cannot make VK retry
-        # the same callback and duplicate the review message.
-        threading.Thread(
-            target=_process_app_payload,
-            args=(data,),
-            daemon=True,
-            name="vk-miniapp-payload",
-        ).start()
-        return "ok", 200
+    if event_type not in ("app_payload", "message_new"):
+        return "ok", 200  # Authenticated unsupported events have no effects.
+    obj = data.get("object")
+    if not isinstance(obj, dict):
+        return "Bad request", 400
+    if event_type == "message_new" and not _webhook_delivery.valid_message(obj.get("message")):
+        return "Bad request", 400
+    event_id = data.get("event_id")
+    if event_id is not None and (not isinstance(event_id, str) or not 1 <= len(event_id) <= 256):
+        return "Bad request", 400
+    if event_id is None and event_type == "message_new":
+        msg = obj["message"]
+        message_id = msg.get("conversation_message_id", msg.get("id"))
+        if type(message_id) is int and message_id > 0:
+            event_id = f"message:{msg.get('peer_id')}:{message_id}"
 
-    # New message from user
-    if event_type == "message_new":
+    def process():
         try:
-            _process_message(data)
-        except Exception as exc:
-            logger.error("Error processing VK message: %s", exc, exc_info=True)
+            if event_type == "app_payload":
+                _process_app_payload(data)
+            else:
+                _process_message(data)
         finally:
             save_state()
-
-    # All other event types — acknowledge
+    try:
+        if event_id is not None:
+            key = _webhook_delivery.event_key("vk", VK_GROUP_ID, event_id)
+            _webhook_delivery.run_once(DATABASE_PATH, key, process)
+        else:
+            process()  # Legacy events without IDs cannot be durably deduplicated.
+    except Exception:
+        logger.error("VK webhook processing incomplete; inspect receipt/state before replay")
+        return "Service unavailable", 503
     return "ok", 200
 
 

@@ -19,7 +19,7 @@ def test_ai_lead_assist_has_explicit_reversible_production_config_marker():
 def test_bundle_installs_new_deployer_before_applying_ai_lead_assist_gate():
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    bundle_pos = text.index("TURBOT_DEPLOY_BUNDLE_V1")
+    bundle_pos = text.index('bash deploy/send-tested-bundle.sh "$EXPECTED_SHA"')
     assist_pos = text.index("TURBOT_AI_LEAD_ASSIST_CONFIG_V1")
 
     assert bundle_pos < assist_pos
