@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,31 @@ def test_agent_extension_manifest_is_mv3_side_panel():
     assert "sidePanel" in manifest["permissions"]
     assert "contextMenus" in manifest["permissions"]
     assert manifest["host_permissions"] == ["https://bot.r0meo1.ru/*"]
+
+
+def test_agent_extension_load_unpacked_preflight():
+    manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
+    referenced_files = {
+        manifest["background"]["service_worker"],
+        manifest["side_panel"]["default_path"],
+    }
+    for relative_path in referenced_files:
+        path = EXT / relative_path
+        assert path.is_file(), f"manifest references missing file: {relative_path}"
+        assert path.resolve().is_relative_to(EXT.resolve())
+
+    sidepanel = (EXT / manifest["side_panel"]["default_path"]).read_text(encoding="utf-8")
+    local_assets = set(re.findall(r'(?:src|href)=["\']([^"\']+)["\']', sidepanel))
+    assert local_assets == {"sidepanel.css", "sidepanel.js"}
+    for relative_path in local_assets:
+        assert (EXT / relative_path).is_file(), f"side panel references missing file: {relative_path}"
+
+    forbidden_suffixes = {".env", ".key", ".pem", ".p12", ".pfx"}
+    forbidden_names = {"credentials.json", "secrets.json"}
+    for path in EXT.rglob("*"):
+        if path.is_file():
+            assert path.suffix.lower() not in forbidden_suffixes
+            assert path.name.lower() not in forbidden_names
 
 
 def test_agent_extension_has_no_embedded_secrets():
