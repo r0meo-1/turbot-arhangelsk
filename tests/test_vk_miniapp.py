@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import time
+from contextlib import closing
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
@@ -81,22 +82,29 @@ def test_draft_api_and_static():
         '', 'app.js', 'styles.css', 'vk-bridge.js', 'legal.js',
         'privacy.html', 'consent.html', 'terms.html', 'moderation.html',
     ):
-        assert client.get('/vk/miniapp/' + path).status_code == 200
+        with closing(client.get('/vk/miniapp/' + path)) as asset:
+            assert asset.status_code == 200
     legal = client.get('/vk/miniapp/legal.json')
     assert legal.status_code == 200
     assert legal.json['operatorName'] == 'ИП Замятина Мария Андреевна, ОГРНИП 311293232600026'
     assert legal.json['operatorName'] != 'ТА «АПРЕЛЬ тур»'
     assert legal.json['projectUrl'] == 'https://r0meo1.ru/apreltour/'
-    privacy = client.get('/vk/miniapp/privacy.html').get_data(as_text=True)
+    with closing(client.get('/vk/miniapp/privacy.html')) as asset:
+        privacy = asset.get_data(as_text=True)
     assert 'ЧЕРНОВИК' not in privacy
     assert 'Telegram' not in privacy
     assert 'Политика обработки персональных данных' in privacy
     assert 'Рекламные сообщения' in privacy
     assert 'https://r0meo1.ru/apreltour/' in privacy
-    assert 'Согласие на обработку персональных данных' in client.get('/vk/miniapp/consent.html').get_data(as_text=True)
-    assert 'Условия использования VK Mini App' in client.get('/vk/miniapp/terms.html').get_data(as_text=True)
-    assert 'Правила модерации и безопасного использования' in client.get('/vk/miniapp/moderation.html').get_data(as_text=True)
-    assert client.get('/vk/miniapp/README.md').status_code == 404
+    for path, heading in (
+        ('consent.html', 'Согласие на обработку персональных данных'),
+        ('terms.html', 'Условия использования VK Mini App'),
+        ('moderation.html', 'Правила модерации и безопасного использования'),
+    ):
+        with closing(client.get('/vk/miniapp/' + path)) as asset:
+            assert heading in asset.get_data(as_text=True)
+    with closing(client.get('/vk/miniapp/README.md')) as response:
+        assert response.status_code == 404
 
 
 def test_draft_diagnostics_never_log_launch_query_secret_or_user_id(caplog):
