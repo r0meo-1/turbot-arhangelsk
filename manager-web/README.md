@@ -143,6 +143,9 @@ remains available as a fallback. The journal currently supports a privacy-safe
 24-hour aggregate summary, the today/overdue queue, request history, adding a
 note, and scheduling a next task in the device's timezone. Dashboard SLA is
 explicitly system create-to-manager-delivery latency, not human response time.
+An authenticated manager may atomically claim an unassigned request. The API
+is idempotent for the same manager and returns a conflict instead of silently
+overwriting another manager's assignment.
 
 The public HTML contains no CRM data. The user supplies an existing Agent Desk
 pairing key; it is held in memory and cleared on logout/pagehide. No persistent

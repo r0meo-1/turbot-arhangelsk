@@ -43,11 +43,23 @@ def init_schema(cur: sqlite3.Cursor) -> None:
             source_tag TEXT,
             channel TEXT,
             campaign TEXT,
+            assigned_manager_id INTEGER,
+            assigned_manager_name TEXT,
+            assigned_at INTEGER,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         )
         """
     )
+    cur.execute("PRAGMA table_info(crm_trip_requests)")
+    request_columns = {str(row[1]) for row in cur.fetchall()}
+    for name, ddl in {
+        "assigned_manager_id": "INTEGER",
+        "assigned_manager_name": "TEXT",
+        "assigned_at": "INTEGER",
+    }.items():
+        if name not in request_columns:
+            cur.execute(f"ALTER TABLE crm_trip_requests ADD COLUMN {name} {ddl}")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS crm_quotes (

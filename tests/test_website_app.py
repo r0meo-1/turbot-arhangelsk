@@ -29,11 +29,11 @@ from shared.travel_crm import Attribution, TripRequest
 ORIGIN = "https://r0meo1.ru"
 
 
-def _signed_manager_init_data(user_id, token="manager-test-token"):
+def _signed_manager_init_data(user_id, token="manager-test-token", first_name="Manager"):
     fields = {
         "auth_date": str(int(time.time())),
         "query_id": "manager-query",
-        "user": json.dumps({"id": user_id, "first_name": "Manager"}, separators=(",", ":")),
+        "user": json.dumps({"id": user_id, "first_name": first_name}, separators=(",", ":")),
     }
     check = "\n".join(f"{key}={fields[key]}" for key in sorted(fields))
     secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
@@ -998,6 +998,79 @@ def test_agent_extension_crm_summary_requires_manager_auth(client, monkeypatch):
     monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
     response = client.get("/agent-extension/crm/summary")
     assert response.status_code == 401
+
+
+def test_agent_extension_crm_assignment_is_atomic_and_idempotent(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+    monkeypatch.setattr(bot, "BOT_TOKEN", "manager-test-token")
+    monkeypatch.setattr(website_app, "_MANAGER_TELEGRAM_IDS", {4242, 4343})
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-assignment-0001"),
+    )
+    request_id = f"web-lead-{create.get_json()['leadId']}"
+    manager_one = {
+        "X-Telegram-Init-Data": _signed_manager_init_data(
+            4242, first_name="Manager One"
+        )
+    }
+    manager_two = {
+        "X-Telegram-Init-Data": _signed_manager_init_data(
+            4343, first_name="Manager Two"
+        )
+    }
+
+    claimed = client.post(
+        "/agent-extension/crm/assign",
+        headers=manager_one,
+        json={"requestId": request_id},
+    )
+    assert claimed.status_code == 200
+    assert claimed.get_json()["assignment"]["name"] == "Manager One"
+
+    duplicate = client.post(
+        "/agent-extension/crm/assign",
+        headers=manager_one,
+        json={"requestId": request_id},
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.get_json()["duplicate"] is True
+
+    conflict = client.post(
+        "/agent-extension/crm/assign",
+        headers=manager_two,
+        json={"requestId": request_id},
+    )
+    assert conflict.status_code == 409
+    assert conflict.get_json()["error"] == "already_assigned"
+    assert conflict.get_json()["assignment"]["name"] == "Manager One"
+
+    timeline = client.get(
+        "/agent-extension/crm/timeline?requestId=" + request_id,
+        headers=manager_one,
+    ).get_json()["timeline"]
+    assert timeline["assignment"]["assigned"] is True
+    assert timeline["assignment"]["name"] == "Manager One"
+    today = client.get(
+        "/agent-extension/crm/today",
+        headers=manager_one,
+    ).get_json()["tasks"]
+    task = next(item for item in today if item["requestId"] == request_id)
+    assert task["assignment"]["name"] == "Manager One"
+
+    with bot._db_cursor() as cur:
+        stored = cur.execute(
+            """
+            SELECT assigned_manager_id, assigned_manager_name, assigned_at
+            FROM crm_trip_requests WHERE request_id=?
+            """,
+            (request_id,),
+        ).fetchone()
+    assert stored[0] == 4242
+    assert stored[1] == "Manager One"
+    assert stored[2] > 0
 
 
 def test_agent_extension_crm_rejects_valid_non_manager_telegram_identity(client, monkeypatch):

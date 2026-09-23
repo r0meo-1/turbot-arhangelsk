@@ -48,3 +48,5 @@ def test_client_uses_signed_telegram_header_without_persisting_it():
     assert b"localStorage" not in body
     assert b"sessionStorage" not in body
     assert b"api('summary')" in body
+    assert b"api('assign'" in body
+    assert "Взять в работу" in body.decode("utf-8")
