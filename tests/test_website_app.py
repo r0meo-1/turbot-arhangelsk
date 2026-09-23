@@ -955,6 +955,51 @@ def test_agent_extension_crm_accepts_allowlisted_telegram_manager(client, monkey
     assert response.get_json() == {"ok": True, "tasks": []}
 
 
+def test_agent_extension_crm_summary_is_aggregate_and_privacy_safe(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-summary-0001"),
+    )
+    assert create.status_code == 202
+    lead_id = create.get_json()["leadId"]
+    with bot._db_cursor(commit=True) as cur:
+        created_at = cur.execute(
+            "SELECT created_at FROM website_leads WHERE id=?", (lead_id,)
+        ).fetchone()[0]
+        cur.execute(
+            "UPDATE website_leads SET owner_notified_at=? WHERE id=?",
+            (int(created_at) + 42, lead_id),
+        )
+
+    response = client.get(
+        "/agent-extension/crm/summary",
+        headers=_agent_headers(),
+    )
+
+    assert response.status_code == 200
+    summary = response.get_json()["summary"]
+    assert summary["windowSeconds"] == 86400
+    assert summary["newLeads"] == 1
+    assert summary["channels"] == [{"channel": "website", "count": 1}]
+    assert summary["delivery"] == {
+        "managerNotified": 1,
+        "pending": 0,
+        "p95Seconds": 42,
+    }
+    serialized = json.dumps(summary, ensure_ascii=False)
+    assert "Роман" not in serialized
+    assert "+79161234567" not in serialized
+
+
+def test_agent_extension_crm_summary_requires_manager_auth(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    response = client.get("/agent-extension/crm/summary")
+    assert response.status_code == 401
+
+
 def test_agent_extension_crm_rejects_valid_non_manager_telegram_identity(client, monkeypatch):
     monkeypatch.setattr(bot, "BOT_TOKEN", "manager-test-token")
     monkeypatch.setattr(website_app, "_MANAGER_TELEGRAM_IDS", {4242})
