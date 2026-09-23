@@ -27,6 +27,8 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+reports/
+.deploy-manifest
 .tox/
 .mypy_cache/
 

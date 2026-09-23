@@ -1,0 +1,33 @@
+name: TurBot regression
+description: Run the same offline Python and SQLite suite before merge and deploy
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+        cache: pip
+        cache-dependency-path: |
+          requirements.txt
+          requirements-dev.txt
+    - name: Install test dependencies
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y sqlite3
+        python -m pip install -r requirements-dev.txt
+    - name: Run regression tests
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+      run: |
+        mkdir -p reports
+        python -m pytest --junitxml=reports/pytest.xml
+    - name: Preserve test report
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: pytest-${{ github.job }}-${{ github.sha }}-${{ github.run_attempt }}
+        path: reports/pytest.xml
+        retention-days: 14
+        if-no-files-found: error

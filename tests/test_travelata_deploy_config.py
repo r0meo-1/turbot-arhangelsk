@@ -78,7 +78,7 @@ def test_deployer_repairs_runtime_directory_before_chdir():
 def test_deploy_bootstraps_code_before_protected_config():
     source = WORKFLOW.read_text(encoding="utf-8")
 
-    bootstrap = 'root@${{ secrets.DEPLOY_HOST }} true </dev/null'
+    bootstrap = 'bash deploy/send-tested-bundle.sh "$EXPECTED_SHA"'
     assert bootstrap in source
     assert source.index(bootstrap) < source.index("TURBOT_DEPLOY_CONFIG_V4")
 

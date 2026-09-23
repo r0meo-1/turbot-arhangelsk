@@ -72,6 +72,7 @@ from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import provider_status as _provider_status
+from shared import webhook_delivery as _webhook_delivery
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
@@ -421,9 +422,8 @@ else:
     logger.info("Lead Telegram recipients: %s", LEAD_NOTIFY_IDS)
 if not TELEGRAM_SECRET_TOKEN:
     logger.warning(
-        "TELEGRAM_SECRET_TOKEN is not set — the webhook accepts unauthenticated "
-        "POSTs, so anyone who learns the URL can inject fake updates. Generate a "
-        "random string and pass it to setWebhook."
+        "TELEGRAM_SECRET_TOKEN is not set — webhook requests are disabled (503). "
+        "Configure the secret and pass the same value to setWebhook."
     )
 if not PRIVACY_POLICY_URL:
     logger.warning(
@@ -651,6 +651,7 @@ _db_lock = threading.Lock()
 user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}
 _lock = threading.Lock()
+_miniapp_submit_lock = threading.Lock()
 
 # chat_ids whose in-memory session/user record changed since the last
 # save_state(). Guarded by _lock. Lets save_state() flush only what changed
@@ -742,6 +743,7 @@ def init_db() -> None:
                 budget_scope TEXT,
                 direct_only INTEGER,
                 phone TEXT,
+                miniapp_submission_id TEXT,
                 source_tag TEXT,
                 updated_at INTEGER NOT NULL
             )
@@ -796,8 +798,11 @@ def init_db() -> None:
             if "source_tag" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN source_tag TEXT")
         cur.execute("PRAGMA table_info(sessions)")
-        if "review_token" not in {row[1] for row in cur.fetchall()}:
+        _session_cols = {row[1] for row in cur.fetchall()}
+        if "review_token" not in _session_cols:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
+        if "miniapp_submission_id" not in _session_cols:
+            cur.execute("ALTER TABLE sessions ADD COLUMN miniapp_submission_id TEXT")
         cur.execute("PRAGMA table_info(leads)")
         _lead_cols = {row[1] for row in cur.fetchall()}
         if "mdt_status" not in _lead_cols:
@@ -1107,9 +1112,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
             INSERT INTO sessions (
                 chat_id, state, destination, origin, dates, nights, people,
                 kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, review_token, source_tag, updated_at
+                phone, review_token, miniapp_submission_id, source_tag, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
@@ -1125,6 +1130,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 direct_only=excluded.direct_only,
                 phone=excluded.phone,
                 review_token=excluded.review_token,
+                miniapp_submission_id=excluded.miniapp_submission_id,
                 source_tag=excluded.source_tag,
                 updated_at=excluded.updated_at
             """,
@@ -1144,6 +1150,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 _sqlite_bool(data.get("direct_only")),
                 data.get("phone"),
                 data.get("review_token"),
+                data.get("miniapp_submission_id"),
                 data.get("source_tag"),
                 data.get("updated_at", now),
             ),
@@ -1155,7 +1162,7 @@ def update_session(chat_id: int, **kwargs) -> None:
     allowed = {
         "state", "destination", "origin", "dates", "nights", "people", "kids",
         "kids_ages", "infants", "budget", "budget_scope", "direct_only",
-        "phone", "review_token", "source_tag", "updated_at",
+        "phone", "review_token", "miniapp_submission_id", "source_tag", "updated_at",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -4452,7 +4459,7 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
         send_message(chat_id, "Не удалось сохранить заявку. Она ещё не отправлена. Попробуйте ещё раз.")
         if live.get("state") == STATE_REVIEW:
             _ask_review(chat_id, live)
-        return
+        raise
 
     delivery_info = dict(info)
     delivery_info["_mdt_delivery_key"] = f"tg-lead-{lead_id}"
@@ -4584,19 +4591,41 @@ def miniapp_submit() -> Response:
         logger.info("Rejected Mini App initData: %s", exc)
         return _miniapp_json({"ok": False, "error": "Telegram authorization failed"}, 401)
 
+    submission_id = str(body.get("submissionId") or "").strip()
+    if submission_id and not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", submission_id):
+        return _miniapp_json({"ok": False, "error": "Submission ID is invalid"}, 400)
+
     try:
-        info = _accept_miniapp_trip(
-            int(telegram_user["id"]),
-            telegram_user,
-            body.get("payload"),
-            trusted_source_tag=trusted_source_tag,
-        )
+        chat_id = int(telegram_user["id"])
+        # Serialize the short persistence section so two ambiguous client
+        # retries cannot both pass the idempotency check before either saves.
+        with _miniapp_submit_lock:
+            if submission_id:
+                with _lock:
+                    existing = user_data.get(chat_id)
+                    if (
+                        existing
+                        and existing.get("miniapp_submission_id") == submission_id
+                    ):
+                        return _miniapp_json({
+                            "ok": True,
+                            "state": existing.get("state"),
+                            "duplicate": True,
+                        })
+            info = _accept_miniapp_trip(
+                chat_id,
+                telegram_user,
+                body.get("payload"),
+                trusted_source_tag=trusted_source_tag,
+                defer_notifications=True,
+                submission_id=submission_id,
+            )
     except MiniAppValidationError as exc:
         return _miniapp_json({"ok": False, "error": str(exc)}, 400)
     except Exception:
         logger.exception("Mini App submission failed")
         return _miniapp_json({"ok": False, "error": "Could not save the request"}, 500)
-    return _miniapp_json({"ok": True, "state": info.get("state")})
+    return _miniapp_json({"ok": True, "state": info.get("state"), "duplicate": False})
 
 
 @app.route("/miniapp/transfer-link", methods=["POST", "OPTIONS"])
@@ -5024,12 +5053,42 @@ def _process_callback(data: Dict[str, Any]) -> None:
 
 
 
+def _notify_miniapp_contact(chat_id: int, info: Dict[str, Any]) -> None:
+    """Continue the saved draft in Telegram without delaying its HTTP receipt."""
+    def still_current() -> bool:
+        with _lock:
+            return user_data.get(chat_id) is info and info.get("state") == STATE_CONTACT
+
+    if not still_current():
+        return
+    direct_note = (
+        "\n✈️ Перелёт: только прямой, если доступен."
+        if info.get("direct_only") else ""
+    )
+    try:
+        send_message(
+            chat_id,
+            "✅ Параметры поездки получены из Mini App.\n"
+            "Теперь выберите способ связи — после этого покажу заявку для проверки."
+            + direct_note,
+        )
+        if still_current():
+            _ask_contact(chat_id)
+    except Exception as exc:
+        logger.error(
+            "Mini App contact notification failed for %s (%s)",
+            _log_correlation(chat_id, namespace="tg-user"), type(exc).__name__,
+        )
+
+
 def _accept_miniapp_trip(
     chat_id: int,
     from_info: Dict[str, Any],
     payload: Any,
     *,
     trusted_source_tag: str = "",
+    defer_notifications: bool = False,
+    submission_id: str = "",
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
     info = validate_trip_request(payload)
@@ -5047,23 +5106,25 @@ def _accept_miniapp_trip(
     set_consent(chat_id)
     info["state"] = STATE_CONTACT
     info["updated_at"] = int(time.time())
+    if submission_id:
+        info["miniapp_submission_id"] = submission_id
     _, info["kids"], info["infants"] = party_bands(info)
     with _lock:
         user_data[chat_id] = info
     _mark_dirty(chat_id, user=False)
     save_state()
 
-    direct_note = (
-        "\n✈️ Перелёт: только прямой, если доступен."
-        if info.get("direct_only") else ""
-    )
-    send_message(
-        chat_id,
-        "✅ Параметры поездки получены из Mini App.\n"
-        "Теперь выберите способ связи — после этого покажу заявку для проверки."
-        + direct_note,
-    )
-    _ask_contact(chat_id)
+    # The receipt confirms the persisted draft. Telegram can take longer than
+    # the Mini App's 15-second timeout, so its HTTP request must not wait for it.
+    if defer_notifications:
+        threading.Thread(
+            target=_notify_miniapp_contact,
+            args=(chat_id, info),
+            daemon=True,
+            name=f"miniapp-contact-{_log_correlation(chat_id, namespace='tg-user')}",
+        ).start()
+    else:
+        _notify_miniapp_contact(chat_id, info)
     return info
 
 def _process_update(data: Dict[str, Any]) -> None:
@@ -5217,14 +5278,14 @@ def _process_update(data: Dict[str, Any]) -> None:
 
 
 def _check_webhook_secret() -> bool:
-    """Verify Telegram secret token if one is configured."""
+    """Never expose an unauthenticated webhook, including in polling mode."""
     if not TELEGRAM_SECRET_TOKEN:
-        return True
+        return False
     header = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    return hmac.compare_digest(header, TELEGRAM_SECRET_TOKEN)
+    return hmac.compare_digest(header.encode(), TELEGRAM_SECRET_TOKEN.encode())
 
 
-def dispatch_update(data: Optional[Dict[str, Any]]) -> None:
+def dispatch_update(data: Optional[Dict[str, Any]], *, strict: bool = False) -> None:
     """Route one Telegram update. Shared by the webhook and the poller.
 
     Both transports must behave identically — including the state flush in
@@ -5240,16 +5301,36 @@ def dispatch_update(data: Optional[Dict[str, Any]]) -> None:
     except Exception as exc:
         logger.error("Error processing update: %s", exc, exc_info=True)
         _alert_admin_error("Update processing error", exc)
+        if strict:
+            raise
     finally:
         save_state()
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> Tuple[str, int]:
+    if not TELEGRAM_SECRET_TOKEN:
+        return "Service unavailable", 503
     if not _check_webhook_secret():
         logger.warning("Webhook called with missing/invalid secret token")
         return "Forbidden", 403
-    dispatch_update(request.get_json(silent=True))
+    try:
+        data = request.get_json(silent=True)
+    except (ValueError, RecursionError):
+        return "Bad request", 400
+    if not _webhook_delivery.valid_telegram(data):
+        return "Bad request", 400
+    try:
+        if "update_id" in data:
+            key = _webhook_delivery.event_key("telegram", BOT_TOKEN.split(":", 1)[0], data["update_id"])
+            _webhook_delivery.run_once(DATABASE_PATH, key, lambda: dispatch_update(data, strict=True))
+        else:
+            # Compatibility for callers without a transport ID. These cannot
+            # receive the cross-process replay guarantee of Telegram updates.
+            dispatch_update(data, strict=True)
+    except Exception:
+        logger.error("Webhook processing incomplete; inspect receipt/state before replay")
+        return "Service unavailable", 503
     return "OK", 200
 
 

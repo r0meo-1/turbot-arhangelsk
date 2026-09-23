@@ -715,6 +715,21 @@ def test_review_survives_session_reload(client):
     assert bot.count_leads() == 1
 
 
+def test_miniapp_submission_id_survives_session_reload():
+    chat = 6007
+    draft = {
+        "state": bot.STATE_CONTACT,
+        "destination": "ТЕСТ — Пхукет, Таиланд",
+        "updated_at": int(time.time()),
+        "miniapp_submission_id": "018f47ab-8f86-7a51-bf2a-5d9f72863f11",
+    }
+
+    bot.set_session(chat, draft)
+    restored = bot.get_session(chat)
+
+    assert restored["miniapp_submission_id"] == draft["miniapp_submission_id"]
+
+
 def test_failed_lead_save_preserves_review_for_retry(client, monkeypatch):
     chat = 6006
     _reach_contact(client, chat)
