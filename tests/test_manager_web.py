@@ -7,13 +7,13 @@ def test_mobile_shell_serves_only_allowlisted_assets():
     app = Flask(__name__)
     app.register_blueprint(manager_web)
     client = app.test_client()
-    for path in ["/manager/", "/manager/app.js", "/manager/styles.css"]:
+    for path in ["/manager/", "/manager/app.js", "/manager/demo-fixture.js", "/manager/styles.css"]:
         response = client.get(path)
         assert response.status_code == 200
         assert response.headers["Cache-Control"] == "no-store"
         assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
-    for path in ["/manager/.env", "/manager/website_app.py", "/manager/../bot.py"]:
+    for path in ["/manager/.env", "/manager/owner-session.js", "/manager/live-validation.js", "/manager/website_app.py", "/manager/../bot.py"]:
         assert client.get(path).status_code == 404
 
 
@@ -24,3 +24,13 @@ def test_public_shell_contains_no_customer_records():
     assert b'id="desk" hidden' in response.data
     assert b'id="token" type="password"' in response.data
     assert b"/agentdesk" in response.data
+
+
+def test_client_bundle_never_contains_server_only_secret_names():
+    app = Flask(__name__)
+    app.register_blueprint(manager_web)
+    client = app.test_client()
+    for path in ["/manager/", "/manager/app.js", "/manager/demo-fixture.js"]:
+        body = client.get(path).data
+        for forbidden in [b"BOT_TOKEN", b"ADMIN_ID", b"AGENT_EXTENSION_TOKEN"]:
+            assert forbidden not in body
