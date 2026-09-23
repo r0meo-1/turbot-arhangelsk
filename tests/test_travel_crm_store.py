@@ -77,6 +77,31 @@ def test_schema_is_idempotent_and_preserves_attribution():
     assert row == (123, "video_pain", "telegram", "winter_test")
 
 
+def test_schema_adds_manager_assignment_columns_to_existing_request_table():
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE crm_trip_requests (
+            request_id TEXT PRIMARY KEY,
+            lead_id INTEGER,
+            payload_json TEXT NOT NULL,
+            source_tag TEXT,
+            channel TEXT,
+            campaign TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )
+        """
+    )
+
+    init_schema(conn.cursor())
+
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(crm_trip_requests)")
+    }
+    assert {"assigned_manager_id", "assigned_manager_name", "assigned_at"} <= columns
+
+
 def test_timeline_round_trip_keeps_append_only_history():
     conn = _db()
     request = _request()
