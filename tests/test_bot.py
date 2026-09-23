@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 # Configure the bot before it is imported.
 os.environ.setdefault("BOT_TOKEN", "dummy-token")
-os.environ.setdefault("ADMIN_ID", "999")
-os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret123")
+os.environ["ADMIN_ID"] = "999"
+os.environ["TELEGRAM_SECRET_TOKEN"] = "secret123"
 os.environ.setdefault("DIALOG_TIMEOUT_HOURS", "0")  # disable background worker
 os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 # Unit tests must never touch the network. Tutu ships enabled by default so the
@@ -17,7 +17,7 @@ os.environ.setdefault("SYNC_COMPLETION", "true")  # run MDT/AI inline in tests
 # tests/test_tutu.py exercises that client against injected transports instead.
 os.environ.setdefault("TUTU_ENABLED", "false")
 os.environ.setdefault("DEMO_MODE", "false")  # tests assert on real stored values
-os.environ.setdefault("CONSENT_MODE", "strict")  # keep classic consent in unit tests
+os.environ["CONSENT_MODE"] = "strict"  # keep classic consent in unit tests
 os.environ.setdefault("STATE_FILE", ":memory:")  # not used when save_state is mocked
 os.environ.setdefault(
     "DATABASE_PATH",
