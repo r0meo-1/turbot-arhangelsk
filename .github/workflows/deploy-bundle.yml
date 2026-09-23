@@ -10,17 +10,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: turbot-bundle-production
+  group: turbot-production
   cancel-in-progress: false
 
 jobs:
   deploy:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     environment: production
+    timeout-minutes: 35
 
     steps:
       - name: Resolve target revision
@@ -41,14 +42,8 @@ jobs:
           ref: ${{ steps.target.outputs.sha }}
           fetch-depth: 1
 
-      - name: Build tracked-file bundle
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          git ls-files > .deploy-manifest
-          test -s .deploy-manifest
-          tar -czf /tmp/turbot-bundle.tar.gz -T .deploy-manifest .deploy-manifest
-          test -s /tmp/turbot-bundle.tar.gz
+      # Also gates workflow_dispatch, which has no preceding workflow_run.
+      - uses: ./.github/actions/regression
 
       - name: Load restricted deploy key
         uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
@@ -57,14 +52,11 @@ jobs:
 
       - name: Deploy verified bundle
         shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
         run: |
-          set -Eeuo pipefail
-          {
-            printf 'TURBOT_DEPLOY_BUNDLE_V1\n%s\n' '${{ steps.target.outputs.sha }}'
-            cat /tmp/turbot-bundle.tar.gz
-          } |
-            ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
-              root@${{ secrets.DEPLOY_HOST }} true
+          bash deploy/send-tested-bundle.sh "$EXPECTED_SHA"
 
       - name: Apply guarded Telegram AI lead assist state
         shell: bash
@@ -105,7 +97,11 @@ jobs:
           PY
 
       - name: Verify public running revision
-        run: python3 deploy/verify_revision.py --expected '${{ steps.target.outputs.sha }}'
+        env:
+          EXPECTED_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          python3 deploy/verify_revision.py --expected "$EXPECTED_SHA"
+          python3 deploy/verify_revision.py --expected "$EXPECTED_SHA" --url https://bot.r0meo1.ru/vk/health
 
       - name: Verify production backup and isolated restore drill
         shell: bash

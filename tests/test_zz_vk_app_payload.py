@@ -108,15 +108,8 @@ def test_app_payload_webhook_ack_uses_existing_secret_guard(monkeypatch):
     monkeypatch.setattr(bot, 'VK_SECRET_KEY', 'vk-test-secret')
     dispatched = []
 
-    class ImmediateThread:
-        def __init__(self, target, args=(), **kwargs):
-            self.target = target
-            self.args = args
-
-        def start(self):
-            dispatched.append(self.args[0])
-
-    monkeypatch.setattr(bot.threading, 'Thread', ImmediateThread)
+    monkeypatch.setattr(bot, '_process_app_payload', lambda event: dispatched.append(event))
+    monkeypatch.setattr(bot, 'save_state', lambda: None)
     event = _event(919003, {'command': 'miniapp_review', 'version': 1})
     response = bot.app.test_client().post('/vk/webhook', json=event)
     assert response.status_code == 200

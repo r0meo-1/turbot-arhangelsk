@@ -72,6 +72,7 @@ from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import provider_status as _provider_status
+from shared import webhook_delivery as _webhook_delivery
 from shared.telegram_webapp import (
     MiniAppValidationError, normalise_source_tag, validate_init_data, validate_trip_request,
 )
@@ -421,9 +422,8 @@ else:
     logger.info("Lead Telegram recipients: %s", LEAD_NOTIFY_IDS)
 if not TELEGRAM_SECRET_TOKEN:
     logger.warning(
-        "TELEGRAM_SECRET_TOKEN is not set — the webhook accepts unauthenticated "
-        "POSTs, so anyone who learns the URL can inject fake updates. Generate a "
-        "random string and pass it to setWebhook."
+        "TELEGRAM_SECRET_TOKEN is not set — webhook requests are disabled (503). "
+        "Configure the secret and pass the same value to setWebhook."
     )
 if not PRIVACY_POLICY_URL:
     logger.warning(
@@ -4459,7 +4459,7 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
         send_message(chat_id, "Не удалось сохранить заявку. Она ещё не отправлена. Попробуйте ещё раз.")
         if live.get("state") == STATE_REVIEW:
             _ask_review(chat_id, live)
-        return
+        raise
 
     delivery_info = dict(info)
     delivery_info["_mdt_delivery_key"] = f"tg-lead-{lead_id}"
@@ -5278,14 +5278,14 @@ def _process_update(data: Dict[str, Any]) -> None:
 
 
 def _check_webhook_secret() -> bool:
-    """Verify Telegram secret token if one is configured."""
+    """Never expose an unauthenticated webhook, including in polling mode."""
     if not TELEGRAM_SECRET_TOKEN:
-        return True
+        return False
     header = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    return hmac.compare_digest(header, TELEGRAM_SECRET_TOKEN)
+    return hmac.compare_digest(header.encode(), TELEGRAM_SECRET_TOKEN.encode())
 
 
-def dispatch_update(data: Optional[Dict[str, Any]]) -> None:
+def dispatch_update(data: Optional[Dict[str, Any]], *, strict: bool = False) -> None:
     """Route one Telegram update. Shared by the webhook and the poller.
 
     Both transports must behave identically — including the state flush in
@@ -5301,16 +5301,36 @@ def dispatch_update(data: Optional[Dict[str, Any]]) -> None:
     except Exception as exc:
         logger.error("Error processing update: %s", exc, exc_info=True)
         _alert_admin_error("Update processing error", exc)
+        if strict:
+            raise
     finally:
         save_state()
 
 
 @app.route("/webhook", methods=["POST"])
 def webhook() -> Tuple[str, int]:
+    if not TELEGRAM_SECRET_TOKEN:
+        return "Service unavailable", 503
     if not _check_webhook_secret():
         logger.warning("Webhook called with missing/invalid secret token")
         return "Forbidden", 403
-    dispatch_update(request.get_json(silent=True))
+    try:
+        data = request.get_json(silent=True)
+    except (ValueError, RecursionError):
+        return "Bad request", 400
+    if not _webhook_delivery.valid_telegram(data):
+        return "Bad request", 400
+    try:
+        if "update_id" in data:
+            key = _webhook_delivery.event_key("telegram", BOT_TOKEN.split(":", 1)[0], data["update_id"])
+            _webhook_delivery.run_once(DATABASE_PATH, key, lambda: dispatch_update(data, strict=True))
+        else:
+            # Compatibility for callers without a transport ID. These cannot
+            # receive the cross-process replay guarantee of Telegram updates.
+            dispatch_update(data, strict=True)
+    except Exception:
+        logger.error("Webhook processing incomplete; inspect receipt/state before replay")
+        return "Service unavailable", 503
     return "OK", 200
 
 
