@@ -76,6 +76,15 @@ install_systemd_units() {
 ensure_runtime_permissions
 cd "$repo"
 
+bundle_revision_is_healthy() {
+  local target_sha="$1" current_sha
+  [[ -f "$repo/.deployed-commit" ]] || return 1
+  IFS= read -r current_sha < "$repo/.deployed-commit" || return 1
+  [[ "$current_sha" == "$target_sha" ]] || return 1
+  curl --fail --silent --max-time 5 http://127.0.0.1:8000/health >/dev/null \
+    && curl --fail --silent --max-time 5 http://127.0.0.1:5100/vk/health >/dev/null
+}
+
 deploy_bundle() {
   local target_sha bundle stage old_manifest backup
   local -a metadata=()
@@ -86,6 +95,18 @@ deploy_bundle() {
   if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
     echo "Invalid bundle commit SHA" >&2
     return 1
+  fi
+
+  # Both main release workflows can deliver the same tested SHA. Do not
+  # reinstall dependencies or restart healthy services a second time. Drain
+  # the complete archive before returning so the sender never receives
+  # SIGPIPE (141) while it is still writing the verified bundle.
+  if bundle_revision_is_healthy "$target_sha"; then
+    cat >/dev/null
+    chmod +x "$repo/deploy/verify-vk-miniapp.sh"
+    "$repo/deploy/verify-vk-miniapp.sh"
+    echo "TurBot bundle already runs: $target_sha"
+    return 0
   fi
 
   bundle="$(mktemp)"
