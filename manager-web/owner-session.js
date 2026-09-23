@@ -71,12 +71,38 @@ function createOwnerSession({mode = 'mock', liveConnector = null} = {}) {
   });
 }
 
-function createLiveConnector({endpoint, fetchImpl = globalThis.fetch} = {}) {
+function parseAllowedHosts(value) {
+  const hosts = Array.isArray(value) ? value : String(value || '').split(',');
+  return new Set(hosts.map((host) => host.trim().toLowerCase()).filter(Boolean));
+}
+
+function validateOwnerEndpoint(endpoint, allowedHosts) {
   if (!endpoint) throw new Error('OWNER_SESSION_ENDPOINT is required for live mode.');
+  let url;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error('OWNER_SESSION_ENDPOINT must be a valid HTTPS URL.');
+  }
+  if (url.protocol !== 'https:' || url.username || url.password) {
+    throw new Error('OWNER_SESSION_ENDPOINT must use HTTPS without embedded credentials.');
+  }
+  const allowlist = parseAllowedHosts(allowedHosts);
+  if (allowlist.size === 0) {
+    throw new Error('OWNER_SESSION_ALLOWED_HOSTS is required for live mode.');
+  }
+  if (!allowlist.has(url.host.toLowerCase())) {
+    throw new Error('OWNER_SESSION_ENDPOINT host is not allowlisted.');
+  }
+  return url.href;
+}
+
+function createLiveConnector({endpoint, allowedHosts, fetchImpl = globalThis.fetch} = {}) {
+  const verifiedEndpoint = validateOwnerEndpoint(endpoint, allowedHosts);
   if (typeof fetchImpl !== 'function') throw new Error('Fetch is unavailable.');
 
   return async function liveConnector(privateKeyBuffer) {
-    const response = await fetchImpl(endpoint, {
+    const response = await fetchImpl(verifiedEndpoint, {
       method: 'POST',
       headers: {Authorization: `Bearer ${privateKeyBuffer.toString('utf8')}`},
       body: JSON.stringify({check: 'owner-session'}),
@@ -106,7 +132,10 @@ async function runCli(argv = process.argv, env = process.env) {
 
   const session = createOwnerSession({
     mode: 'live',
-    liveConnector: createLiveConnector({endpoint: env.OWNER_SESSION_ENDPOINT}),
+    liveConnector: createLiveConnector({
+      endpoint: env.OWNER_SESSION_ENDPOINT,
+      allowedHosts: env.OWNER_SESSION_ALLOWED_HOSTS,
+    }),
   });
   process.stdout.write('Private key (input hidden, memory only): ');
   let privateKey = await askHidden('');
@@ -119,7 +148,14 @@ async function runCli(argv = process.argv, env = process.env) {
   }
 }
 
-module.exports = {createLiveConnector, createOwnerSession, parseArgs, runCli};
+module.exports = {
+  createLiveConnector,
+  createOwnerSession,
+  parseAllowedHosts,
+  parseArgs,
+  runCli,
+  validateOwnerEndpoint,
+};
 
 if (require.main === module) {
   runCli().catch((error) => {

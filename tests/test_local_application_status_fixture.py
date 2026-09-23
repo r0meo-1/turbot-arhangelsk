@@ -68,6 +68,53 @@ session.verifyLive('temporary-private-key').then((state) => {
     }
 
 
+def test_live_connector_requires_https_and_an_exact_allowlisted_host():
+    root = Path(__file__).parents[1]
+    script = """
+const {createLiveConnector} = require('./manager-web/owner-session');
+const attempts = [];
+for (const [name, endpoint, allowedHosts] of [
+  ['http', 'http://owner.example/check', 'owner.example'],
+  ['credentials', 'https://user:pass@owner.example/check', 'owner.example'],
+  ['empty-allowlist', 'https://owner.example/check', ''],
+  ['suffix-confusion', 'https://owner.example.evil.test/check', 'owner.example'],
+  ['port-confusion', 'https://owner.example:444/check', 'owner.example'],
+]) {
+  let fetchCalls = 0;
+  try {
+    createLiveConnector({endpoint, allowedHosts, fetchImpl: async () => { fetchCalls += 1; }});
+    attempts.push({name, accepted: true, fetchCalls});
+  } catch (error) {
+    attempts.push({name, accepted: false, fetchCalls, error: error.message});
+  }
+}
+let captured = null;
+const connector = createLiveConnector({
+  endpoint: 'https://owner.example/check',
+  allowedHosts: ' other.example, OWNER.EXAMPLE ',
+  fetchImpl: async (url, options) => {
+    captured = {url, method: options.method, authorization: options.headers.Authorization};
+    return {ok: true, status: 204};
+  },
+});
+connector(Buffer.from('temporary-private-key')).then((result) => {
+  console.log(JSON.stringify({attempts, captured, result}));
+});
+"""
+    result = subprocess.run(
+        ["node", "-e", script], cwd=root, check=True, capture_output=True, text=True,
+    )
+    output = json.loads(result.stdout)
+    assert all(not attempt["accepted"] for attempt in output["attempts"])
+    assert all(attempt["fetchCalls"] == 0 for attempt in output["attempts"])
+    assert output["captured"] == {
+        "url": "https://owner.example/check",
+        "method": "POST",
+        "authorization": "Bearer temporary-private-key",
+    }
+    assert output["result"] == {"status": "http-204"}
+
+
 def test_live_validation_hook_emits_placeholder_without_secret_or_fake_result():
     root = Path(__file__).parents[1]
     script = """

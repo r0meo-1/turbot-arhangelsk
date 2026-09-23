@@ -97,10 +97,15 @@ Run the safe default with:
 node manager-web/owner-session.js
 ```
 
-Live mode requires both an explicit flag and a server-side endpoint:
+Live mode requires an explicit flag, a privileged HTTPS verification endpoint,
+and an exact host allowlist. The connector performs a `POST` and sends the
+owner key in its `Authorization` header, so this endpoint is not a read-only
+health probe and must be controlled by the owner. URL credentials, HTTP,
+subdomain/suffix matches, and unlisted ports fail closed before any request:
 
 ```powershell
 $env:OWNER_SESSION_ENDPOINT = "https://owner-controlled-endpoint.example/check"
+$env:OWNER_SESSION_ALLOWED_HOSTS = "owner-controlled-endpoint.example"
 node manager-web/owner-session.js --live --confirm-live
 ```
 
@@ -159,8 +164,9 @@ Habr, or any external vacancy service.
 `owner-session.js` is intentionally not a served manager asset. Run it only
 from an owner-controlled terminal. Its default command prints the synthetic
 state. Live verification requires both `--live` and `--confirm-live`, plus a
-server-side `OWNER_SESSION_ENDPOINT`; the private-key prompt is hidden, and
-the key is passed only to the injected live connector and then discarded. A
+server-side `OWNER_SESSION_ENDPOINT` and exact `OWNER_SESSION_ALLOWED_HOSTS`;
+the private-key prompt is hidden, and the key is passed only to the injected
+live connector and then discarded. A
 live response updates only the in-memory status returned by that process. It
 does not rewrite `application_status.json` or create a browser session.
 
