@@ -34,6 +34,7 @@ from shared import mdt as mdt_shared
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import travel_crm_store as _travel_crm_store
 from shared.telegram_webapp import MiniAppValidationError, validate_init_data
+from shared.runtime_metrics import lead_delivery_snapshot
 from shared.travel_crm import (
     Activity,
     ActivityType,
@@ -1210,6 +1211,89 @@ def _agent_crm_today_items(store: str, end_of_day: datetime):
                 },
             ))
     return result
+
+
+def _agent_crm_summary(window_seconds: int = 86400) -> Dict[str, Any]:
+    """Return bounded aggregate lead and delivery telemetry without customer data."""
+    now = int(time.time())
+    cutoff = now - window_seconds
+    channel_counts: Dict[str, int] = {}
+    delivery_rows = []
+    stores = ("main",) if _agent_crm_vk_is_main() else ("main", "vk")
+
+    for store in stores:
+        with _agent_crm_cursor(store) as cur:
+            if cur is None:
+                continue
+            try:
+                grouped = cur.execute(
+                    """
+                    SELECT channel, COUNT(*)
+                    FROM crm_trip_requests
+                    WHERE created_at >= ?
+                    GROUP BY channel
+                    """,
+                    (cutoff,),
+                ).fetchall()
+                for channel, count in grouped:
+                    safe_channel = str(channel or "unknown")[:32]
+                    channel_counts[safe_channel] = (
+                        channel_counts.get(safe_channel, 0) + int(count or 0)
+                    )
+
+                delivery_rows.extend(cur.execute(
+                    """
+                    SELECT lead.created_at, lead.manager_notified_at
+                    FROM crm_trip_requests AS request
+                    JOIN leads AS lead ON lead.id = request.lead_id
+                    WHERE request.created_at >= ?
+                      AND request.channel IN ('telegram', 'vk')
+                    """,
+                    (cutoff,),
+                ).fetchall())
+                if store == "main":
+                    delivery_rows.extend(cur.execute(
+                        """
+                        SELECT lead.created_at, lead.owner_notified_at
+                        FROM crm_trip_requests AS request
+                        JOIN website_leads AS lead ON lead.id = request.lead_id
+                        WHERE request.created_at >= ?
+                          AND request.channel = 'website'
+                        """,
+                        (cutoff,),
+                    ).fetchall())
+            except sqlite3.OperationalError:
+                logger.warning("Agent CRM %s summary schema unavailable", store)
+
+    delivery = lead_delivery_snapshot(
+        delivery_rows,
+        window_seconds=window_seconds,
+    )
+    return {
+        "windowSeconds": window_seconds,
+        "newLeads": sum(channel_counts.values()),
+        "channels": [
+            {"channel": channel, "count": channel_counts[channel]}
+            for channel in sorted(channel_counts)
+        ],
+        "delivery": {
+            "managerNotified": delivery["manager_notified"],
+            "pending": delivery["pending_manager_delivery"],
+            "p95Seconds": delivery["latency_seconds"]["p95"],
+        },
+    }
+
+
+if "agent_extension_crm_summary" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/summary", methods=["GET", "OPTIONS"])
+    def agent_extension_crm_summary() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        denied = _agent_crm_guard()
+        if denied is not None:
+            return denied
+        return _agent_json_response({"ok": True, "summary": _agent_crm_summary()})
 
 
 if "agent_extension_crm_today" not in app.view_functions:

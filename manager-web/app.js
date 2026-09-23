@@ -7,10 +7,10 @@ const telegram = window.Telegram?.WebApp;
 const telegramInitData = telegram?.initData || '';
 const taskNames = {build_selection:'Подбор',send_options:'Отправить варианты',call_back:'Позвонить',flights:'Авиабилеты',visa:'Виза',documents:'Документы',check_price:'Проверить цену',next_contact:'Следующий контакт'};
 function say(message){$('status').textContent=message;}
-function clearData(){activeRequestId='';for(const id of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(id).value='';for(const id of ['tasks','summary','quotes','activities'])$(id).replaceChildren();$('detail').hidden=true;}
+function clearData(){activeRequestId='';for(const id of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(id).value='';for(const id of ['analytics','tasks','summary','quotes','activities'])$(id).replaceChildren();$('detail').hidden=true;}
 function logout(){$('refresh').disabled=false;generation++;detailGeneration++;token='';$('token').value='';clearData();$('desk').hidden=true;$('login').hidden=false;say('Вы вышли.');}
 function showDemo(){demoMode=true;generation++;detailGeneration++;clearData();$('login').hidden=true;$('desk').hidden=false;$('refresh').textContent='Обновить пример';$('logout').textContent='Закрыть пример';$('status').textContent='Демо-режим: синтетические данные, CRM не подключена.';renderDemo();}
-function renderDemo(){const fixture=window.MANAGER_DEMO_FIXTURE;const task=fixture.task;const item=document.createElement('article');paragraph(item,[taskNames[task.type]||task.type,task.destination,task.origin,task.dates,task.note,task.budget].filter(Boolean).join(' · '));const button=document.createElement('button');button.textContent='Открыть карточку';button.addEventListener('click',()=>{activeRequestId='demo';$('detail').hidden=false;for(const id of ['summary','quotes','activities'])$(id).replaceChildren();paragraph($('summary'),fixture.summary);paragraph($('quotes'),fixture.quote);paragraph($('activities'),fixture.activity);});item.append(button);$('tasks').append(item);}
+function renderDemo(){const fixture=window.MANAGER_DEMO_FIXTURE;renderAnalytics({newLeads:1,channels:[{channel:'demo',count:1}],delivery:{managerNotified:1,pending:0,p95Seconds:12}});const task=fixture.task;const item=document.createElement('article');paragraph(item,[taskNames[task.type]||task.type,task.destination,task.origin,task.dates,task.note,task.budget].filter(Boolean).join(' · '));const button=document.createElement('button');button.textContent='Открыть карточку';button.addEventListener('click',()=>{activeRequestId='demo';$('detail').hidden=false;for(const id of ['summary','quotes','activities'])$(id).replaceChildren();paragraph($('summary'),fixture.summary);paragraph($('quotes'),fixture.quote);paragraph($('activities'),fixture.activity);});item.append(button);$('tasks').append(item);}
 async function api(path,body){
  const authHeaders=telegramInitData?{'X-Telegram-Init-Data':telegramInitData}:{Authorization:'Bearer '+token};
  const response=await fetch('/agent-extension/crm/'+path,{method:body?'POST':'GET',body:body?JSON.stringify(body):undefined,headers:{...authHeaders,...(body?{'Content-Type':'application/json'}:{})},cache:'no-store',credentials:'omit'});
@@ -20,6 +20,8 @@ async function api(path,body){
  const data=await response.json();if(!data.ok)throw Error('Сервер не подтвердил результат.');return data;
 }
 function paragraph(parent,text){const p=document.createElement('p');p.textContent=text;parent.append(p);}
+function metric(label,value){const item=document.createElement('article');item.className='metric';const strong=document.createElement('strong');strong.textContent=String(value);const text=document.createElement('span');text.textContent=label;item.append(strong,text);$('analytics').append(item);}
+function renderAnalytics(summary){$('analytics').replaceChildren();metric('Новые лиды',summary.newLeads??0);metric('Доставлено менеджеру',summary.delivery?.managerNotified??0);metric('Ожидают доставки',summary.delivery?.pending??0);metric('p95 доставки',summary.delivery?.p95Seconds==null?'—':summary.delivery.p95Seconds+' с');for(const item of summary.channels||[])metric('Канал: '+item.channel,item.count);}
 function date(value){if(!value)return '';const raw=String(value);const d=new Date(typeof value==='number'?value*1000:(/(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)?raw:raw+'Z'));return Number.isNaN(d.getTime())?'Дата не указана':d.toLocaleString('ru-RU');}
 async function openRequest(id){
  activeRequestId='';for(const field of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(field).value='';const run=generation,detailRun=++detailGeneration;$('detail').hidden=true;say('Загрузка карточки…');
@@ -36,7 +38,7 @@ async function openRequest(id){
 async function refresh(){
  if(demoMode){clearData();renderDemo();say('Демо обновлено; CRM не подключена.');return;}
  const run=++generation;detailGeneration++;clearData();$('refresh').disabled=true;say('Загрузка очереди…');
- try{const query=new URLSearchParams({now:new Date().toISOString(),tzOffsetMinutes:String(new Date().getTimezoneOffset()),limit:'100'});const data=await api('today?'+query);if(run!==generation)return;
+ try{const query=new URLSearchParams({now:new Date().toISOString(),tzOffsetMinutes:String(new Date().getTimezoneOffset()),limit:'100'});const [summaryData,data]=await Promise.all([api('summary'),api('today?'+query)]);if(run!==generation)return;renderAnalytics(summaryData.summary||{});
  $('login').hidden=true;$('desk').hidden=false;$('token').value='';
  for(const task of data.tasks||[]){const item=document.createElement('article');paragraph(item,[taskNames[task.type]||task.type,task.destination,task.origin,task.dates,task.note,date(task.dueAt)].filter(Boolean).join(' · '));const button=document.createElement('button');button.textContent='Открыть карточку';button.addEventListener('click',()=>openRequest(task.requestId));item.append(button);$('tasks').append(item);}
  if(!(data.tasks||[]).length)paragraph($('tasks'),'На сегодня задач нет.');say('Очередь обновлена.');

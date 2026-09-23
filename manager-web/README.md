@@ -139,9 +139,10 @@ endpoints and database. It does not create a second customer store. Inside a
 Telegram Mini App it sends the short-lived, signed `Telegram.WebApp.initData`
 with every request; the server validates the HMAC and accepts only `ADMIN_ID`
 or a user listed in `MANAGER_TELEGRAM_IDS`. Manual Agent Desk bearer entry
-remains available as a fallback. The journal currently supports the
-today/overdue queue, request history, adding a note, and scheduling a next task
-in the device's timezone.
+remains available as a fallback. The journal currently supports a privacy-safe
+24-hour aggregate summary, the today/overdue queue, request history, adding a
+note, and scheduling a next task in the device's timezone. Dashboard SLA is
+explicitly system create-to-manager-delivery latency, not human response time.
 
 The public HTML contains no CRM data. The user supplies an existing Agent Desk
 pairing key; it is held in memory and cleared on logout/pagehide. No persistent
