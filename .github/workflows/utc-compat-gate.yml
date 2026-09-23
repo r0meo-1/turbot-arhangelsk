@@ -1,0 +1,72 @@
+name: UTC compatibility gate
+
+on:
+  pull_request:
+    paths:
+      - bot.py
+      - vk_bot.py
+      - website_app.py
+      - shared/travel_crm.py
+      - shared/travel_crm_store.py
+      - shared/utc_time.py
+      - tests/test_utc_time.py
+      - tests/conftest.py
+      - pyproject.toml
+      - requirements*.txt
+      - .github/workflows/utc-compat-gate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    name: Warning-free regression (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.12', '3.14']
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install CI-only dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y sqlite3
+          node --version
+          python -m pip install -r requirements-dev.txt
+      - name: Check UTC compatibility in a non-UTC timezone
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          PYTHON_DOTENV_DISABLED: '1'
+          TZ: Pacific/Honolulu
+        run: |
+          set -Eeuo pipefail
+          mkdir -p reports
+          python -m pytest tests/test_utc_time.py -W error -ra --junitxml=reports/pytest-clock.xml 2>&1 | tee reports/pytest-clock.log
+      - name: Run full regression with warnings treated as errors
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+          PYTHON_DOTENV_DISABLED: '1'
+          TZ: UTC
+        run: |
+          set -Eeuo pipefail
+          mkdir -p reports
+          python -m pytest -W error -ra --junitxml=reports/pytest-utc.xml 2>&1 | tee reports/pytest-utc.log
+      - name: Preserve gate evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: utc-gate-py${{ matrix.python }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
