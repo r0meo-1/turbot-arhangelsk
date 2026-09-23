@@ -4590,6 +4590,7 @@ def miniapp_submit() -> Response:
             telegram_user,
             body.get("payload"),
             trusted_source_tag=trusted_source_tag,
+            defer_notifications=True,
         )
     except MiniAppValidationError as exc:
         return _miniapp_json({"ok": False, "error": str(exc)}, 400)
@@ -5024,12 +5025,41 @@ def _process_callback(data: Dict[str, Any]) -> None:
 
 
 
+def _notify_miniapp_contact(chat_id: int, info: Dict[str, Any]) -> None:
+    """Continue the saved draft in Telegram without delaying its HTTP receipt."""
+    def still_current() -> bool:
+        with _lock:
+            return user_data.get(chat_id) is info and info.get("state") == STATE_CONTACT
+
+    if not still_current():
+        return
+    direct_note = (
+        "\n✈️ Перелёт: только прямой, если доступен."
+        if info.get("direct_only") else ""
+    )
+    try:
+        send_message(
+            chat_id,
+            "✅ Параметры поездки получены из Mini App.\n"
+            "Теперь выберите способ связи — после этого покажу заявку для проверки."
+            + direct_note,
+        )
+        if still_current():
+            _ask_contact(chat_id)
+    except Exception as exc:
+        logger.error(
+            "Mini App contact notification failed for %s (%s)",
+            _log_correlation(chat_id, namespace="tg-user"), type(exc).__name__,
+        )
+
+
 def _accept_miniapp_trip(
     chat_id: int,
     from_info: Dict[str, Any],
     payload: Any,
     *,
     trusted_source_tag: str = "",
+    defer_notifications: bool = False,
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
     info = validate_trip_request(payload)
@@ -5053,17 +5083,17 @@ def _accept_miniapp_trip(
     _mark_dirty(chat_id, user=False)
     save_state()
 
-    direct_note = (
-        "\n✈️ Перелёт: только прямой, если доступен."
-        if info.get("direct_only") else ""
-    )
-    send_message(
-        chat_id,
-        "✅ Параметры поездки получены из Mini App.\n"
-        "Теперь выберите способ связи — после этого покажу заявку для проверки."
-        + direct_note,
-    )
-    _ask_contact(chat_id)
+    # The receipt confirms the persisted draft. Telegram can take longer than
+    # the Mini App's 15-second timeout, so its HTTP request must not wait for it.
+    if defer_notifications:
+        threading.Thread(
+            target=_notify_miniapp_contact,
+            args=(chat_id, info),
+            daemon=True,
+            name=f"miniapp-contact-{_log_correlation(chat_id, namespace='tg-user')}",
+        ).start()
+    else:
+        _notify_miniapp_contact(chat_id, info)
     return info
 
 def _process_update(data: Dict[str, Any]) -> None:
