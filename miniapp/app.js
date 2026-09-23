@@ -19,8 +19,19 @@
   const save = document.getElementById('save');
   const status = document.getElementById('status');
   let pendingPayload = null;
+  let pendingSubmissionId = null;
   let isSaving = false;
   const REQUEST_TIMEOUT_MS = 15000;
+
+  const createSubmissionId = () => {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+    if (window.crypto?.getRandomValues) {
+      const bytes = new Uint8Array(16);
+      window.crypto.getRandomValues(bytes);
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  };
 
   const DESTINATIONS = Object.freeze([
     'Таиланд', 'Пхукет, Таиланд', 'Паттайя, Таиланд',
@@ -238,6 +249,7 @@
 
   const showReview = (payload) => {
     pendingPayload = payload;
+    pendingSubmissionId = createSubmissionId();
     isSaving = false;
     renderSummary(payload);
     form.hidden = true;
@@ -277,13 +289,13 @@
   edit.addEventListener('click', showForm);
   tg?.BackButton?.onClick?.(showForm);
 
-  const submitViaBackend = async (payload) => {
+  const submitViaBackend = async (payload, submissionId) => {
     const { response, result } = await fetchJsonWithTimeout(
       API_URL,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ initData: tg.initData, payload })
+        body: JSON.stringify({ initData: tg.initData, payload, submissionId })
       },
       'TurBot отвечает слишком долго. Проверьте связь и повторите.'
     );
@@ -324,7 +336,7 @@
 
     try {
       if (tg?.initData) {
-        await submitViaBackend(pendingPayload);
+        await submitViaBackend(pendingPayload, pendingSubmissionId);
         status.textContent = 'Параметры сохранены. Возвращаемся в TurBot…';
         tg.HapticFeedback?.notificationOccurred('success');
         tg.BackButton?.hide?.();

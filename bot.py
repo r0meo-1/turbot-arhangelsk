@@ -651,6 +651,7 @@ _db_lock = threading.Lock()
 user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}
 _lock = threading.Lock()
+_miniapp_submit_lock = threading.Lock()
 
 # chat_ids whose in-memory session/user record changed since the last
 # save_state(). Guarded by _lock. Lets save_state() flush only what changed
@@ -742,6 +743,7 @@ def init_db() -> None:
                 budget_scope TEXT,
                 direct_only INTEGER,
                 phone TEXT,
+                miniapp_submission_id TEXT,
                 source_tag TEXT,
                 updated_at INTEGER NOT NULL
             )
@@ -796,8 +798,11 @@ def init_db() -> None:
             if "source_tag" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN source_tag TEXT")
         cur.execute("PRAGMA table_info(sessions)")
-        if "review_token" not in {row[1] for row in cur.fetchall()}:
+        _session_cols = {row[1] for row in cur.fetchall()}
+        if "review_token" not in _session_cols:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
+        if "miniapp_submission_id" not in _session_cols:
+            cur.execute("ALTER TABLE sessions ADD COLUMN miniapp_submission_id TEXT")
         cur.execute("PRAGMA table_info(leads)")
         _lead_cols = {row[1] for row in cur.fetchall()}
         if "mdt_status" not in _lead_cols:
@@ -1107,9 +1112,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
             INSERT INTO sessions (
                 chat_id, state, destination, origin, dates, nights, people,
                 kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, review_token, source_tag, updated_at
+                phone, review_token, miniapp_submission_id, source_tag, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
@@ -1125,6 +1130,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 direct_only=excluded.direct_only,
                 phone=excluded.phone,
                 review_token=excluded.review_token,
+                miniapp_submission_id=excluded.miniapp_submission_id,
                 source_tag=excluded.source_tag,
                 updated_at=excluded.updated_at
             """,
@@ -1144,6 +1150,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 _sqlite_bool(data.get("direct_only")),
                 data.get("phone"),
                 data.get("review_token"),
+                data.get("miniapp_submission_id"),
                 data.get("source_tag"),
                 data.get("updated_at", now),
             ),
@@ -1155,7 +1162,7 @@ def update_session(chat_id: int, **kwargs) -> None:
     allowed = {
         "state", "destination", "origin", "dates", "nights", "people", "kids",
         "kids_ages", "infants", "budget", "budget_scope", "direct_only",
-        "phone", "review_token", "source_tag", "updated_at",
+        "phone", "review_token", "miniapp_submission_id", "source_tag", "updated_at",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -4584,20 +4591,41 @@ def miniapp_submit() -> Response:
         logger.info("Rejected Mini App initData: %s", exc)
         return _miniapp_json({"ok": False, "error": "Telegram authorization failed"}, 401)
 
+    submission_id = str(body.get("submissionId") or "").strip()
+    if submission_id and not re.fullmatch(r"[A-Za-z0-9_-]{16,80}", submission_id):
+        return _miniapp_json({"ok": False, "error": "Submission ID is invalid"}, 400)
+
     try:
-        info = _accept_miniapp_trip(
-            int(telegram_user["id"]),
-            telegram_user,
-            body.get("payload"),
-            trusted_source_tag=trusted_source_tag,
-            defer_notifications=True,
-        )
+        chat_id = int(telegram_user["id"])
+        # Serialize the short persistence section so two ambiguous client
+        # retries cannot both pass the idempotency check before either saves.
+        with _miniapp_submit_lock:
+            if submission_id:
+                with _lock:
+                    existing = user_data.get(chat_id)
+                    if (
+                        existing
+                        and existing.get("miniapp_submission_id") == submission_id
+                    ):
+                        return _miniapp_json({
+                            "ok": True,
+                            "state": existing.get("state"),
+                            "duplicate": True,
+                        })
+            info = _accept_miniapp_trip(
+                chat_id,
+                telegram_user,
+                body.get("payload"),
+                trusted_source_tag=trusted_source_tag,
+                defer_notifications=True,
+                submission_id=submission_id,
+            )
     except MiniAppValidationError as exc:
         return _miniapp_json({"ok": False, "error": str(exc)}, 400)
     except Exception:
         logger.exception("Mini App submission failed")
         return _miniapp_json({"ok": False, "error": "Could not save the request"}, 500)
-    return _miniapp_json({"ok": True, "state": info.get("state")})
+    return _miniapp_json({"ok": True, "state": info.get("state"), "duplicate": False})
 
 
 @app.route("/miniapp/transfer-link", methods=["POST", "OPTIONS"])
@@ -5060,6 +5088,7 @@ def _accept_miniapp_trip(
     *,
     trusted_source_tag: str = "",
     defer_notifications: bool = False,
+    submission_id: str = "",
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
     info = validate_trip_request(payload)
@@ -5077,6 +5106,8 @@ def _accept_miniapp_trip(
     set_consent(chat_id)
     info["state"] = STATE_CONTACT
     info["updated_at"] = int(time.time())
+    if submission_id:
+        info["miniapp_submission_id"] = submission_id
     _, info["kids"], info["infants"] = party_bands(info)
     with _lock:
         user_data[chat_id] = info
