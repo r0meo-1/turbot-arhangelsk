@@ -1,4 +1,5 @@
 from io import BytesIO
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -141,3 +142,58 @@ def test_git_deploy_same_head_does_not_skip_bundle_checkout(tmp_path, bundle):
     script = 'repo="$PWD"; target=same; previous=same\n' + condition + '\n echo skip\nelse\n echo deploy\nfi\n'
     result = subprocess.run([bash, "-c", script], cwd=tmp_path, check=True, capture_output=True, text=True)
     assert result.stdout.strip() == ("deploy" if bundle else "skip")
+
+
+def test_bundle_same_revision_fast_path_requires_both_services_healthy(tmp_path):
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("Bash is required for deployment regression")
+    text = Path("deploy/turbot-deploy.sh").read_text(encoding="utf-8")
+    start = text.index("bundle_revision_is_healthy() {")
+    end = text.index("\ndeploy_bundle() {", start)
+    function = text[start:end]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    marker = "a" * 40
+    (repo / ".deployed-commit").write_text(marker + "\n")
+    curl = tmp_path / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "case \"$*\" in\n"
+        "  *127.0.0.1:8000/health*) exit \"${TG_HEALTH:-0}\" ;;\n"
+        "  *127.0.0.1:5100/vk/health*) exit \"${VK_HEALTH:-0}\" ;;\n"
+        "  *) exit 9 ;;\n"
+        "esac\n"
+    )
+    curl.chmod(0o755)
+    script = function + f'\nrepo="$PWD/repo"\nbundle_revision_is_healthy "{marker}"\n'
+    env = {**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"]}
+
+    healthy = subprocess.run([bash, "-c", script], cwd=tmp_path, env=env)
+    telegram_down = subprocess.run(
+        [bash, "-c", script], cwd=tmp_path, env={**env, "TG_HEALTH": "1"}
+    )
+    vk_down = subprocess.run(
+        [bash, "-c", script], cwd=tmp_path, env={**env, "VK_HEALTH": "1"}
+    )
+    mismatched = subprocess.run(
+        [bash, "-c", function + '\nrepo="$PWD/repo"\nbundle_revision_is_healthy "' + "b" * 40 + '"\n'],
+        cwd=tmp_path,
+        env=env,
+    )
+
+    assert healthy.returncode == 0
+    assert telegram_down.returncode != 0
+    assert vk_down.returncode != 0
+    assert mismatched.returncode != 0
+
+
+def test_bundle_same_revision_fast_path_drains_archive_before_returning():
+    text = Path("deploy/turbot-deploy.sh").read_text(encoding="utf-8")
+    start = text.index('  if bundle_revision_is_healthy "$target_sha"; then')
+    end = text.index("\n  fi", start)
+    fast_path = text[start:end]
+
+    assert "cat >/dev/null" in fast_path
+    assert fast_path.index("cat >/dev/null") < fast_path.index("return 0")
+    assert '"$repo/deploy/verify-vk-miniapp.sh"' in fast_path
