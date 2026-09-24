@@ -350,10 +350,30 @@ def evaluate_junit(root, pytest_rc):
 
 def test_worker(q, runtime):
     py, report = q / "venv/bin/python", runtime / "reports"
-    interfaces = {name for _, name in socket.if_nameindex()}
+    # Do not use socket.if_nameindex() or ip(8) here: both require AF_NETLINK.
+    # The run sandbox intentionally permits only AF_UNIX/AF_INET/AF_INET6.
+    # Read namespace-local sysfs/procfs instead, which verifies the same invariants
+    # without widening the allowed address-family surface.
+    netdir = Path("/sys/class/net")
+    require(netdir.is_dir(), "Network namespace sysfs is unavailable")
+    interfaces = {entry.name for entry in netdir.iterdir()}
     require(interfaces == {"lo"}, "Test network is not loopback-only")
-    require(not command(["ip", "route", "show", "default"], capture=True).strip(), "IPv4 default route exists")
-    require(not command(["ip", "-6", "route", "show", "default"], capture=True).strip(), "IPv6 default route exists")
+
+    route4 = Path("/proc/net/route").read_text().splitlines()[1:]
+    has_v4_default = any(
+        len(fields := line.split()) >= 2 and fields[1] == "00000000"
+        for line in route4
+    )
+    require(not has_v4_default, "IPv4 default route exists")
+
+    route6 = Path("/proc/net/ipv6_route").read_text().splitlines()
+    has_v6_default = any(
+        len(fields := line.split()) >= 2
+        and fields[0] == "0" * 32
+        and fields[1] == "00"
+        for line in route6
+    )
+    require(not has_v6_default, "IPv6 default route exists")
     emit("BROWSER NETWORK", "LOOPBACK_ONLY: no external interface/default route")
     # A loader preflight is not a browser test and never contacts a server.
     library_env = dict(os.environ, LD_LIBRARY_PATH=qa_library_paths(q),
