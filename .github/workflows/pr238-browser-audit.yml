@@ -1,0 +1,107 @@
+name: PR238 pinned browser audit
+
+on:
+  push:
+    branches: [ops/pr238-browser-audit-20260924]
+    paths: [.github/workflows/pr238-browser-audit.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    if: github.ref == 'refs/heads/ops/pr238-browser-audit-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 5a9abe482f9e86fdd11b9ee13714a93f839dd606
+          path: snapshot
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Verify source and install CI-only browser dependencies
+        working-directory: snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = 5a9abe482f9e86fdd11b9ee13714a93f839dd606
+          test ! -e .env
+          mkdir -p reports/browser "$RUNNER_TEMP/browser-tmp"
+          git rev-parse HEAD > reports/browser/tested-revision.txt
+          python --version | tee reports/browser/python-version.txt
+          python -m pip install -r requirements-dev.txt playwright
+          python -m playwright install --with-deps msedge
+          python -m pip freeze > reports/browser/dependencies.txt
+      - name: Run all three browser modules with external networking disabled
+        working-directory: snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PY_BIN_DIR="$(dirname "$(command -v python)")"
+          set +e
+          sudo unshare --net -- /bin/bash -c '
+            set -Eeuo pipefail
+            ip link set lo up
+            test -z "$(ip route show default)"
+            echo "BROWSER NETWORK | loopback-only namespace"
+            exec runuser -u "$1" -- /usr/bin/env -i \
+              PATH="$2:/usr/local/bin:/usr/bin:/bin" \
+              LD_LIBRARY_PATH="$2/../lib" HOME="$3" TMPDIR="$4" \
+              TZ=UTC LC_ALL=C.UTF-8 PYTHONPATH="$5" \
+              PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 \
+              PYTHONNOUSERSITE=1 PYTHONTRACEMALLOC=1 \
+              "$2/python" -B -m pytest \
+              tests/test_vk_miniapp_e2e.py \
+              tests/test_telegram_miniapp_e2e.py \
+              tests/test_manager_web_e2e.py \
+              -o addopts= -q -ra --tb=short -W error \
+              -o faulthandler_timeout=90 --durations=10 \
+              --junitxml=reports/browser/pytest.xml
+          ' _ "$(id -un)" "$PY_BIN_DIR" "$HOME" "$RUNNER_TEMP/browser-tmp" "$PWD" \
+            2>&1 | tee reports/browser/pytest.log
+          rcs=("${PIPESTATUS[@]}")
+          set -e
+          printf '%s\n' "${rcs[0]}" > reports/browser/test.exit-code
+          test "${rcs[1]}" -eq 0
+          exit "${rcs[0]}"
+      - name: Validate evidence and unchanged pinned source
+        if: always()
+        working-directory: snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --no-ext-diff --exit-code
+          git diff --no-ext-diff --cached --exit-code
+          python - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          report = Path('reports/browser')
+          xml = report / 'pytest.xml'
+          if not xml.is_file():
+              raise SystemExit('BROWSER GATE | INCOMPLETE: no JUnit report')
+          cases = list(ET.parse(xml).getroot().iter('testcase'))
+          counts = Counter(c.get('classname', '').split('.')[-1] for c in cases)
+          expected = {'test_vk_miniapp_e2e': 6, 'test_telegram_miniapp_e2e': 6, 'test_manager_web_e2e': 1}
+          failed = sum(c.find('failure') is not None for c in cases)
+          errors = sum(c.find('error') is not None for c in cases)
+          skipped = sum(c.find('skipped') is not None for c in cases)
+          summary = f'BROWSER JUNIT | {len(cases) - failed - errors - skipped} passed; {failed} failed; {errors} errors; {skipped} skipped'
+          print(summary)
+          (report / 'summary.txt').write_text(summary + '\n', encoding='utf-8')
+          rc = (report / 'test.exit-code').read_text().strip()
+          if counts != expected or failed or errors or skipped or rc != '0':
+              raise SystemExit('BROWSER GATE | FAILED_OR_INCOMPLETE: no warning or coverage waiver')
+          print('BROWSER GATE | PASS')
+          PY
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr238-browser-py314-${{ github.run_id }}-${{ github.run_attempt }}
+          path: snapshot/reports/browser/
+          if-no-files-found: error
+          retention-days: 14
