@@ -198,7 +198,7 @@ def download_edge(meta, destination):
 def apt_configuration(q):
     """A fresh APT state and source list; no host hooks, sources, caches or locks."""
     apt = q / "prep/apt"
-    for name in ("etc/parts", "etc/sources", "state/lists/partial", "cache/archives/partial", "log"):
+    for name in ("etc/parts", "etc/sources", "etc/preferences.d", "state/lists/partial", "cache/archives/partial", "log"):
         (apt / name).mkdir(parents=True, exist_ok=True)
     shutil.copyfile("/var/lib/dpkg/status", apt / "state/status")
     key = "/usr/share/keyrings/ubuntu-archive-keyring.gpg"
@@ -350,10 +350,9 @@ def evaluate_junit(root, pytest_rc):
 
 def test_worker(q, runtime):
     py, report = q / "venv/bin/python", runtime / "reports"
-    # Do not use socket.if_nameindex() or ip(8) here: both require AF_NETLINK.
-    # The run sandbox intentionally permits only AF_UNIX/AF_INET/AF_INET6.
-    # Read namespace-local sysfs/procfs instead, which verifies the same invariants
-    # without widening the allowed address-family surface.
+    # Verify the namespace from namespace-local sysfs/procfs. The browser may use
+    # AF_NETLINK for local interface discovery, but PrivateNetwork=yes remains the
+    # actual egress boundary: this namespace contains loopback only.
     netdir = Path("/sys/class/net")
     require(netdir.is_dir(), "Network namespace sysfs is unavailable")
     interfaces = {entry.name for entry in netdir.iterdir()}
@@ -456,7 +455,10 @@ def sandbox(q, stage, runtime=None):
     else:
         props["InaccessiblePaths"] = "/run"
         props["PrivateNetwork"] = "yes"
-        props["RestrictAddressFamilies"] = "AF_UNIX AF_INET AF_INET6"
+        # Chromium-family browsers use AF_NETLINK for local network/interface
+        # discovery. This does not create egress: PrivateNetwork=yes gives the unit
+        # a separate namespace containing loopback only, and the unit has no caps.
+        props["RestrictAddressFamilies"] = "AF_UNIX AF_INET AF_INET6 AF_NETLINK"
         props["BindReadOnlyPaths"] = f"{q} {q}/sysroot/opt/microsoft:/opt/microsoft"
         props["ReadWritePaths"] = str(runtime)
         env = clean_env(runtime / "home", runtime / "tmp", runtime / "cache",
