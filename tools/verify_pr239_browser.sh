@@ -414,7 +414,11 @@ def sandbox(q, stage, runtime=None):
              "ProtectProc": "invisible", "PrivateIPC": "yes", "ProtectHostname": "yes",
              "PrivateDevices": "yes", "NoNewPrivileges": "yes", "CapabilityBoundingSet": "",
              "ProtectKernelTunables": "yes", "ProtectKernelModules": "yes", "ProtectControlGroups": "yes",
-             "RestrictSUIDSGID": "yes", "RuntimeMaxSec": "25min" if stage == "prepare" else "15min",
+             # Do not set RestrictSUIDSGID here. On systemd 259 it blocks openat2(),
+             # which current GNU tar and potentially Chromium-family binaries use.
+             # The QA worker is still an unprivileged static user with
+             # NoNewPrivileges=yes and an empty CapabilityBoundingSet.
+             "RuntimeMaxSec": "25min" if stage == "prepare" else "15min",
              "TimeoutStopSec": "15s", "KillMode": "control-group", "CPUQuota": "50%",
              "MemoryMax": str(budget), "MemorySwapMax": "0", "TasksMax": "256", "UMask": "0077"}
     if stage == "prepare":
