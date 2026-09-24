@@ -1,5 +1,6 @@
 """Tests for the public Aprel Tour website lead endpoint."""
 
+import base64
 import hashlib
 import hmac
 import json
@@ -39,6 +40,28 @@ def _signed_manager_init_data(user_id, token="manager-test-token", first_name="M
     secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
     fields["hash"] = hmac.new(secret, check.encode(), hashlib.sha256).hexdigest()
     return urlencode(fields)
+
+
+def _signed_vk_manager_launch_params(
+    user_id,
+    *,
+    secret="vk-manager-secret",
+    app_id="123",
+    group_id=999,
+    timestamp=None,
+):
+    params = {
+        "vk_app_id": str(app_id),
+        "vk_group_id": str(group_id),
+        "vk_platform": "desktop_web",
+        "vk_ts": str(int(time.time()) if timestamp is None else int(timestamp)),
+        "vk_user_id": str(user_id),
+    }
+    signed = urlencode(sorted(params.items()))
+    params["sign"] = base64.urlsafe_b64encode(
+        hmac.new(secret.encode(), signed.encode(), hashlib.sha256).digest()
+    ).decode().rstrip("=")
+    return urlencode(params)
 
 
 def _payload(request_id="website-test-0001"):
@@ -955,6 +978,70 @@ def test_agent_extension_crm_accepts_allowlisted_telegram_manager(client, monkey
 
     assert response.status_code == 200
     assert response.get_json() == {"ok": True, "tasks": []}
+
+
+def test_agent_extension_crm_accepts_allowlisted_vk_manager(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_SECRET", "vk-manager-secret")
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_ID", "123")
+    monkeypatch.setattr(website_app, "_VK_GROUP_ID", 999)
+    monkeypatch.setattr(website_app, "_MANAGER_VK_IDS", {4242})
+
+    response = client.get(
+        "/agent-extension/crm/today",
+        headers={"X-VK-Launch-Params": _signed_vk_manager_launch_params(4242)},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {"ok": True, "tasks": []}
+
+
+def test_agent_extension_vk_manager_identity_uses_separate_namespace(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_SECRET", "vk-manager-secret")
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_ID", "123")
+    monkeypatch.setattr(website_app, "_VK_GROUP_ID", 999)
+    monkeypatch.setattr(website_app, "_MANAGER_VK_IDS", {4242})
+    monkeypatch.setattr(bot, "LEAD_OWNER_VK_ID", 99999)
+
+    with website_app.app.test_request_context(
+        "/agent-extension/crm/today",
+        headers={"X-VK-Launch-Params": _signed_vk_manager_launch_params(4242)},
+    ):
+        identity = website_app._agent_manager_identity()
+
+    assert identity == {"id": -4242, "name": "VK manager"}
+
+
+def test_agent_extension_crm_rejects_valid_non_manager_vk_identity(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_SECRET", "vk-manager-secret")
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_ID", "123")
+    monkeypatch.setattr(website_app, "_VK_GROUP_ID", 999)
+    monkeypatch.setattr(website_app, "_MANAGER_VK_IDS", {4242})
+
+    response = client.get(
+        "/agent-extension/crm/today",
+        headers={"X-VK-Launch-Params": _signed_vk_manager_launch_params(31337)},
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "manager_forbidden"
+
+
+def test_agent_extension_crm_rejects_tampered_vk_identity(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_SECRET", "vk-manager-secret")
+    monkeypatch.setattr(website_app, "_VK_MINI_APP_ID", "123")
+    monkeypatch.setattr(website_app, "_VK_GROUP_ID", 999)
+    monkeypatch.setattr(website_app, "_MANAGER_VK_IDS", {4242})
+    tampered = _signed_vk_manager_launch_params(4242).replace(
+        "vk_user_id=4242", "vk_user_id=31337"
+    )
+
+    response = client.get(
+        "/agent-extension/crm/today",
+        headers={"X-VK-Launch-Params": tampered},
+    )
+
+    assert response.status_code == 401
+    assert response.get_json()["error"] == "unauthorized"
 
 
 def test_agent_extension_crm_summary_is_aggregate_and_privacy_safe(client, monkeypatch):
