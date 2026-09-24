@@ -38,6 +38,43 @@ def _signed_launch_params():
     return urlencode(params)
 
 
+
+def _assert_zoom_and_default_contrast(page):
+    viewport = page.locator('meta[name="viewport"]').get_attribute("content") or ""
+    normalized = viewport.lower().replace(" ", "")
+    assert "user-scalable=no" not in normalized
+    assert "maximum-scale=1" not in normalized
+
+    ratios = page.evaluate(
+        """() => {
+          const rgb = (value) => {
+            const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (!match) throw new Error('unsupported color: ' + value);
+            return match.slice(1, 4).map(Number);
+          };
+          const luminance = (value) => {
+            const [r, g, b] = rgb(value).map((v) => {
+              const c = v / 255;
+              return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          };
+          const ratio = (fg, bg) => {
+            const a = luminance(fg);
+            const b = luminance(bg);
+            return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+          };
+          const body = getComputedStyle(document.body);
+          const welcome = getComputedStyle(document.querySelector('#welcome'));
+          return {
+            body: ratio(body.color, body.backgroundColor),
+            muted: ratio(welcome.color, body.backgroundColor)
+          };
+        }"""
+    )
+    assert ratios["body"] >= 4.5
+    assert ratios["muted"] >= 4.5
+
 def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator("#destination").fill(destination)
     page.locator("#departure").fill("Архангельск")
@@ -72,6 +109,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             context = browser.new_context(viewport={"width": width, "height": 760})
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded")
+            _assert_zoom_and_default_contrast(page)
 
             overflow = page.evaluate(
                 """() => [...document.querySelectorAll('body *')]
