@@ -22,6 +22,43 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
+
+def _assert_zoom_and_default_contrast(page):
+    viewport = page.locator('meta[name="viewport"]').get_attribute("content") or ""
+    normalized = viewport.lower().replace(" ", "")
+    assert "user-scalable=no" not in normalized
+    assert "maximum-scale=1" not in normalized
+
+    ratios = page.evaluate(
+        """() => {
+          const rgb = (value) => {
+            const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+            if (!match) throw new Error('unsupported color: ' + value);
+            return match.slice(1, 4).map(Number);
+          };
+          const luminance = (value) => {
+            const [r, g, b] = rgb(value).map((v) => {
+              const c = v / 255;
+              return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+          };
+          const ratio = (fg, bg) => {
+            const a = luminance(fg);
+            const b = luminance(bg);
+            return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+          };
+          const body = getComputedStyle(document.body);
+          const welcome = getComputedStyle(document.querySelector('#welcome'));
+          return {
+            body: ratio(body.color, body.backgroundColor),
+            muted: ratio(welcome.color, body.backgroundColor)
+          };
+        }"""
+    )
+    assert ratios["body"] >= 4.5
+    assert ratios["muted"] >= 4.5
+
 @pytest.mark.parametrize("width", [320, 390, 1280])
 @pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
 def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width, asset_dir):
@@ -83,6 +120,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
 
             page.route(API_URL, accept_submit)
             page.goto(url, wait_until="domcontentloaded")
+            _assert_zoom_and_default_contrast(page)
 
             # Narrow-mobile acceptance: the entire customer form must fit the
             # viewport without page-level horizontal scrolling.
