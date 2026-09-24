@@ -253,6 +253,11 @@ def reject_base_upgrades(plan):
 
 def provision(q):
     repo, report = q / "repo", q / "reports"
+    emit("PREPARE NETWORK", "external HTTPS enabled only for provisioning; host resolver required")
+    try:
+        socket.getaddrinfo("api.github.com", 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise Blocked(f"Preparation DNS unavailable: {exc}; no host changes") from exc
     remote = check_remote()
     dump(report / "remote-ci.json", remote)
     emit("REMOTE CI", "PASS: pinned source and workflows")
@@ -406,13 +411,18 @@ def sandbox(q, stage, runtime=None):
              "WorkingDirectory": str(q / ("repo" if stage == "run" else "prep")),
              "ProtectSystem": "strict", "ProtectHome": "yes",
              "TemporaryFileSystem": "/opt:ro /var/tmp:ro /tmp:rw,size=64M,nodev,nosuid",
-             "InaccessiblePaths": "/run", "ProtectProc": "invisible",
+             "ProtectProc": "invisible", "PrivateIPC": "yes", "ProtectHostname": "yes",
              "PrivateDevices": "yes", "NoNewPrivileges": "yes", "CapabilityBoundingSet": "",
              "ProtectKernelTunables": "yes", "ProtectKernelModules": "yes", "ProtectControlGroups": "yes",
              "RestrictSUIDSGID": "yes", "RuntimeMaxSec": "25min" if stage == "prepare" else "15min",
              "TimeoutStopSec": "15s", "KillMode": "control-group", "CPUQuota": "50%",
              "MemoryMax": str(budget), "MemorySwapMax": "0", "TasksMax": "256", "UMask": "0077"}
     if stage == "prepare":
+        # Preparation needs the host resolver (Ubuntu's /etc/resolv.conf normally
+        # points into /run/systemd/resolve). Keep sensitive runtime subtrees hidden,
+        # but do not hide all of /run or DNS fails before any download can start.
+        props["InaccessiblePaths"] = "-/run/credentials -/run/secrets -/run/user"
+        props["RestrictAddressFamilies"] = "AF_UNIX AF_INET AF_INET6"
         props["BindPaths"] = str(q)
         props["ReadWritePaths"] = " ".join(str(q / x) for x in
                                            ("prep", "repo", "venv", "sysroot", "home", "tmp", "cache", "reports"))
@@ -420,7 +430,9 @@ def sandbox(q, stage, runtime=None):
         log = q / "reports/prepare.log"
         args = ["_prepare", str(q)]
     else:
+        props["InaccessiblePaths"] = "/run"
         props["PrivateNetwork"] = "yes"
+        props["RestrictAddressFamilies"] = "AF_UNIX AF_INET AF_INET6"
         props["BindReadOnlyPaths"] = f"{q} {q}/sysroot/opt/microsoft:/opt/microsoft"
         props["ReadWritePaths"] = str(runtime)
         env = clean_env(runtime / "home", runtime / "tmp", runtime / "cache",
