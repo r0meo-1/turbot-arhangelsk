@@ -138,8 +138,13 @@ The website Flask app serves `/manager/`. This interface uses the existing CRM
 endpoints and database. It does not create a second customer store. Inside a
 Telegram Mini App it sends the short-lived, signed `Telegram.WebApp.initData`
 with every request; the server validates the HMAC and accepts only `ADMIN_ID`
-or a user listed in `MANAGER_TELEGRAM_IDS`. Manual Agent Desk bearer entry
-remains available as a fallback. The journal currently supports a privacy-safe
+or a user listed in `MANAGER_TELEGRAM_IDS`. When the same page is opened from
+VK with signed launch parameters, the browser forwards the untouched signed
+query as `X-VK-Launch-Params`; the server reuses the canonical VK Mini App
+HMAC/app/group/expiry validation and accepts only `LEAD_OWNER_VK_ID` or a user
+listed in `MANAGER_VK_IDS`. VK assignment IDs use a separate internal integer
+namespace so Telegram and VK numeric IDs cannot collide. Manual Agent Desk
+bearer entry remains available as a fallback. The journal currently supports a privacy-safe
 24-hour aggregate summary, the today/overdue queue, request history, adding a
 note, and scheduling a next task in the device's timezone. Dashboard SLA is
 explicitly system create-to-manager-delivery latency, not human response time.
@@ -162,8 +167,9 @@ This key has the existing shared Agent Desk privileges, not per-manager roles.
 
 ## Secure local-owner workflow
 
-`BOT_TOKEN`, `ADMIN_ID`, `MANAGER_TELEGRAM_IDS`, and
-`AGENT_EXTENSION_TOKEN` are server-only settings.
+`BOT_TOKEN`, `ADMIN_ID`, `MANAGER_TELEGRAM_IDS`, `MANAGER_VK_IDS`,
+`VK_MINI_APP_ID`, `VK_MINI_APP_SECRET`, and `AGENT_EXTENSION_TOKEN` are
+server-only settings.
 They must be supplied through the service environment or an owner-only `.env`
 file; none is embedded in `manager-web/`, sent to the browser, or stored in
 browser storage. `BOT_TOKEN` and `ADMIN_ID` enable `/agentdesk`; the optional
