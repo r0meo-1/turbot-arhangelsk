@@ -1,10 +1,10 @@
 import json
-import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+from e2e_support import isolated_browser, running_server
 
 playwright_sync = pytest.importorskip(
     "playwright.sync_api", reason="Telegram Mini App browser E2E runs in Edge Bot CI"
@@ -26,16 +26,13 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 @pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
 def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width, asset_dir):
     handler = partial(_QuietHandler, directory=str(asset_dir))
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     captured = []
 
-    try:
+    with running_server(ThreadingHTTPServer(("127.0.0.1", 0), handler)) as server:
         url = f"http://127.0.0.1:{server.server_port}/index.html"
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(channel="msedge", headless=True)
-            context = browser.new_context(viewport={"width": width, "height": 760})
+        with sync_playwright() as pw, isolated_browser(
+            pw, simulated_online=True, viewport={"width": width, "height": 760}
+        ) as context:
             context.add_init_script(
                 f"""
                 window.__tgClosed = false;
@@ -73,16 +70,27 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
             page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
 
             def accept_submit(route, request):
+                # Both preflight and API responses are synthetic, never forwarded.
+                headers = {
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS",
+                    "Access-Control-Allow-Headers": "Content-Type",
+                }
+                if request.method == "OPTIONS":
+                    route.fulfill(status=204, headers=headers)
+                    return
+                assert request.method == "POST"
                 captured.append(request.post_data_json)
                 route.fulfill(
                     status=200,
                     content_type="application/json",
                     body='{"ok":true}',
-                    headers={"Access-Control-Allow-Origin": "*"},
+                    headers=headers,
                 )
 
             page.route(API_URL, accept_submit)
             page.goto(url, wait_until="domcontentloaded")
+            assert page.evaluate("navigator.onLine") is True
 
             # Narrow-mobile acceptance: the entire customer form must fit the
             # viewport without page-level horizontal scrolling.
@@ -199,16 +207,15 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
             page.locator("#consent").check()
             page.locator("#submit").click()
             page.locator("#review").wait_for(state="visible")
-            page.locator("#save").click()
+            with page.expect_response(lambda r: r.request.method == "POST" and r.url == API_URL) as posted:
+                page.locator("#save").click()
+            assert posted.value.status == 200
             page.wait_for_function("window.__tgClosed === true")
-            browser.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
 
     assert len(captured) == 1
     request_body = captured[0]
     assert request_body["initData"] == INIT_DATA
+    assert isinstance(request_body["submissionId"], str) and request_body["submissionId"]
     payload = request_body["payload"]
     assert payload == {
         "type": "trip_request",
@@ -227,3 +234,51 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
         "source": "telegram_mini_app",
     }
     assert payload["date"]
+
+
+@pytest.mark.parametrize("scenario", ["offline", "transport_failure"])
+@pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
+def test_telegram_failed_save_never_closes_webview(scenario, asset_dir):
+    online = scenario == "transport_failure"
+    methods = []
+    handler = partial(_QuietHandler, directory=str(asset_dir))
+    with running_server(ThreadingHTTPServer(("127.0.0.1", 0), handler)) as server:
+        with sync_playwright() as pw, isolated_browser(pw, simulated_online=online) as context:
+            context.add_init_script("""
+window.__tgClosed = false;
+window.__saveFetchCalls = 0;
+const originalFetch = window.fetch;
+window.fetch = (...args) => { window.__saveFetchCalls++; return originalFetch(...args); };
+window.Telegram = {WebApp: {
+    initData: 'synthetic-offline-test', initDataUnsafe: {},
+    ready() {}, expand() {}, setHeaderColor() {}, setBackgroundColor() {},
+    close() { window.__tgClosed = true; }
+}};
+""")
+            page = context.new_page()
+            page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+
+            def reject_submit(route):
+                methods.append(route.request.method)
+                route.abort("failed")
+
+            page.route(API_URL, reject_submit)
+            page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
+            assert page.evaluate("navigator.onLine") is online
+            page.locator("#destination").fill("Таиланд")
+            page.locator("#departure").fill("Архангельск")
+            page.locator("#consent").check()
+            page.locator("#submit").click()
+            page.locator("#review").wait_for(state="visible")
+            page.locator("#save").click()
+            playwright_sync.expect(page.locator("#save")).to_be_enabled()
+            playwright_sync.expect(page.locator("#review")).to_have_attribute("aria-busy", "false")
+            if not online:
+                playwright_sync.expect(page.locator("#status")).to_have_text(
+                    "Нет подключения к интернету. Проверьте сеть и повторите."
+                )
+            else:
+                assert page.locator("#status").inner_text()
+            assert page.evaluate("window.__tgClosed") is False
+            assert page.evaluate("window.__saveFetchCalls") == int(online)
+            assert methods == (["POST"] if online else [])
