@@ -1,0 +1,117 @@
+name: PR238 instrumented save diagnostic
+
+on:
+  push:
+    branches: [ops/pr238-save-diagnostic-20260924]
+    paths:
+      - .github/workflows/pr238-save-diagnostic.yml
+      - qa_diagnostics/test_save_probe.py
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/ops/pr238-save-diagnostic-20260924'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: 5a9abe482f9e86fdd11b9ee13714a93f839dd606
+          path: snapshot
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Prepare pinned snapshot and CI-only dependencies
+        working-directory: snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = 5a9abe482f9e86fdd11b9ee13714a93f839dd606
+          test ! -e .env
+          mkdir -p "$GITHUB_WORKSPACE/evidence" "$RUNNER_TEMP/pr238-probe"
+          git rev-parse HEAD > "$GITHUB_WORKSPACE/evidence/tested-revision.txt"
+          python --version > "$GITHUB_WORKSPACE/evidence/python-version.txt"
+          python -m pip install -r requirements-dev.txt playwright
+          python -m playwright install --with-deps msedge
+          python -m pip freeze > "$GITHUB_WORKSPACE/evidence/dependencies.txt"
+      - name: Capture two save flows with native online state and loopback-only networking
+        working-directory: snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PY_BIN_DIR="$(dirname "$(command -v python)")"
+          set +e
+          sudo unshare --net -- /bin/bash -c '
+            set -Eeuo pipefail
+            ip link set lo up
+            test -z "$(ip route show default)"
+            test -z "$(ip -6 route show default)"
+            echo "BROWSER NETWORK | loopback-only namespace; native navigator.onLine"
+            exec runuser -u "$1" -- /usr/bin/env -i \
+              PATH="$2:/usr/local/bin:/usr/bin:/bin" \
+              LD_LIBRARY_PATH="$2/../lib" HOME="$3" TMPDIR="$4" \
+              TZ=UTC LC_ALL=C.UTF-8 PYTHONPATH="$5/snapshot" \
+              PR238_SNAPSHOT="$5/snapshot" PR238_REPORTS="$5/evidence" \
+              PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 \
+              PYTHONNOUSERSITE=1 PYTHONTRACEMALLOC=1 \
+              "$2/python" -B -m pytest "$5/harness/qa_diagnostics/test_save_probe.py" \
+              -c /dev/null --rootdir="$5/harness/qa_diagnostics" \
+              -o addopts= -vv -ra --tb=long --show-capture=no \
+              -W error --max-warnings=0 -o faulthandler_timeout=60 \
+              -o "cache_dir=$4/pytest-cache" --basetemp="$4/pytest" \
+              --junitxml="$5/evidence/pytest.xml"
+          ' _ "$(id -un)" "$PY_BIN_DIR" "$HOME" "$RUNNER_TEMP/pr238-probe" "$GITHUB_WORKSPACE" \
+            2>&1 | tee "$GITHUB_WORKSPACE/evidence/pytest.log"
+          rcs=("${PIPESTATUS[@]}")
+          set -e
+          printf '%s\n' "${rcs[0]}" > "$GITHUB_WORKSPACE/evidence/test.exit-code"
+          test "${rcs[1]}" -eq 0
+          exit "${rcs[0]}"
+      - name: Validate diagnostic evidence and unchanged application source
+        if: always()
+        working-directory: snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --no-ext-diff --exit-code
+          git diff --no-ext-diff --cached --exit-code
+          test -z "$(git ls-files --others --exclude-standard)"
+          echo "PINNED SOURCE | UNCHANGED"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          reports = Path(os.environ['GITHUB_WORKSPACE']) / 'evidence'
+          rows = []
+          for name in ('vk', 'telegram'):
+              data = json.loads((reports / (name + '.json')).read_text())
+              assert data['channel'] == name
+              assert data['navigator_overridden'] is False
+              assert [s['phase'] for s in data['states']] == ['before_save', 'after_save']
+              assert all(data['cleanup'].get(k) is True for k in (
+                  'server_socket_closed', 'server_thread_stopped', 'browser_context_closed', 'browser_closed'))
+              before, after = data['states']
+              rows.append({
+                  'channel': name, 'online': before['online'], 'status_after': after['status_text'],
+                  'fetch_calls': len(data['fetch_calls']), 'fixture_deliveries': data['fixture_deliveries'],
+                  'flow_result': data['flow_result'], 'offline_guard_evidence': data['offline_guard_evidence'],
+                  'cleanup': data['cleanup'],
+              })
+          summary = {'diagnostic_evidence': 'COMPLETE', 'application_release_gate': 'NOT_EVALUATED', 'cases': rows}
+          (reports / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2) + '\n')
+          print(json.dumps(summary, ensure_ascii=False))
+          PY
+      - name: Preserve sanitized evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: pr238-save-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 14
