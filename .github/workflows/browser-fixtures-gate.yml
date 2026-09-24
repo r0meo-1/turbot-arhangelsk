@@ -1,0 +1,137 @@
+name: Browser fixture isolation gate
+
+on:
+  pull_request:
+    paths:
+      - tests/e2e_support.py
+      - tests/test_e2e_resources.py
+      - tests/test_vk_miniapp_e2e.py
+      - tests/test_telegram_miniapp_e2e.py
+      - tests/test_manager_web_e2e.py
+      - .github/workflows/browser-fixtures-gate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - name: Verify test-only scope and preserve all original assertions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p reports/browser
+          git rev-parse HEAD > reports/browser/tested-revision.txt
+          python - <<'PY'
+          import ast, json, subprocess
+          from collections import Counter
+          from pathlib import Path
+          base = '3e3281fe2d9fe368547b95c9e8ec34c8db9a8be1'
+          modules = ['tests/test_vk_miniapp_e2e.py', 'tests/test_telegram_miniapp_e2e.py', 'tests/test_manager_web_e2e.py']
+          allowed = set(modules) | {'tests/e2e_support.py', 'tests/test_e2e_resources.py', '.github/workflows/browser-fixtures-gate.yml'}
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only', base, 'HEAD'], text=True).splitlines())
+          assert changed <= allowed, 'Unexpected application/source changes'
+          audit = {}
+          for name in modules:
+              old = ast.parse(subprocess.check_output(['git', 'show', base + ':' + name], text=True))
+              new = ast.parse(Path(name).read_text())
+              functions = {n.name: n for n in new.body if isinstance(n, ast.FunctionDef)}
+              for node in old.body:
+                  if not isinstance(node, ast.FunctionDef) or not node.name.startswith('test_'):
+                      continue
+                  replacement = functions[node.name]
+                  before = Counter(ast.dump(n) for n in ast.walk(node) if isinstance(n, ast.Assert))
+                  after = Counter(ast.dump(n) for n in ast.walk(replacement) if isinstance(n, ast.Assert))
+                  assert not before - after, 'Original assertion removed or weakened: ' + node.name
+                  assert [ast.dump(n) for n in node.decorator_list] == [ast.dump(n) for n in replacement.decorator_list]
+                  audit[node.name] = sum(before.values())
+          Path('reports/browser/original-assertions.json').write_text(json.dumps(audit, indent=2))
+          print('ORIGINAL ASSERTIONS | PRESERVED; application code unchanged from PR238')
+          PY
+      - name: Install CI-only dependencies and browser
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test ! -e .env
+          mkdir -p "$RUNNER_TEMP/browser-fixtures-tmp"
+          python --version | tee reports/browser/python-version.txt
+          python -m pip install -r requirements-dev.txt playwright
+          python -m playwright install --with-deps msedge
+          python -m pip freeze > reports/browser/dependencies.txt
+      - name: Run browser and ownership cases without external networking
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PY_BIN_DIR="$(dirname "$(command -v python)")"
+          set +e
+          sudo unshare --net -- /bin/bash -c '
+            set -Eeuo pipefail
+            ip link set lo up
+            test -z "$(ip route show default)"
+            echo "BROWSER NETWORK | loopback-only namespace"
+            echo "ONLINE STATE | explicitly simulated test input, not external connectivity"
+            exec runuser -u "$1" -- /usr/bin/env -i \
+              PATH="$2:/usr/local/bin:/usr/bin:/bin" \
+              LD_LIBRARY_PATH="$2/../lib" HOME="$3" TMPDIR="$4" \
+              TZ=UTC LC_ALL=C.UTF-8 PYTHONPATH="$5" \
+              PYTHON_DOTENV_DISABLED=1 PYTHONDONTWRITEBYTECODE=1 \
+              PYTHONNOUSERSITE=1 PYTHONTRACEMALLOC=1 \
+              "$2/python" -B -m pytest \
+              tests/test_e2e_resources.py \
+              tests/test_vk_miniapp_e2e.py \
+              tests/test_telegram_miniapp_e2e.py \
+              tests/test_manager_web_e2e.py \
+              -o addopts= -q -ra --tb=short -W error --max-warnings=0 \
+              -o faulthandler_timeout=90 --durations=10 \
+              --junitxml=reports/browser/pytest.xml
+          ' _ "$(id -un)" "$PY_BIN_DIR" "$HOME" "$RUNNER_TEMP/browser-fixtures-tmp" "$PWD" \
+            2>&1 | tee reports/browser/pytest.log
+          rcs=("${PIPESTATUS[@]}")
+          set -e
+          printf '%s\n' "${rcs[0]}" > reports/browser/test.exit-code
+          test "${rcs[1]}" -eq 0
+          exit "${rcs[0]}"
+      - name: Validate coverage and unchanged source
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git diff --no-ext-diff --exit-code
+          git diff --no-ext-diff --cached --exit-code
+          python - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import json
+          import xml.etree.ElementTree as ET
+          report = Path('reports/browser')
+          cases = list(ET.parse(report / 'pytest.xml').getroot().iter('testcase'))
+          counts = Counter(c.get('classname', '').split('.')[-1] for c in cases)
+          expected = {'test_e2e_resources': 5, 'test_vk_miniapp_e2e': 8, 'test_telegram_miniapp_e2e': 10, 'test_manager_web_e2e': 1}
+          failures = sum(c.find('failure') is not None for c in cases)
+          errors = sum(c.find('error') is not None for c in cases)
+          skipped = sum(c.find('skipped') is not None for c in cases)
+          rc = (report / 'test.exit-code').read_text().strip()
+          result = {'passed': len(cases) - failures - errors - skipped, 'failed': failures, 'errors': errors, 'skipped': skipped, 'modules': dict(counts), 'test_exit_code': rc, 'original_browser_cases': 13, 'new_failure_path_cases': 6, 'resource_ownership_cases': 5}
+          (report / 'summary.json').write_text(json.dumps(result, indent=2))
+          print('BROWSER AND RESOURCE JUNIT |', json.dumps(result, sort_keys=True))
+          if counts != expected or failures or errors or skipped or rc != '0':
+              raise SystemExit('BROWSER FIXTURE GATE | FAILED_OR_INCOMPLETE')
+          print('BROWSER FIXTURE GATE | PASS; no release or VPS promotion')
+          PY
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: browser-fixtures-${{ github.sha }}-${{ github.run_attempt }}
+          path: reports/browser/
+          if-no-files-found: error
+          retention-days: 14
