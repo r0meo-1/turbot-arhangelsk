@@ -1,13 +1,14 @@
 import base64
 import hashlib
 import hmac
-import threading
 import time
 from urllib.parse import urlencode
 
 import pytest
 from flask import Flask
 from werkzeug.serving import make_server
+
+from e2e_support import QuietRequestHandler, isolated_browser, running_server
 
 playwright_sync = pytest.importorskip("playwright.sync_api", reason="VK Mini App browser E2E runs in Edge Bot CI")
 sync_playwright = playwright_sync.sync_playwright
@@ -45,7 +46,10 @@ def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator("#terms-accepted").check()
     page.locator("#submit").click()
     page.locator("#review").wait_for(state="visible")
-    page.locator("#save").click()
+    with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/vk/miniapp/draft")) as posted:
+        page.locator("#save").click()
+    assert posted.value.status == 200
+    assert posted.value.json()["ok"] is True
     page.locator("#chat").wait_for(state="visible")
 
 
@@ -61,17 +65,14 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
         create_blueprint(save_draft, lambda: (SECRET, APP_ID, GROUP_ID))
     )
 
-    server = make_server("127.0.0.1", 0, app)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-
-    try:
+    with running_server(make_server("127.0.0.1", 0, app, request_handler=QuietRequestHandler)) as server:
         url = f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}"
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(channel="msedge", headless=True)
-            context = browser.new_context(viewport={"width": width, "height": 760})
+        with sync_playwright() as pw, isolated_browser(
+            pw, simulated_online=True, viewport={"width": width, "height": 760}
+        ) as context:
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded")
+            assert page.evaluate("navigator.onLine") is True
 
             overflow = page.evaluate(
                 """() => [...document.querySelectorAll('body *')]
@@ -185,9 +186,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             )
             assert copy_calls == []
 
-            # app_payload is the preferred automatic handoff. If that Bridge
-            # command is unavailable on a client, the already-saved draft must
-            # stay successful and fall back to copying the review command.
+            # A rejected Bridge handoff must leave the saved draft successful.
             fallback_page = context.new_page()
             fallback_page.goto(url, wait_until="domcontentloaded")
             fallback_page.evaluate(
@@ -223,10 +222,6 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
                 "payload": REVIEW_PAYLOAD,
             }
             assert fallback_calls[1]["params"] == {"text": REVIEW_COMMAND}
-            browser.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
 
     assert len(saved) == 2
     uid, info = saved[0]
@@ -235,6 +230,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
     assert info["origin"] == "Архангельск"
     assert info["source"] == "vk_mini_app"
     assert info["budget_scope"] == "total"
+
 
 @pytest.mark.parametrize('bridge_result', ['pending', 'rejected', 'delayed'])
 def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
@@ -247,13 +243,9 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
         lambda uid, info: saved.append((uid, info)),
         lambda: (SECRET, APP_ID, GROUP_ID),
     ))
-    server = make_server('127.0.0.1', 0, app)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(channel='msedge', headless=True)
-            page = browser.new_page()
+    with running_server(make_server('127.0.0.1', 0, app, request_handler=QuietRequestHandler)) as server:
+        with sync_playwright() as pw, isolated_browser(pw, simulated_online=True) as context:
+            page = context.new_page()
             page.route('**/vk-bridge.js', lambda route: route.fulfill(
                 content_type='application/javascript',
                 body='''window.vkBridge = {send(method) {
@@ -287,10 +279,54 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
             elif bridge_result == 'delayed':
                 page.evaluate('(params) => window.resolveLaunch(params)', dict(parse_qsl(_signed_launch_params())))
                 page.wait_for_function("!document.getElementById('save').disabled")
-                page.locator('#save').click()
+                with page.expect_response(lambda r: r.request.method == "POST" and r.url.endswith("/vk/miniapp/draft")) as posted:
+                    page.locator('#save').click()
+                assert posted.value.status == 200
                 page.locator('#chat').wait_for(state='visible')
                 assert len(saved) == 1
-            browser.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("scenario", ["offline", "transport_failure"])
+def test_vk_failed_save_never_claims_success(scenario):
+    """The online fixture must not make an unavailable backend look successful."""
+    saved, post_methods = [], []
+    online = scenario == "transport_failure"
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(
+        lambda uid, info: saved.append((uid, info)), lambda: (SECRET, APP_ID, GROUP_ID)
+    ))
+    with running_server(make_server("127.0.0.1", 0, app, request_handler=QuietRequestHandler)) as server:
+        with sync_playwright() as pw, isolated_browser(pw, simulated_online=online) as context:
+            context.add_init_script("""window.__saveFetchCalls = 0;
+const originalFetch = window.fetch;
+window.fetch = (...args) => { window.__saveFetchCalls++; return originalFetch(...args); };
+""")
+            page = context.new_page()
+
+            def reject_save(route):
+                post_methods.append(route.request.method)
+                route.abort("failed")
+
+            page.route("**/vk/miniapp/draft", reject_save)
+            page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
+            assert page.evaluate("navigator.onLine") is online
+            page.locator("#destination").fill("Таиланд")
+            page.locator("#departure").fill("Архангельск")
+            page.locator("#consent").check()
+            page.locator("#terms-accepted").check()
+            page.locator("#submit").click()
+            page.locator("#review").wait_for(state="visible")
+            page.locator("#save").click()
+            playwright_sync.expect(page.locator("#save")).to_be_enabled()
+            playwright_sync.expect(page.locator("#review")).to_have_attribute("aria-busy", "false")
+            if not online:
+                playwright_sync.expect(page.locator("#status")).to_have_text(
+                    "Нет подключения к интернету. Проверьте сеть и повторите."
+                )
+            else:
+                assert page.locator("#status").inner_text()
+            assert page.locator("#chat").is_hidden()
+            assert page.locator("#save").is_visible()
+            assert saved == []
+            assert page.evaluate("window.__saveFetchCalls") == int(online)
+            assert post_methods == (["POST"] if online else [])
