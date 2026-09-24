@@ -34,6 +34,7 @@ from shared import mdt as mdt_shared
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import travel_crm_store as _travel_crm_store
 from shared.telegram_webapp import MiniAppValidationError, validate_init_data
+from shared.vk_miniapp import validate_launch_params as validate_vk_launch_params
 from shared.runtime_metrics import lead_delivery_snapshot
 from shared.travel_crm import (
     Activity,
@@ -79,6 +80,18 @@ _MANAGER_TELEGRAM_IDS = set(
 )
 if _bot.ADMIN_ID:
     _MANAGER_TELEGRAM_IDS.add(_bot.ADMIN_ID)
+
+_MANAGER_VK_IDS = set(
+    _bot._parse_chat_ids(
+        os.getenv("MANAGER_VK_IDS", ""),
+        env_name="MANAGER_VK_IDS",
+    )
+)
+if _bot.LEAD_OWNER_VK_ID:
+    _MANAGER_VK_IDS.add(int(_bot.LEAD_OWNER_VK_ID))
+_VK_MINI_APP_ID = os.getenv("VK_MINI_APP_ID", "").strip()
+_VK_MINI_APP_SECRET = os.getenv("VK_MINI_APP_SECRET", "").strip()
+_VK_GROUP_ID = _bot._env_int("VK_GROUP_ID", 0)
 
 _rate_lock = threading.Lock()
 _rate_hits: Dict[str, List[float]] = {}
@@ -240,7 +253,7 @@ def _agent_json_response(body: Dict[str, Any], status: int = 200) -> Response:
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = (
-            "Content-Type, Authorization, X-Telegram-Init-Data"
+            "Content-Type, Authorization, X-Telegram-Init-Data, X-VK-Launch-Params"
         )
         response.headers["Access-Control-Max-Age"] = "600"
     response.headers["Cache-Control"] = "no-store"
@@ -283,6 +296,23 @@ def _telegram_manager_authorization_error() -> str:
     return "" if int(user["id"]) in _MANAGER_TELEGRAM_IDS else "forbidden"
 
 
+def _vk_manager_authorization_error() -> str:
+    """Validate signed VK launch params and enforce the VK manager allowlist."""
+    raw = request.headers.get("X-VK-Launch-Params", "")
+    if not raw:
+        return "missing"
+    try:
+        manager_id = validate_vk_launch_params(
+            raw,
+            _VK_MINI_APP_SECRET,
+            _VK_MINI_APP_ID,
+            _VK_GROUP_ID,
+        )
+    except MiniAppValidationError:
+        return "invalid"
+    return "" if int(manager_id) in _MANAGER_VK_IDS else "forbidden"
+
+
 def _agent_manager_identity() -> Optional[Dict[str, Any]]:
     """Return the authenticated manager identity without trusting browser fields."""
     if _agent_extension_authorized():
@@ -294,20 +324,44 @@ def _agent_manager_identity() -> Optional[Dict[str, Any]]:
         }
 
     init_data = request.headers.get("X-Telegram-Init-Data", "")
-    if not init_data:
+    if init_data:
+        try:
+            user = validate_init_data(init_data, _bot.BOT_TOKEN, max_age=3600)
+        except MiniAppValidationError:
+            return None
+        manager_id = int(user["id"])
+        if manager_id not in _MANAGER_TELEGRAM_IDS:
+            return None
+        parts = [str(user.get(key) or "").strip() for key in ("first_name", "last_name")]
+        name = " ".join(part for part in parts if part)
+        if not name:
+            name = str(user.get("username") or "Telegram manager").strip()
+        return {"id": manager_id, "name": _safe_text(name, 120)}
+
+    raw_vk = request.headers.get("X-VK-Launch-Params", "")
+    if not raw_vk:
         return None
     try:
-        user = validate_init_data(init_data, _bot.BOT_TOKEN, max_age=3600)
+        vk_manager_id = int(validate_vk_launch_params(
+            raw_vk,
+            _VK_MINI_APP_SECRET,
+            _VK_MINI_APP_ID,
+            _VK_GROUP_ID,
+        ))
     except MiniAppValidationError:
         return None
-    manager_id = int(user["id"])
-    if manager_id not in _MANAGER_TELEGRAM_IDS:
+    if vk_manager_id not in _MANAGER_VK_IDS:
         return None
-    parts = [str(user.get(key) or "").strip() for key in ("first_name", "last_name")]
-    name = " ".join(part for part in parts if part)
-    if not name:
-        name = str(user.get("username") or "Telegram manager").strip()
-    return {"id": manager_id, "name": _safe_text(name, 120)}
+
+    # CRM assignment IDs are integers. Keep VK identities in a negative
+    # namespace so an equal Telegram/VK numeric ID cannot claim the same owner.
+    assignment_id = -vk_manager_id
+    name = (
+        _bot.LEAD_OWNER_NAME
+        if vk_manager_id == int(_bot.LEAD_OWNER_VK_ID or 0)
+        else "VK manager"
+    )
+    return {"id": assignment_id, "name": _safe_text(name, 120)}
 
 
 def _json_response(body: Dict[str, Any], status: int = 200) -> Response:
@@ -1044,14 +1098,30 @@ def _agent_crm_guard() -> Response | None:
     if _agent_extension_authorized():
         return None
 
-    telegram_error = _telegram_manager_authorization_error()
-    if telegram_error == "":
-        return None
-    if telegram_error == "forbidden":
-        return _agent_json_response(
-            {"ok": False, "error": "manager_forbidden"}, 403
-        )
-    if not _AGENT_EXTENSION_TOKEN and not _bot.BOT_TOKEN:
+    if request.headers.get("X-Telegram-Init-Data", ""):
+        telegram_error = _telegram_manager_authorization_error()
+        if telegram_error == "":
+            return None
+        if telegram_error == "forbidden":
+            return _agent_json_response(
+                {"ok": False, "error": "manager_forbidden"}, 403
+            )
+        return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+
+    if request.headers.get("X-VK-Launch-Params", ""):
+        vk_error = _vk_manager_authorization_error()
+        if vk_error == "":
+            return None
+        if vk_error == "forbidden":
+            return _agent_json_response(
+                {"ok": False, "error": "manager_forbidden"}, 403
+            )
+        return _agent_json_response({"ok": False, "error": "unauthorized"}, 401)
+
+    vk_auth_configured = bool(
+        _VK_MINI_APP_SECRET and _VK_MINI_APP_ID and _VK_GROUP_ID and _MANAGER_VK_IDS
+    )
+    if not _AGENT_EXTENSION_TOKEN and not _bot.BOT_TOKEN and not vk_auth_configured:
         return _agent_json_response(
             {"ok": False, "error": "agent_extension_disabled"}, 503
         )

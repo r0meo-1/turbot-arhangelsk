@@ -5,6 +5,11 @@ let token = '', generation = 0, detailGeneration = 0;
 let demoMode = false;
 const telegram = window.Telegram?.WebApp;
 const telegramInitData = telegram?.initData || '';
+const rawLaunchParams = window.location.search.replace(/^\?/, '');
+const launchParams = new URLSearchParams(rawLaunchParams);
+const vkLaunchParams = launchParams.has('sign') && launchParams.has('vk_app_id') && launchParams.has('vk_user_id')
+  ? rawLaunchParams
+  : '';
 const taskNames = {build_selection:'Подбор',send_options:'Отправить варианты',call_back:'Позвонить',flights:'Авиабилеты',visa:'Виза',documents:'Документы',check_price:'Проверить цену',next_contact:'Следующий контакт'};
 function say(message){$('status').textContent=message;}
 function clearData(){activeRequestId='';for(const id of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(id).value='';for(const id of ['analytics','tasks','assignment','summary','replyTemplate','quotes','activities'])$(id).replaceChildren();$('detail').hidden=true;}
@@ -12,9 +17,13 @@ function logout(){$('refresh').disabled=false;generation++;detailGeneration++;to
 function showDemo(){demoMode=true;generation++;detailGeneration++;clearData();$('login').hidden=true;$('desk').hidden=false;$('refresh').textContent='Обновить пример';$('logout').textContent='Закрыть пример';$('status').textContent='Демо-режим: синтетические данные, CRM не подключена.';renderDemo();}
 function renderDemo(){const fixture=window.MANAGER_DEMO_FIXTURE;renderAnalytics({newLeads:1,channels:[{channel:'demo',count:1}],delivery:{managerNotified:1,pending:0,p95Seconds:12}});const task=fixture.task;const item=document.createElement('article');paragraph(item,[taskNames[task.type]||task.type,task.destination,task.origin,task.dates,task.note,task.budget].filter(Boolean).join(' · '));const button=document.createElement('button');button.textContent='Открыть карточку';button.addEventListener('click',()=>{activeRequestId='demo';$('detail').hidden=false;for(const id of ['summary','replyTemplate','quotes','activities'])$(id).replaceChildren();paragraph($('summary'),fixture.summary);renderReplyTemplate('Здравствуйте! Вижу вашу тестовую заявку. Уже смотрю варианты.');paragraph($('quotes'),fixture.quote);paragraph($('activities'),fixture.activity);});item.append(button);$('tasks').append(item);}
 async function api(path,body){
- const authHeaders=telegramInitData?{'X-Telegram-Init-Data':telegramInitData}:{Authorization:'Bearer '+token};
+ const authHeaders=telegramInitData
+  ? {'X-Telegram-Init-Data':telegramInitData}
+  : vkLaunchParams
+    ? {'X-VK-Launch-Params':vkLaunchParams}
+    : {Authorization:'Bearer '+token};
  const response=await fetch('/agent-extension/crm/'+path,{method:body?'POST':'GET',body:body?JSON.stringify(body):undefined,headers:{...authHeaders,...(body?{'Content-Type':'application/json'}:{})},cache:'no-store',credentials:'omit'});
- if(response.status===401)throw Error('Ключ доступа не принят. Выйдите и проверьте ключ.');
+ if(response.status===401)throw Error('Подписанный доступ или ключ не принят. Откройте менеджерский интерфейс заново.');
  if(response.status===403)throw Error('Действие недоступно: проверьте роль менеджера и текущее назначение.');
  if(response.status===409){const conflict=await response.json();if(conflict.error==='assignment_changed')throw Error('Назначение уже изменилось. Обновите карточку.');throw Error('Заявка уже назначена: '+(conflict.assignment?.name||'другому менеджеру')+'.');}
  if(!response.ok)throw Error('Не удалось загрузить данные. Повторите попытку.');
@@ -107,5 +116,8 @@ $('saveQuote').addEventListener('click',()=>{
 if(telegramInitData){
  telegram.ready();telegram.expand();
  $('loginHint').textContent='Проверяем подписанный доступ менеджера через Telegram…';
+ refresh();
+}else if(vkLaunchParams){
+ $('loginHint').textContent='Проверяем подписанный доступ менеджера через VK…';
  refresh();
 }

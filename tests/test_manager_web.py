@@ -47,6 +47,9 @@ def test_client_uses_signed_telegram_header_without_persisting_it():
     app.register_blueprint(manager_web)
     body = app.test_client().get("/manager/app.js").data
     assert b"X-Telegram-Init-Data" in body
+    assert b"X-VK-Launch-Params" in body
+    assert b"vk_app_id" in body
+    assert b"vk_user_id" in body
     assert b"localStorage" not in body
     assert b"sessionStorage" not in body
     assert b"api('summary')" in body
