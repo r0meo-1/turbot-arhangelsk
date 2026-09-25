@@ -524,7 +524,10 @@ http_session = _create_http_session()
 # ---------------------------------------------------------------------------
 
 _db_lock = threading.Lock()
-_lock = threading.Lock()
+# Runtime wrappers may re-enter state helpers while the outer request already
+# owns the state lock (for example Mini App draft save -> wrapped set_session).
+# RLock preserves cross-thread exclusion while preventing same-thread deadlocks.
+_lock = threading.RLock()
 
 user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}

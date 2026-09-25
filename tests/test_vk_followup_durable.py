@@ -148,6 +148,12 @@ def test_reset_claim_allows_exactly_one_reminder_for_new_dialog(tmp_path):
     assert bot.sent == [101, 101]
 
 
+def test_production_vk_state_lock_is_reentrant_for_runtime_session_hooks():
+    source = (ROOT / "vk_bot.py").read_text(encoding="utf-8")
+
+    assert "_lock = threading.RLock()" in source
+
+
 def test_production_entrypoints_use_guarded_vk_runtime():
     unit = (ROOT / "deploy" / "vk-turbot.service").read_text(encoding="utf-8")
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
