@@ -148,6 +148,26 @@ def test_reset_claim_allows_exactly_one_reminder_for_new_dialog(tmp_path):
     assert bot.sent == [101, 101]
 
 
+def test_install_preserves_campaign_source_tag_on_wrapped_start(tmp_path):
+    bot = FakeBot(tmp_path / "vk.sqlite")
+    _create_sessions(bot)
+    calls = []
+
+    def original_start(user_id: int, first_name: str = "", source_tag: str = ""):
+        calls.append((user_id, first_name, source_tag))
+
+    bot.handle_start = original_start
+    bot.get_session = lambda chat_id: None
+    bot.set_session = lambda chat_id, data: None
+    bot.delete_session = lambda chat_id: None
+    bot.delete_user_data = lambda chat_id: None
+
+    vk_followup.install(bot)
+    bot.handle_start(101, "Roma", source_tag="vk_post_pain")
+
+    assert calls == [(101, "Roma", "vk_post_pain")]
+
+
 def test_production_vk_state_lock_is_reentrant_for_runtime_session_hooks():
     source = (ROOT / "vk_bot.py").read_text(encoding="utf-8")
 
