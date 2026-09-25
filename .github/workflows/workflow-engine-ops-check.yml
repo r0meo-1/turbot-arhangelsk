@@ -1,0 +1,26 @@
+name: workflow-engine-ops-check
+
+on:
+  pull_request:
+    paths:
+      - "tools/workflow-engine/**"
+      - ".github/workflows/workflow-engine-ops-check.yml"
+  push:
+    branches:
+      - workflow-engine-ops
+    paths:
+      - "tools/workflow-engine/**"
+      - ".github/workflows/workflow-engine-ops-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  shell-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check shell syntax
+        run: |
+          bash -n tools/workflow-engine/configure_linear.sh
+          bash -n tools/workflow-engine/verify.sh
