@@ -65,7 +65,24 @@ except urllib.error.HTTPError as exc:
     except Exception:
         detail = ""
 
-    if exc.code == 403:
+    if (
+        exc.code == 403
+        and (
+            "RESTRICTED_COUNTRY_BLOCKED" in detail
+            or "not available in Russia" in detail
+        )
+    ):
+        print(
+            "LINEAR PROBE BLOCKED: Linear rejected this server region "
+            "(countryCode=RU / RESTRICTED_COUNTRY_BLOCKED).",
+            file=sys.stderr,
+        )
+        print(
+            "This is not an API-key permission failure. Keep LINEAR_MODE=dry_run "
+            "on this host and run live delivery only from a Linear-supported region.",
+            file=sys.stderr,
+        )
+    elif exc.code == 403:
         print(
             "LINEAR PROBE FAIL: HTTP 403 Forbidden. "
             "The key is not allowed to read the selected team.",
