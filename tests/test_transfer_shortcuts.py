@@ -86,6 +86,16 @@ def test_telegram_miniapp_keeps_authenticated_backend_crm_handoff():
     assert "tg.initData" in TG_APP_JS
 
 
+def test_telegram_partner_failure_has_explicit_agency_recovery():
+    assert 'id="partner-status"' in TG_INDEX
+    assert "role=\"status\"" in TG_INDEX
+    assert "partner_recovery" in TG_INDEX
+    assert "agencyRecoveryUrl" in TG_INDEX
+    assert "resolved.mode === 'direct'" in TG_INDEX
+    assert "Партнёрский сервис сейчас недоступен" in TG_INDEX
+    assert "Продолжите подбор через «АПРЕЛЬ тур»" in TG_INDEX
+
+
 def test_published_telegram_copy_matches_service_shortcuts():
     assert TG_PUBLISHED_INDEX == TG_INDEX
 
