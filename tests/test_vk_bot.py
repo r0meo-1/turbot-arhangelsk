@@ -480,6 +480,32 @@ def test_vk_miniapp_preserves_durable_campaign_source_after_cache_loss():
     assert row[0] == "vk_post_pain"
 
 
+def test_vk_session_source_tag_cannot_be_erased_by_null_update():
+    user_id = 492
+
+    bot.set_session(
+        user_id,
+        {
+            "state": bot.STATE_DESTINATION,
+            "source_tag": "vk_post_pain",
+            "updated_at": int(time.time()),
+        },
+    )
+
+    bot.set_session(
+        user_id,
+        {
+            "state": bot.STATE_REVIEW,
+            "source_tag": None,
+            "updated_at": int(time.time()) + 1,
+        },
+    )
+
+    saved = bot.get_session(user_id)
+    assert saved["state"] == bot.STATE_REVIEW
+    assert saved["source_tag"] == "vk_post_pain"
+
+
 def test_vk_manager_notification_includes_campaign_source(monkeypatch):
     sent = []
 
