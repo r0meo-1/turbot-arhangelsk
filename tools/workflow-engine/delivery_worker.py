@@ -70,6 +70,12 @@ class LinearError(RuntimeError):
     pass
 
 
+class LinearRegionBlocked(LinearError):
+    """Permanent region restriction reported by Linear."""
+
+    pass
+
+
 def _linear_request_sync(
     query: str,
     variables: dict,
@@ -129,6 +135,18 @@ def _linear_request_sync(
                     )
                 except Exception:
                     detail = ""
+
+                if (
+                    exc.code == 403
+                    and (
+                        "RESTRICTED_COUNTRY_BLOCKED" in detail
+                        or "not available in Russia" in detail
+                    )
+                ):
+                    raise LinearRegionBlocked(
+                        "Linear API blocked this execution region "
+                        "(RESTRICTED_COUNTRY_BLOCKED, countryCode=RU)"
+                    ) from exc
 
                 raise LinearError(
                     f"Linear HTTP {exc.code}: {detail[:500]}"
@@ -626,6 +644,25 @@ async def sync_linear_live(
             )
 
             await db.commit()
+
+        except LinearRegionBlocked as exc:
+            await _mark_delivery(
+                db,
+                event_id=event_id,
+                status="blocked_region",
+                version=version,
+                error=str(exc)[:1000],
+                increment_attempt=False,
+            )
+
+            await db.commit()
+
+            log.error(
+                "linear delivery blocked by region event=%s task=%s: %s",
+                event_id,
+                task_id,
+                exc,
+            )
 
         except Exception as exc:
             await _mark_delivery(
