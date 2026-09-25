@@ -27,15 +27,15 @@ endpoint = "https://api.linear.app/graphql"
 api_key = os.environ["LINEAR_API_KEY"]
 team_id = os.environ["LINEAR_TEAM_ID"]
 
+# Intentionally query only team-scoped data. Fine-grained API keys can be
+# restricted to selected teams; workspace-level fields such as viewer may be
+# forbidden even when the key is valid for issue operations in that team.
 query = """
 query WorkflowProbe($teamId: String!) {
-  viewer {
-    id
-    name
-  }
   team(id: $teamId) {
     id
     name
+    key
   }
 }
 """
@@ -52,7 +52,7 @@ req = urllib.request.Request(
     headers={
         "Content-Type": "application/json",
         "Authorization": api_key,
-        "User-Agent": "workflow-engine-probe/1.1",
+        "User-Agent": "workflow-engine-probe/1.2",
     },
 )
 
@@ -68,17 +68,19 @@ except urllib.error.HTTPError as exc:
     if exc.code == 403:
         print(
             "LINEAR PROBE FAIL: HTTP 403 Forbidden. "
-            "The API key is recognized but is not allowed to read the requested data.",
+            "The key is not allowed to read the selected team.",
             file=sys.stderr,
         )
         print(
-            "Check the key permissions: enable Read, and ensure Team access includes R0meo1.",
+            "Check that Read is enabled and Team access includes R0meo1. "
+            "If you just changed permissions, save them and retry; "
+            "if 403 persists, create a fresh key with the same scopes.",
             file=sys.stderr,
         )
     elif exc.code == 401:
         print(
             "LINEAR PROBE FAIL: HTTP 401 Unauthorized. "
-            "The API key is invalid, revoked, or was copied incorrectly.",
+            "The API key is invalid, revoked, or copied incorrectly.",
             file=sys.stderr,
         )
     else:
@@ -106,7 +108,6 @@ if data.get("errors"):
     )
     raise SystemExit(1)
 
-viewer = (data.get("data") or {}).get("viewer") or {}
 team = (data.get("data") or {}).get("team") or {}
 
 if team.get("id") != team_id:
@@ -114,6 +115,6 @@ if team.get("id") != team_id:
     raise SystemExit(1)
 
 print("LINEAR PROBE PASS")
-print("viewer=" + str(viewer.get("name") or viewer.get("id") or "ok"))
 print("team=" + str(team.get("name") or team_id))
+print("team_key=" + str(team.get("key") or "unknown"))
 PY
