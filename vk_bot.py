@@ -4230,7 +4230,7 @@ def _process_message(message: Dict[str, Any]) -> None:
     if not user_id:
         return
     text = (msg.get("text") or "").strip()
-    incoming_source_tag = _safe_source_tag(msg.get("ref"))
+    incoming_source_tag = _safe_source_tag(msg.get("ref") or msg.get("ref_source"))
     try:
         button_payload = json.loads(msg.get("payload") or "{}")
     except (TypeError, ValueError):

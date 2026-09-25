@@ -29,10 +29,10 @@ PLAN = {
 
 def test_ref_url_and_render():
     assert ap.build_ref_url(240310110, "vk_post_pain") == (
-        "https://vk.me/club240310110?ref=vk_post_pain"
+        "https://vk.me/club240310110?ref=vk_post_pain&ref_source=vk_post_pain"
     )
     assert ap.render_text(PLAN["posts"][0], 240310110).endswith(
-        "https://vk.me/club240310110?ref=vk_post_pain"
+        "https://vk.me/club240310110?ref=vk_post_pain&ref_source=vk_post_pain"
     )
 
 

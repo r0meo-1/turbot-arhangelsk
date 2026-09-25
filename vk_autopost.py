@@ -141,7 +141,11 @@ def vk_call(method: str, token: str, **params: Any) -> Any:
 
 
 def build_ref_url(group_id: int, source_tag: str) -> str:
-    return f"https://vk.me/club{group_id}?ref={quote(source_tag, safe='_-')}"
+    encoded = quote(source_tag, safe="_-")
+    return (
+        f"https://vk.me/club{group_id}"
+        f"?ref={encoded}&ref_source={encoded}"
+    )
 
 
 def render_text(post: dict[str, Any], group_id: int) -> str:

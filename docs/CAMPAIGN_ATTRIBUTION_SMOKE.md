@@ -28,14 +28,17 @@ Do not invent a short name. Verify the BotFather configuration first.
 
 Use the same campaign tags when traffic is sent to VK:
 
-- Landing: `https://vk.me/club240310110?ref=landing`
-- Pain creative: `https://vk.me/club240310110?ref=video_pain`
-- Dream creative: `https://vk.me/club240310110?ref=video_dream`
-- Thailand vs Vietnam: `https://vk.me/club240310110?ref=video_vs`
+- Landing: `https://vk.me/club240310110?ref=landing&ref_source=landing`
+- Pain creative: `https://vk.me/club240310110?ref=video_pain&ref_source=video_pain`
+- Dream creative: `https://vk.me/club240310110?ref=video_dream&ref_source=video_dream`
+- Thailand vs Vietnam: `https://vk.me/club240310110?ref=video_vs&ref_source=video_vs`
 
-VK campaign attribution is read from `message_new.object.message.ref`. It is stored
-as `source_tag`, separately from the signed Mini App launch fields `vk_ref` and
-`vk_platform`.
+VK campaign attribution is read from `message_new.object.message.ref`, with
+`message_new.object.message.ref_source` accepted as a compatibility fallback.
+The production campaign links emit the same bounded tag in both fields because
+VK clients can differ in which referral field they preserve. The resulting value
+is stored as `source_tag`, separately from the signed Mini App launch fields
+`vk_ref` and `vk_platform`.
 
 ## Attribution rules
 
