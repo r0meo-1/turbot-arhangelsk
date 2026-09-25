@@ -4554,6 +4554,9 @@ def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
         if previous and previous.get("_completing"):
             raise MiniAppValidationError("Draft completion in progress")
         source_tag = _safe_source_tag((previous or {}).get("source_tag"))
+        if not source_tag:
+            persisted = get_session(user_id)
+            source_tag = _safe_source_tag((persisted or {}).get("source_tag"))
         if source_tag:
             info["source_tag"] = source_tag
 

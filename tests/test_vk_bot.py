@@ -432,6 +432,54 @@ def test_vk_miniapp_preserves_chat_campaign_source():
     assert saved["vk_ref"] == "community_messages"
 
 
+def test_vk_miniapp_preserves_durable_campaign_source_after_cache_loss():
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+
+    user_id = 491
+    bot.set_session(
+        user_id,
+        {
+            "state": bot.STATE_DESTINATION,
+            "source_tag": "vk_post_pain",
+            "updated_at": int(time.time()),
+        },
+    )
+    bot.user_data.pop(user_id, None)
+
+    raw = dict(
+        type="trip_request",
+        version=2,
+        destination="Таиланд",
+        departure="Архангельск",
+        date=(date.today() + timedelta(days=30)).isoformat(),
+        nights=10,
+        adults=2,
+        children=0,
+        childrenAges=[],
+        budgetMaxRub=270000,
+        consent=True,
+        termsAccepted=True,
+    )
+    info = validate_vk_trip(raw)
+    info.update(vk_ref="community_messages", vk_platform="desktop_web")
+
+    bot._save_miniapp_draft(user_id, info)
+
+    saved = bot.get_session(user_id)
+    assert saved["source_tag"] == "vk_post_pain"
+    snapshot = bot._load_miniapp_snapshot(user_id)
+    assert snapshot["source_tag"] == "vk_post_pain"
+
+    lead_id = bot.save_lead(user_id, saved, "vk:491")
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            "SELECT source_tag FROM leads WHERE id = ?",
+            (lead_id,),
+        ).fetchone()
+    assert row[0] == "vk_post_pain"
+
+
 def test_vk_manager_notification_includes_campaign_source(monkeypatch):
     sent = []
 
