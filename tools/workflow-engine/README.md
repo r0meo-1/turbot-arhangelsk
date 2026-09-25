@@ -26,7 +26,7 @@ This is non-destructive. It verifies the API key and expected team without creat
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/r0meo-1/turbot-arhangelsk/workflow-engine-linear-live/tools/workflow-engine/probe_linear.sh \
+  https://raw.githubusercontent.com/r0meo-1/turbot-arhangelsk/main/tools/workflow-engine/probe_linear.sh \
   -o /tmp/probe_linear.sh
 
 chmod 700 /tmp/probe_linear.sh
@@ -34,20 +34,22 @@ chmod 700 /tmp/probe_linear.sh
 rm -f /tmp/probe_linear.sh
 ```
 
-Expected result:
+Expected success:
 
 ```text
 LINEAR PROBE PASS
 team=R0meo1
 ```
 
+If Linear returns `RESTRICTED_COUNTRY_BLOCKED`, that is a permanent region restriction for the host, not an API-key permission failure. Keep `LINEAR_MODE=dry_run` on that host and only run live delivery from a region where Linear permits API access.
+
 ## Deploy the version-aware delivery worker
 
-The deployment helper backs up the current worker, validates Python syntax, replaces the worker, restarts the service, and leaves `LINEAR_MODE` unchanged.
+The deployment helper backs up the current worker, validates Python syntax, replaces the worker from `main`, restarts the service, and leaves `LINEAR_MODE` unchanged.
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/r0meo-1/turbot-arhangelsk/workflow-engine-linear-live/tools/workflow-engine/deploy_delivery_worker.sh \
+  https://raw.githubusercontent.com/r0meo-1/turbot-arhangelsk/main/tools/workflow-engine/deploy_delivery_worker.sh \
   -o /tmp/deploy_delivery_worker.sh
 
 chmod 700 /tmp/deploy_delivery_worker.sh
@@ -55,13 +57,13 @@ chmod 700 /tmp/deploy_delivery_worker.sh
 rm -f /tmp/deploy_delivery_worker.sh
 ```
 
-Keep `LINEAR_MODE=dry_run` for the first deployment.
+Keep `LINEAR_MODE=dry_run` on the current VPS because Linear reports `RESTRICTED_COUNTRY_BLOCKED` for that execution region.
 
-The worker treats an old `dryrun-linear:<task_id>` mapping as non-live state. On the first live cycle it creates one real Linear issue, replaces the mapping with the real Linear issue UUID, and later task versions update that same issue instead of creating duplicates.
+The worker treats an old `dryrun-linear:<task_id>` mapping as non-live state. On a permitted live host, the first live cycle creates one real Linear issue, replaces the mapping with the real Linear issue UUID, and later task versions update that same issue instead of creating duplicates.
 
 ## Switch to live without nano
 
-After the credential probe, dry-run verification, and CI are green:
+Only on a Linear-supported execution region, after the credential probe, dry-run verification, and CI are green:
 
 ```bash
 sed -i 's/^LINEAR_MODE=.*/LINEAR_MODE=live/' /etc/workflow-engine/env

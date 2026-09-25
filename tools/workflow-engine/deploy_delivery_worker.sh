@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_DIR="${WORKFLOW_APP_DIR:-/opt/workflow-engine}"
-REF="${WORKFLOW_SOURCE_REF:-workflow-engine-linear-live}"
+REF="${WORKFLOW_SOURCE_REF:-main}"
 REPO="${WORKFLOW_SOURCE_REPO:-r0meo-1/turbot-arhangelsk}"
 SOURCE="https://raw.githubusercontent.com/${REPO}/${REF}/tools/workflow-engine/delivery_worker.py"
 TARGET="${APP_DIR}/workflow_engine/delivery_worker.py"
