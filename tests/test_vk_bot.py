@@ -63,13 +63,15 @@ def client():
     return bot.app.test_client()
 
 
-def _vk_message(user_id, text=None, ref=None):
+def _vk_message(user_id, text=None, ref=None, ref_source=None):
     """Build a minimal VK message_new event."""
     msg = {"peer_id": user_id, "from_id": user_id}
     if text is not None:
         msg["text"] = text
     if ref is not None:
         msg["ref"] = ref
+    if ref_source is not None:
+        msg["ref_source"] = ref_source
     return {
         "type": "message_new",
         "object": {"message": msg},
@@ -78,9 +80,9 @@ def _vk_message(user_id, text=None, ref=None):
     }
 
 
-def _post(client, user_id, text=None, ref=None):
+def _post(client, user_id, text=None, ref=None, ref_source=None):
     return client.post("/vk/webhook",
-                       json=_vk_message(user_id, text, ref=ref),
+                       json=_vk_message(user_id, text, ref=ref, ref_source=ref_source),
                        content_type="application/json")
 
 
@@ -380,6 +382,21 @@ def test_vk_referral_message_starts_attributed_flow(client):
     assert bot.user_data[user_id]["source_tag"] == "video_vs"
     funnel = bot._funnel_health()
     assert funnel["channels"]["vk"]["video_vs"]["start"]["opened"] == 1
+
+
+def test_vk_ref_source_fallback_starts_attributed_flow(client):
+    user_id = 481
+
+    response = _post(
+        client,
+        user_id,
+        "Привет",
+        ref_source="vk_post_pain",
+    )
+
+    assert response.status_code == 200
+    assert bot.user_data[user_id]["state"] == bot.STATE_CONSENT
+    assert bot.user_data[user_id]["source_tag"] == "vk_post_pain"
 
 
 def test_vk_miniapp_preserves_chat_campaign_source():
