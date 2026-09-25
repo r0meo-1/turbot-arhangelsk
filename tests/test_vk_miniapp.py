@@ -92,10 +92,15 @@ def test_draft_api_and_static():
     assert 'Telegram' not in privacy
     assert 'Политика обработки персональных данных' in privacy
     assert 'Рекламные сообщения' in privacy
-    assert 'https://r0meo1.ru/apreltour/' in privacy
-    assert 'Согласие на обработку персональных данных' in client.get('/vk/miniapp/consent.html').get_data(as_text=True)
-    assert 'Условия использования VK Mini App' in client.get('/vk/miniapp/terms.html').get_data(as_text=True)
-    assert 'Правила модерации и безопасного использования' in client.get('/vk/miniapp/moderation.html').get_data(as_text=True)
+    assert 'https://r0meo1.ru/apreltour/' not in privacy
+    consent = client.get('/vk/miniapp/consent.html').get_data(as_text=True)
+    terms = client.get('/vk/miniapp/terms.html').get_data(as_text=True)
+    moderation = client.get('/vk/miniapp/moderation.html').get_data(as_text=True)
+    assert 'Согласие на обработку персональных данных' in consent
+    assert 'Условия использования VK Mini App' in terms
+    assert 'Правила модерации и безопасного использования' in moderation
+    for legal_page in (privacy, consent, terms, moderation):
+        assert 'https://r0meo1.ru/apreltour/' not in legal_page
     assert client.get('/vk/miniapp/README.md').status_code == 404
 
 
