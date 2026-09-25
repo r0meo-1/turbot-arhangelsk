@@ -794,7 +794,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 kids=excluded.kids, kids_ages=excluded.kids_ages,
                 infants=excluded.infants,
                 budget=excluded.budget, budget_scope=excluded.budget_scope,
-                source=excluded.source, source_tag=excluded.source_tag,
+                source=excluded.source, source_tag=COALESCE(sessions.source_tag, excluded.source_tag),
                 vk_ref=excluded.vk_ref, vk_platform=excluded.vk_platform,
                 phone=excluded.phone,
                 needs_consultation=excluded.needs_consultation,
