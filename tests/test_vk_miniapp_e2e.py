@@ -46,7 +46,7 @@ def _assert_zoom_and_default_contrast(page):
     assert "maximum-scale=1" not in normalized
 
     ratios = page.evaluate(
-        """() => {
+        r"""() => {
           const rgb = (value) => {
             const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
             if (!match) throw new Error('unsupported color: ' + value);
