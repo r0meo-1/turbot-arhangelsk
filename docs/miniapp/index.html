@@ -161,6 +161,8 @@
       <button id="esim" class="secondary" type="button">Подобрать eSIM</button>
     </section>
 
+    <p id="partner-status" class="review-status" role="status" aria-live="polite"></p>
+
     <section id="review" class="card review-card" hidden aria-labelledby="review-title">
       <p class="review-kicker">Почти готово</p>
       <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
@@ -189,6 +191,10 @@
       };
 
       const partnerLinkApi = 'https://bot.r0meo1.ru/miniapp/partner-link';
+      const partnerStatus = document.getElementById('partner-status');
+      const agencyRecoveryUrl = (service) =>
+        'https://r0meo1.ru/apreltour/?utm_source=telegram&utm_medium=miniapp'
+        + '&utm_campaign=partner_recovery&utm_content=' + encodeURIComponent(service);
       const tripPartnerContext = () => ({
         destination: document.getElementById('destination')?.value?.trim() || '',
         date: document.getElementById('date')?.value || '',
@@ -210,7 +216,7 @@
         if (!response.ok || payload.ok !== true || typeof payload.url !== 'string') {
           throw new Error('Partner link is unavailable');
         }
-        return payload.url;
+        return { url: payload.url, mode: String(payload.mode || '') };
       };
       const bindPartnerButton = (id, service, fallbackUrl, loadingText) => {
         const button = document.getElementById(id);
@@ -220,9 +226,23 @@
           button.textContent = loadingText;
           let url = fallbackUrl;
           try {
-            url = await resolvePartnerUrl(service);
+            const resolved = await resolvePartnerUrl(service);
+            url = resolved.url;
+            if (resolved.mode === 'direct' && partnerStatus) {
+              partnerStatus.textContent =
+                'Партнёрская ссылка работает в резервном режиме. '
+                + 'Если сервис не откроется, продолжите подбор через «АПРЕЛЬ тур».';
+            } else if (partnerStatus) {
+              partnerStatus.textContent = '';
+            }
           } catch (error) {
-            console.warn(`TurBot ${service} link fallback`, error);
+            console.warn(`TurBot ${service} link recovery`, error);
+            url = agencyRecoveryUrl(service);
+            if (partnerStatus) {
+              partnerStatus.textContent =
+                'Партнёрский сервис сейчас недоступен. '
+                + 'Продолжите подбор через «АПРЕЛЬ тур».';
+            }
           } finally {
             button.disabled = false;
             button.textContent = defaultText;
