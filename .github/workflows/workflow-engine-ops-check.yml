@@ -8,6 +8,7 @@ on:
   push:
     branches:
       - workflow-engine-ops
+      - workflow-engine-linear-live
     paths:
       - "tools/workflow-engine/**"
       - ".github/workflows/workflow-engine-ops-check.yml"
@@ -16,11 +17,18 @@ permissions:
   contents: read
 
 jobs:
-  shell-syntax:
+  syntax:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Check shell syntax
         run: |
           bash -n tools/workflow-engine/configure_linear.sh
           bash -n tools/workflow-engine/verify.sh
+          bash -n tools/workflow-engine/probe_linear.sh
+          bash -n tools/workflow-engine/deploy_delivery_worker.sh
+
+      - name: Check Python syntax
+        run: |
+          python -m py_compile tools/workflow-engine/delivery_worker.py
