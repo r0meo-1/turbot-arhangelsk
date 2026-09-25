@@ -207,9 +207,13 @@ def install(bot: Any) -> None:
     original_delete_session = bot.delete_session
     original_delete_user_data = bot.delete_user_data
 
-    def handle_start(user_id: int, first_name: str = "") -> Any:
+    def handle_start(
+        user_id: int,
+        first_name: str = "",
+        source_tag: str = "",
+    ) -> Any:
         reset_claim(bot, user_id)
-        return original_start(user_id, first_name)
+        return original_start(user_id, first_name, source_tag=source_tag)
 
     def set_session(chat_id: int, data: dict[str, Any]) -> Any:
         # If a session is newly created after a crash/deletion, an orphan claim
