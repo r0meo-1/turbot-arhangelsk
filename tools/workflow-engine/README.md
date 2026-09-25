@@ -43,6 +43,28 @@ team=R0meo1
 
 If Linear returns `RESTRICTED_COUNTRY_BLOCKED`, that is a permanent region restriction for the host, not an API-key permission failure. Keep `LINEAR_MODE=dry_run` on that host and only run live delivery from a region where Linear permits API access.
 
+## ChatGPT Linear connector fallback
+
+When the VPS is region-blocked but the ChatGPT Linear connector can create the issue, record that external issue back into canonical delivery state.
+
+The helper does not call Linear. It only records the already-created Linear issue UUID into the workflow database and marks matching delivery events as `delivered_connector`.
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/r0meo-1/turbot-arhangelsk/main/tools/workflow-engine/record_linear_mapping.sh \
+  -o /tmp/record_linear_mapping.sh
+
+chmod 700 /tmp/record_linear_mapping.sh
+
+/tmp/record_linear_mapping.sh \
+  <canonical-task-id> \
+  <linear-issue-uuid>
+
+rm -f /tmp/record_linear_mapping.sh
+```
+
+This preserves the same dedupe invariant as live API delivery: one canonical task maps to one Linear issue.
+
 ## Deploy the version-aware delivery worker
 
 The deployment helper backs up the current worker, validates Python syntax, replaces the worker from `main`, restarts the service, and leaves `LINEAR_MODE` unchanged.
