@@ -1460,13 +1460,24 @@ def test_real_mode_stores_real_phone(client, monkeypatch):
         assert cur.fetchone()[0] == "+79161234567"
 
 
-def test_privacy_page_is_served(client):
-    """The consent text links here, so it must never 404."""
-    resp = client.get("/privacy")
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    assert "персональных данных" in body
-    assert "<h1" in body or "<h2" in body
+def test_privacy_pages_are_channel_specific(client):
+    """VK moderation and Telegram users must not share one mixed policy page."""
+    vk = client.get("/privacy")
+    assert vk.status_code == 200
+    vk_body = vk.get_data(as_text=True)
+    assert "персональных данных" in vk_body
+    assert "<h1" in vk_body or "<h2" in vk_body
+    assert "Telegram" not in vk_body
+    assert "t.me/" not in vk_body
+    assert "r0meo1.ru/apreltour" not in vk_body
+    assert "VK-приложения" in vk_body
+
+    tg = client.get("/tg/privacy")
+    assert tg.status_code == 200
+    tg_body = tg.get_data(as_text=True)
+    assert "Telegram-бота TurBot" in tg_body
+    assert "Telegram Mini App" in tg_body
+    assert "/delete" in tg_body
 
 
 def test_health_hides_operational_configuration(client):
