@@ -10,6 +10,9 @@ from shared.vk_connector import create_blueprint
 
 AUTH_TOKEN = "connector-auth-token-" + ("x" * 32)
 VK_TOKEN = "server-only-vk-token"
+MODERN_PROTOCOL = "2026-07-28"
+PROTOCOL_META_KEY = "io.modelcontextprotocol/protocolVersion"
+SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
 
 
 class FixtureDB:
@@ -92,6 +95,35 @@ def _rpc(client, method, params=None, *, token=AUTH_TOKEN, request_id=1):
             "id": request_id,
             "method": method,
             "params": params or {},
+        }),
+    )
+
+
+def _modern_rpc(client, method, params=None, *, request_id=1, name_header=None):
+    actual_params = dict(params or {})
+    meta = dict(actual_params.get("_meta") or {})
+    meta[PROTOCOL_META_KEY] = MODERN_PROTOCOL
+    actual_params["_meta"] = meta
+    headers = {
+        "Authorization": f"Bearer {AUTH_TOKEN}",
+        "Content-Type": "application/json",
+        "MCP-Protocol-Version": MODERN_PROTOCOL,
+        "Mcp-Method": method,
+    }
+    if method == "tools/call":
+        headers["Mcp-Name"] = (
+            name_header
+            if name_header is not None
+            else str(actual_params.get("name") or "")
+        )
+    return client.post(
+        "/mcp/vk",
+        headers=headers,
+        data=json.dumps({
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": actual_params,
         }),
     )
 
@@ -272,6 +304,91 @@ def test_attribution_actions_return_counts_without_customer_data():
             },
         )
         assert invalid.json["error"]["code"] == -32602
+        assert calls == []
+    finally:
+        db.close()
+
+
+def test_modern_discover_and_tools_work_without_initialize():
+    db = FixtureDB()
+    calls = []
+    try:
+        client = _client(db, calls)
+
+        discover = _modern_rpc(client, "server/discover")
+        assert discover.status_code == 200
+        result = discover.json["result"]
+        assert result["resultType"] == "complete"
+        assert result["supportedVersions"] == [MODERN_PROTOCOL]
+        assert result["capabilities"] == {"tools": {"listChanged": False}}
+        assert result["_meta"][SERVER_INFO_META_KEY] == {
+            "name": "turbot-vk",
+            "version": "0.2.0",
+        }
+
+        listed = _modern_rpc(client, "tools/list")
+        listed_result = listed.json["result"]
+        assert listed_result["resultType"] == "complete"
+        assert listed_result["_meta"][SERVER_INFO_META_KEY]["name"] == "turbot-vk"
+        assert {tool["name"] for tool in listed_result["tools"]} == {
+            "vk.get_group",
+            "vk.list_posts",
+            "vk.get_campaign_attribution",
+            "vk.get_leads_by_source",
+        }
+
+        group = _modern_rpc(
+            client,
+            "tools/call",
+            {"name": "vk.get_group", "arguments": {}},
+        )
+        group_result = group.json["result"]
+        assert group_result["resultType"] == "complete"
+        assert group_result["structuredContent"]["group"]["id"] == 240310110
+        assert group_result["_meta"][SERVER_INFO_META_KEY]["version"] == "0.2.0"
+        assert len(calls) == 1
+    finally:
+        db.close()
+
+
+def test_modern_headers_and_protocol_version_fail_closed():
+    db = FixtureDB()
+    calls = []
+    try:
+        client = _client(db, calls)
+
+        wrong_name = _modern_rpc(
+            client,
+            "tools/call",
+            {"name": "vk.get_group", "arguments": {}},
+            name_header="vk.list_posts",
+        )
+        assert wrong_name.status_code == 400
+        assert wrong_name.json["error"]["code"] == -32020
+        assert calls == []
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    PROTOCOL_META_KEY: "2026-01-01",
+                }
+            },
+        }
+        unsupported = client.post(
+            "/mcp/vk",
+            headers={
+                "Authorization": f"Bearer {AUTH_TOKEN}",
+                "Content-Type": "application/json",
+                "MCP-Protocol-Version": "2026-01-01",
+                "Mcp-Method": "tools/list",
+            },
+            data=json.dumps(payload),
+        )
+        assert unsupported.status_code == 400
+        assert unsupported.json["error"]["code"] == -32022
         assert calls == []
     finally:
         db.close()
