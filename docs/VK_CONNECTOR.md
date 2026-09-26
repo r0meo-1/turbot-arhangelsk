@@ -32,6 +32,9 @@ from the existing `VK_TOKEN` / `VK_ACCESS_TOKEN` plus
 - `vk.get_group` — public metadata for the configured VK community.
 - `vk.list_posts` — recent community wall posts with bounded text and public
   counters.
+- `vk.get_post_stats` — aggregate public counters for one post owned by the
+  configured community; post text, attachments and commenter identities are
+  not returned.
 - `vk.get_campaign_attribution` — privacy-safe VK funnel counts grouped by
   source tag.
 - `vk.get_leads_by_source` — start/lead/manager-delivery counts for one
@@ -108,7 +111,7 @@ and a tool call looks like:
 2. Generate a dedicated connector token outside Git and install it only in the
    protected runtime environment.
 3. Verify missing/wrong connector authorization returns HTTP 401.
-4. Verify `tools/list` exposes only the four read-only tools.
+4. Verify `tools/list` exposes only the five read-only tools.
 5. Exercise the read tools with the existing server-side VK credentials.
 6. Verify both legacy `initialize` and modern `server/discover` fixture
    flows before enabling a client.
