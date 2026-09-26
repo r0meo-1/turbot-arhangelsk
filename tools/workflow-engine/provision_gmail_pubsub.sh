@@ -10,6 +10,7 @@ command -v gcloud >/dev/null 2>&1 || {
 }
 
 project="${GCP_PROJECT_ID:?GCP_PROJECT_ID is required}"
+expected_project_number="${GCP_EXPECTED_PROJECT_NUMBER:-}"
 endpoint="${GMAIL_PUBSUB_PUSH_ENDPOINT:?GMAIL_PUBSUB_PUSH_ENDPOINT is required}"
 topic_id="${GMAIL_PUBSUB_TOPIC_ID:-workflow-engine-gmail}"
 subscription_id="${GMAIL_PUBSUB_SUBSCRIPTION_ID:-workflow-engine-gmail-push}"
@@ -51,6 +52,17 @@ project_number="$(
   echo "Could not resolve numeric Google Cloud project number" >&2
   exit 1
 }
+
+if [[ -n "$expected_project_number" ]]; then
+  [[ "$expected_project_number" =~ ^[0-9]{6,20}$ ]] || {
+    echo "GCP_EXPECTED_PROJECT_NUMBER must contain only 6-20 digits" >&2
+    exit 1
+  }
+  [[ "$project_number" == "$expected_project_number" ]] || {
+    echo "Google Cloud project number does not match production Gmail OAuth identity" >&2
+    exit 1
+  }
+fi
 
 push_sa_email="${push_sa_id}@${project}.iam.gserviceaccount.com"
 pubsub_service_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
