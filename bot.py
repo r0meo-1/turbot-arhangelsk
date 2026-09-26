@@ -341,10 +341,9 @@ DEMO_NOTICE = (
 )
 
 # --- Personal-data compliance (152-ФЗ) ------------------------------------
-# URL of the privacy policy / consent text shown to users before their personal
-# data (name, phone) is collected. Operators of RF personal data MUST publish
-# such a document. The bot serves its own copy at /privacy, so the link is never
-# empty just because nobody hosted the document separately.
+# Telegram and VK have separate public privacy documents. Keeping the channel
+# policies separate prevents one platform's moderation flow from exposing
+# off-platform links or copy while preserving the same verified operator.
 # Where this instance is reachable from outside. PUBLIC_BASE_URL is the
 # portable knob (install.sh writes it); RENDER_EXTERNAL_URL is Render's own
 # and needs no configuration there.
@@ -352,8 +351,11 @@ PUBLIC_BASE_URL = (
     os.getenv("PUBLIC_BASE_URL", "").strip()
     or os.getenv("RENDER_EXTERNAL_URL", "").strip()
 ).rstrip("/")
-PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip() or (
-    f"{PUBLIC_BASE_URL}/privacy" if PUBLIC_BASE_URL else ""
+_LEGACY_PRIVACY_POLICY_URL = os.getenv("PRIVACY_POLICY_URL", "").strip()
+PRIVACY_POLICY_URL = os.getenv("TELEGRAM_PRIVACY_POLICY_URL", "").strip() or (
+    f"{PUBLIC_BASE_URL}/tg/privacy"
+    if PUBLIC_BASE_URL
+    else _LEGACY_PRIVACY_POLICY_URL
 )
 # Name of the data operator shown in the consent text.
 # Ставится через .env на боевом сервере: реквизиты конкретного ИП — чужие
@@ -4775,16 +4777,13 @@ def _markdown_to_html(source: str) -> str:
     return "\n".join(out)
 
 
-@app.route("/privacy")
-def privacy_page() -> Any:
-    """Serve the privacy policy the bot links to in its consent text.
-
-    Operators of RF personal data must publish this document. Hosting it from
-    the bot itself means the link can never be dead just because nobody set up
-    separate hosting for a single static page.
-    """
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "docs", "privacy_policy.md")
+def _serve_privacy_document(filename: str, page_title: str) -> Any:
+    """Render one channel-specific privacy policy without duplicating markup."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "docs",
+        filename,
+    )
     try:
         with open(path, encoding="utf-8") as fh:
             body = _markdown_to_html(fh.read())
@@ -4800,7 +4799,7 @@ def privacy_page() -> Any:
     page = (
         '<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        "<title>Политика обработки персональных данных — TurBot</title><style>"
+        f"<title>{html.escape(page_title)}</title><style>"
         "body{max-width:760px;margin:0 auto;padding:40px 6%;"
         "font:16px/1.65 -apple-system,Segoe UI,Roboto,sans-serif;color:#15171c}"
         "h1{font-size:1.8rem;letter-spacing:-.02em;line-height:1.2}"
@@ -4815,6 +4814,24 @@ def privacy_page() -> Any:
         "</style></head><body>" + banner + body + "</body></html>"
     )
     return Response(page, mimetype="text/html; charset=utf-8")
+
+
+@app.route("/privacy")
+def privacy_page() -> Any:
+    """VK-facing privacy policy kept free of Telegram/off-platform references."""
+    return _serve_privacy_document(
+        "privacy_policy.md",
+        "Политика обработки персональных данных — TurBot / VK",
+    )
+
+
+@app.route("/tg/privacy")
+def telegram_privacy_page() -> Any:
+    """Telegram-specific privacy policy used by the bot and Telegram Mini App."""
+    return _serve_privacy_document(
+        "privacy_policy_tg.md",
+        "Политика обработки персональных данных — Telegram-бот TurBot",
+    )
 
 
 @app.route("/health")
