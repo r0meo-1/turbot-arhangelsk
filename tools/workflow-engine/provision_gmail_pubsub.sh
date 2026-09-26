@@ -39,6 +39,7 @@ gcloud services enable \
   pubsub.googleapis.com \
   gmail.googleapis.com \
   iam.googleapis.com \
+  workloadidentity.googleapis.com \
   --project "$project" \
   --quiet
 
@@ -72,9 +73,10 @@ wait_for_service_account() {
 
 # Ensure the Pub/Sub service agent exists before granting it token-minting
 # permission. API enablement can be eventually consistent.
-gcloud beta services identity create \
+gcloud workload-identity service-agents generate \
   --service=pubsub.googleapis.com \
-  --project "$project" \
+  --location=global \
+  --project="$project_number" \
   --quiet >/dev/null
 
 wait_for_service_account "$pubsub_service_agent"
