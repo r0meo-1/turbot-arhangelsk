@@ -47,7 +47,7 @@ jobs:
           grep -q 'workflow_engine.main status' deploy/turbot-deploy.sh
           grep -q 'gmail-api-push@system.gserviceaccount.com' tools/workflow-engine/provision_gmail_pubsub.sh
           grep -q 'roles/iam.serviceAccountTokenCreator' tools/workflow-engine/provision_gmail_pubsub.sh
-          grep -q 'services identity create' tools/workflow-engine/provision_gmail_pubsub.sh
+          grep -q 'workload-identity service-agents generate' tools/workflow-engine/provision_gmail_pubsub.sh
 
       - name: Check Python syntax
         run: |
