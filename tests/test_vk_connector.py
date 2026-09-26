@@ -12,7 +12,7 @@ AUTH_TOKEN = "connector-auth-token-" + ("x" * 32)
 VK_TOKEN = "server-only-vk-token"
 
 
-class TestDB:
+class FixtureDB:
     def __init__(self):
         self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         init_schema(self.conn.cursor())
@@ -97,7 +97,7 @@ def _rpc(client, method, params=None, *, token=AUTH_TOKEN, request_id=1):
 
 
 def test_connector_auth_is_fail_closed():
-    db = TestDB()
+    db = FixtureDB()
     try:
         app = Flask(__name__)
         app.register_blueprint(
@@ -124,7 +124,7 @@ def test_connector_auth_is_fail_closed():
 
 
 def test_initialize_and_tool_list_are_read_only():
-    db = TestDB()
+    db = FixtureDB()
     calls = []
     try:
         client = _client(db, calls)
@@ -160,7 +160,7 @@ def test_initialize_and_tool_list_are_read_only():
 
 
 def test_group_and_wall_reads_reuse_server_side_vk_identity():
-    db = TestDB()
+    db = FixtureDB()
     calls = []
     try:
         client = _client(db, calls)
@@ -202,7 +202,7 @@ def test_group_and_wall_reads_reuse_server_side_vk_identity():
 
 
 def test_write_tools_fail_closed_without_touching_vk():
-    db = TestDB()
+    db = FixtureDB()
     calls = []
     try:
         client = _client(db, calls)
@@ -223,7 +223,7 @@ def test_write_tools_fail_closed_without_touching_vk():
 
 
 def test_attribution_actions_return_counts_without_customer_data():
-    db = TestDB()
+    db = FixtureDB()
     calls = []
     try:
         with db.cursor(commit=True) as cur:
