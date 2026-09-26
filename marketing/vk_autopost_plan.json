@@ -2,8 +2,8 @@
   "version": 1,
   "campaign": "winter_2026_2027",
   "timezone": "Europe/Moscow",
-  "enabled": false,
-  "start_date": "2026-11-01",
+  "enabled": true,
+  "start_date": "2026-09-27",
   "end_date": "2027-02-28",
   "grace_minutes": 180,
   "posts": [
