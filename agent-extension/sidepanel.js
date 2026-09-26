@@ -684,13 +684,7 @@ async function loadLeads() {
     renderLeads([]);
     return;
   }
-  const response = await fetch(LEADS_API + "?limit=30", {
-    headers: { "Authorization": "Bearer " + state.agentToken }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) {
-    throw new Error(data.error || ("HTTP " + response.status));
-  }
+  const data = await crmFetch(LEADS_API + "?limit=30");
   renderLeads(data.leads || []);
 }
 
