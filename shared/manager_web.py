@@ -17,7 +17,8 @@ def manager_asset(name="index.html"):
     response.headers["Cache-Control"] = "no-store"
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; script-src 'self' https://telegram.org; style-src 'self'; "
-        "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+        "connect-src 'self'; base-uri 'none'; form-action 'none'; "
+        "frame-ancestors https://vk.com https://vk.ru https://m.vk.com https://m.vk.ru"
     )
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
