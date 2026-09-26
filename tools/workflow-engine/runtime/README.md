@@ -36,12 +36,57 @@ The runtime now keeps a durable Gmail History checkpoint in SQLite:
 
 The checkpoint is monotonic, so an older or duplicate cycle cannot move it backwards.
 
-Known Gmail gaps deliberately remain visible:
+## Gmail watch / Pub/Sub mode
 
-- no `users.watch`
-- no Pub/Sub notification receiver
-- no persisted notification table / acknowledgement path
-- polling still triggers synchronization every 30 seconds
+The runtime now has an opt-in authenticated push path in addition to the
+existing polling fallback.
+
+Set `GMAIL_INGEST_MODE=watch` only after external Pub/Sub infrastructure is
+provisioned. Required runtime configuration:
+
+- `GMAIL_PUBSUB_TOPIC=projects/<project>/topics/<topic>`
+- `GMAIL_PUBSUB_AUDIENCE=<exact push endpoint audience>`
+- `GMAIL_PUBSUB_SERVICE_ACCOUNT=<exact OIDC service-account email>`
+- optional local listener controls:
+  `GMAIL_PUBSUB_BIND`, `GMAIL_PUBSUB_PORT`, `GMAIL_PUBSUB_PATH`
+
+The default listener is `127.0.0.1:8091/gmail/pubsub`. It is intentionally
+not exposed directly to the internet by this source change.
+
+Watch-mode invariants:
+
+- Gmail `users.watch` state is persisted in `gmail_watch`;
+- watch renewal is checked hourly by default and renewed before the final
+  24 hours;
+- every new/renewed watch enqueues a synthetic catch-up notification so a
+  restart cannot leave an unseen gap between the durable checkpoint and the
+  new watch;
+- Pub/Sub push OIDC is verified for the configured audience and exact service
+  account;
+- the HTTP handler stores only Pub/Sub message ID + Gmail `historyId`, then
+  returns HTTP 204;
+- no message fetch, extraction, task mutation or outbox delivery occurs inside
+  the HTTP request;
+- duplicate Pub/Sub deliveries and duplicate `historyId` values collapse
+  safely in `gmail_notification`;
+- the async notification worker runs the existing History sync from the
+  durable checkpoint and marks notifications done only after message
+  processing and checkpoint advancement succeed.
+
+`GMAIL_INGEST_MODE=poll` remains the default, so merging this code alone does
+not expose a listener or switch production ingestion.
+
+External provisioning still required before watch mode can be activated:
+
+1. create/choose the Google Cloud Pub/Sub topic;
+2. grant Gmail's publisher identity permission on that topic;
+3. create an authenticated push subscription using the expected service
+   account and audience;
+4. expose the local receiver through the production HTTPS reverse proxy;
+5. install the non-secret configuration values and restart only the Workflow
+   Engine service;
+6. verify one real notification, duplicate delivery, restart recovery and
+   watch renewal without recording mail bodies or OAuth/token material.
 
 ## Linear delivery crash safety
 
