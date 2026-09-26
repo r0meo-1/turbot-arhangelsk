@@ -117,16 +117,20 @@ jobs:
           set -Eeuo pipefail
           base="https://bot.r0meo1.ru"
           legal_json="$(mktemp)"
-          privacy_body="$(mktemp)"
-          privacy_headers="$(mktemp)"
+          vk_privacy_body="$(mktemp)"
+          vk_privacy_headers="$(mktemp)"
+          telegram_privacy_body="$(mktemp)"
+          telegram_privacy_headers="$(mktemp)"
           cleanup() {
-            rm -f "$legal_json" "$privacy_body" "$privacy_headers"
+            rm -f "$legal_json" "$vk_privacy_body" "$vk_privacy_headers" \
+              "$telegram_privacy_body" "$telegram_privacy_headers"
           }
           trap cleanup EXIT
 
           for attempt in {1..12}; do
             if curl -fsSL --max-time 15 "$base/vk/miniapp/legal.json" -o "$legal_json" &&
-               curl -fsSL --max-time 15 -D "$privacy_headers" "$base/privacy" -o "$privacy_body"; then
+               curl -fsSL --max-time 15 -D "$vk_privacy_headers" "$base/privacy" -o "$vk_privacy_body" &&
+               curl -fsSL --max-time 15 -D "$telegram_privacy_headers" "$base/tg/privacy" -o "$telegram_privacy_body"; then
               break
             fi
             if [[ "$attempt" == 12 ]]; then
@@ -136,7 +140,7 @@ jobs:
             sleep 5
           done
 
-          python - "$legal_json" "$privacy_body" <<'PY'
+          python - "$legal_json" "$vk_privacy_body" "$telegram_privacy_body" <<'PY'
           import json
           import sys
 
@@ -151,22 +155,42 @@ jobs:
               raise SystemExit("VK legal operator contains a placeholder")
 
           with open(sys.argv[2], encoding="utf-8") as fh:
-              privacy = fh.read()
-          if "ИП Замятина Мария Андреевна" not in privacy:
+              vk_privacy = fh.read()
+          if "ИП Замятина Мария Андреевна" not in vk_privacy:
+              raise SystemExit("VK privacy page has no verified operator")
+          for forbidden in (
+              "Telegram",
+              "t.me/",
+              "r0meo1.ru/apreltour",
+              "ЧЕРНОВИК / ШАБЛОН",
+              "[указать",
+          ):
+              if forbidden in vk_privacy:
+                  raise SystemExit(
+                      f"VK privacy page contains forbidden moderation text: {forbidden}"
+                  )
+
+          with open(sys.argv[3], encoding="utf-8") as fh:
+              telegram_privacy = fh.read()
+          if "ИП Замятина Мария Андреевна" not in telegram_privacy:
               raise SystemExit("Telegram privacy page has no verified operator")
+          if "Telegram-бота TurBot" not in telegram_privacy:
+              raise SystemExit("Telegram privacy page is not channel-specific")
           for forbidden in ("ЧЕРНОВИК / ШАБЛОН", "[указать"):
-              if forbidden in privacy:
+              if forbidden in telegram_privacy:
                   raise SystemExit("Telegram privacy page still contains draft placeholders")
           PY
 
-          grep -qi '^x-content-type-options: nosniff' "$privacy_headers" ||
-            { echo "Privacy response is missing nosniff" >&2; exit 1; }
-          grep -qi '^referrer-policy: strict-origin-when-cross-origin' "$privacy_headers" ||
-            { echo "Privacy response is missing Referrer-Policy" >&2; exit 1; }
-          grep -qi '^permissions-policy:.*camera=()' "$privacy_headers" ||
-            { echo "Privacy response is missing Permissions-Policy" >&2; exit 1; }
+          for header_file in "$vk_privacy_headers" "$telegram_privacy_headers"; do
+            grep -qi '^x-content-type-options: nosniff' "$header_file" ||
+              { echo "Privacy response is missing nosniff" >&2; exit 1; }
+            grep -qi '^referrer-policy: strict-origin-when-cross-origin' "$header_file" ||
+              { echo "Privacy response is missing Referrer-Policy" >&2; exit 1; }
+            grep -qi '^permissions-policy:.*camera=()' "$header_file" ||
+              { echo "Privacy response is missing Permissions-Policy" >&2; exit 1; }
+          done
 
-          echo "Production legal content and base app security headers: ok"
+          echo "Production channel-specific legal content and base app security headers: ok"
 
           check_security_headers() {
             local label="$1"
@@ -201,7 +225,8 @@ jobs:
           fi
 
           check_security_headers "health" "$health_headers"
-          check_security_headers "privacy" "$privacy_headers"
+          check_security_headers "VK privacy" "$vk_privacy_headers"
+          check_security_headers "Telegram privacy" "$telegram_privacy_headers"
           check_security_headers "VK Mini App" "$vk_headers"
           check_security_headers "Telegram Mini App API" "$tg_headers"
           echo "Runtime security headers smoke: ok"

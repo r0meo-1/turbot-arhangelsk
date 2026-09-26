@@ -201,7 +201,8 @@ TELEGRAM_SECRET_TOKEN=long-random-string   # optional but recommended
 DATABASE_PATH=/opt/turbot/bot_state.sqlite
 
 # 152-ФЗ compliance
-PRIVACY_POLICY_URL=https://your-domain/privacy
+TELEGRAM_PRIVACY_POLICY_URL=https://your-domain/tg/privacy
+VK_PRIVACY_POLICY_URL=https://your-domain/privacy
 DATA_RETENTION_DAYS=180
 ```
 

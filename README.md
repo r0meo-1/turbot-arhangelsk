@@ -320,9 +320,9 @@ API-token и без денежных данных.
 Lead = телефон и параметры поездки. Поэтому:
 
 - согласие **до** телефона  
-- `/privacy` и `/delete`  
+- Telegram-политика: `/tg/privacy`, VK-политика: `/privacy`; удаление: `/delete`  
 - опционально retention (`DATA_RETENTION_DAYS`)  
-- политика: `PRIVACY_POLICY_URL` + черновик [`docs/privacy_policy.md`](docs/privacy_policy.md)
+- канальные URL: `TELEGRAM_PRIVACY_POLICY_URL` / `VK_PRIVACY_POLICY_URL`; тексты: [`docs/privacy_policy_tg.md`](docs/privacy_policy_tg.md) и [`docs/privacy_policy.md`](docs/privacy_policy.md)
 
 Не претендуем на «сертифицированный комплаенс». Просто не копим контакты в чатах без спроса.
 

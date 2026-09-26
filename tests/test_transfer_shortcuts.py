@@ -100,6 +100,11 @@ def test_published_telegram_copy_matches_service_shortcuts():
     assert TG_PUBLISHED_INDEX == TG_INDEX
 
 
+def test_telegram_miniapp_uses_telegram_specific_privacy_url():
+    assert 'https://bot.r0meo1.ru/tg/privacy' in TG_INDEX
+    assert 'https://bot.r0meo1.ru/privacy' not in TG_INDEX
+
+
 def test_vk_miniapp_has_no_external_partner_shortcuts():
     forbidden = (
         SITE_PATH,
