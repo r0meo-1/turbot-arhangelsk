@@ -8,6 +8,7 @@ const CRM_TASK_API = "https://bot.r0meo1.ru/agent-extension/crm/task";
 const CRM_QUOTE_API = "https://bot.r0meo1.ru/agent-extension/crm/quote";
 const CRM_REACTION_API = "https://bot.r0meo1.ru/agent-extension/crm/reaction";
 const CRM_ACTIVITY_API = "https://bot.r0meo1.ru/agent-extension/crm/activity";
+const CRM_OUTCOME_API = "https://bot.r0meo1.ru/agent-extension/crm/outcome";
 let activeRequestId = "";
 const fieldIds = ["name","phone","destination","origin","dates","people","budget","consent"];
 
@@ -45,6 +46,9 @@ function sanitizeCandidateUrl(value) {
 }
 
 async function load() {
+  const manifest = chrome.runtime.getManifest();
+  $("versionBadge").textContent = "v" + manifest.version;
+
   const state = await chrome.storage.local.get({
     draft: {},
     candidates: [],
@@ -61,10 +65,12 @@ async function load() {
   }
   $("token").value = state.agentToken || "";
   renderCandidates(state.candidates || []);
-  if (state.agentToken) {
-    loadLeads().catch(() => {});
-    loadToday().catch(() => {});
+
+  if (!state.agentToken) {
+    setConnectionState("Не подключено", "idle");
+    return;
   }
+  await refreshConnectionState();
 }
 
 async function saveDraft() {
@@ -127,6 +133,33 @@ function setStatus(text, ok=false) {
   const status = $("status");
   status.textContent = text;
   status.className = "status " + (ok ? "ok" : "bad");
+}
+
+function setConnectionState(text, state="idle") {
+  const node = $("connectionState");
+  node.textContent = text;
+  node.className = "connection-state" + (state === "idle" ? "" : " " + state);
+}
+
+function connectionMessage(error) {
+  const status = Number(error?.status || 0);
+  if (status === 401 || status === 403) return "Привязка недействительна. Сохрани новый Agent token.";
+  if (status >= 500) return "CRM временно недоступна.";
+  return "Не удалось подключиться к CRM.";
+}
+
+async function refreshConnectionState() {
+  setConnectionState("Проверяю подключение…", "checking");
+  const results = await Promise.allSettled([loadLeads(), loadToday()]);
+  const failed = results.find((item) => item.status === "rejected");
+  if (failed) {
+    const message = connectionMessage(failed.reason);
+    setConnectionState(message, "bad");
+    setStatus("CRM: " + message);
+    return false;
+  }
+  setConnectionState("Подключено", "ok");
+  return true;
 }
 
 async function sendLead() {
@@ -240,7 +273,11 @@ const REACTION_LABELS = {
 
 async function crmFetch(url, options={}) {
   const state = await chrome.storage.local.get({ agentToken: "" });
-  if (!state.agentToken) throw new Error("Сначала сохрани Agent token.");
+  if (!state.agentToken) {
+    const error = new Error("Сначала сохрани Agent token.");
+    error.status = 401;
+    throw error;
+  }
   const headers = {
     ...(options.headers || {}),
     "Authorization": "Bearer " + state.agentToken
@@ -249,7 +286,9 @@ async function crmFetch(url, options={}) {
   const response = await fetch(url, { ...options, headers });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || !data.ok) {
-    throw new Error(data.error || ("HTTP " + response.status));
+    const error = new Error(data.error || ("HTTP " + response.status));
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
@@ -405,6 +444,11 @@ function renderTimeline(timeline) {
     quoteBox.append(node);
   });
 
+  const outcome = timeline.outcome || {};
+  const allowedOutcomes = new Set(["paused", "won", "lost"]);
+  $("outcomeStatus").value = allowedOutcomes.has(outcome.status) ? outcome.status : "paused";
+  $("outcomeReason").value = String(outcome.reason || "").slice(0, 500);
+
   const activityBox = $("activityHistory");
   activityBox.textContent = "";
   const activities = [...(timeline.activities || [])].reverse().slice(0, 12);
@@ -503,6 +547,47 @@ async function addActivity() {
   } catch (error) {
     setStatus("Контакт не сохранён: " + (error.message || "ошибка"));
   }
+}
+
+async function saveOutcome() {
+  if (!activeRequestId) return setStatus("Сначала открой заявку.");
+  const status = $("outcomeStatus").value;
+  const reason = $("outcomeReason").value.trim().slice(0, 500);
+  if (!["paused", "won", "lost"].includes(status)) {
+    return setStatus("Некорректный результат заявки.");
+  }
+  const button = $("saveOutcome");
+  button.disabled = true;
+  try {
+    await crmFetch(CRM_OUTCOME_API, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: activeRequestId,
+        status,
+        reason
+      })
+    });
+    setStatus("Результат заявки сохранён.", true);
+    await loadToday();
+    await openTimeline(activeRequestId);
+  } catch (error) {
+    setStatus("Результат не сохранён: " + (error.message || "ошибка"));
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function clearPairing() {
+  await chrome.storage.local.remove("agentToken");
+  $("token").value = "";
+  activeRequestId = "";
+  $("activeRequestId").textContent = "";
+  $("timeline").hidden = true;
+  $("timelineEmpty").hidden = false;
+  renderLeads([]);
+  renderToday([]);
+  setConnectionState("Не подключено", "idle");
+  setStatus("Локальная привязка очищена.", true);
 }
 
 async function addTask() {
@@ -674,10 +759,16 @@ $("clearCandidates").addEventListener("click", async () => {
   renderCandidates([]);
 });
 $("saveToken").addEventListener("click", async () => {
-  await chrome.storage.local.set({ agentToken: $("token").value.trim() });
+  const token = $("token").value.trim();
+  if (!token) {
+    setConnectionState("Не подключено", "idle");
+    return setStatus("Вставь Agent token.");
+  }
+  await chrome.storage.local.set({ agentToken: token });
   setStatus("Токен сохранён локально.", true);
-  await loadLeads().catch((error) => setStatus("CRM: " + error.message));
+  await refreshConnectionState();
 });
+$("clearToken").addEventListener("click", clearPairing);
 $("refreshLeads").addEventListener("click", () => {
   loadLeads().catch((error) => setStatus("CRM: " + error.message));
 });
@@ -687,6 +778,7 @@ $("refreshToday").addEventListener("click", () => {
 $("addQuote").addEventListener("click", addQuote);
 $("addActivity").addEventListener("click", addActivity);
 $("addTask").addEventListener("click", addTask);
+$("saveOutcome").addEventListener("click", saveOutcome);
 $("exportLeads").addEventListener("click", exportLeads);
 $("send").addEventListener("click", sendLead);
 
@@ -696,4 +788,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-load();
+load().catch(() => {
+  setConnectionState("Не удалось загрузить Agent Desk.", "bad");
+  setStatus("Не удалось загрузить Agent Desk.");
+});
