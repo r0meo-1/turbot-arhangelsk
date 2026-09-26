@@ -23,6 +23,7 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -156,18 +157,22 @@ def render_text(post: dict[str, Any], group_id: int) -> str:
 
 def _db() -> sqlite3.Connection:
     db = sqlite3.connect(DEFAULT_DB)
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS vk_autopost_log (
-            campaign TEXT NOT NULL,
-            slug TEXT NOT NULL,
-            period_key TEXT NOT NULL,
-            post_id INTEGER,
-            published_at TEXT NOT NULL,
-            PRIMARY KEY (campaign, slug, period_key)
+    try:
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS vk_autopost_log (
+                campaign TEXT NOT NULL,
+                slug TEXT NOT NULL,
+                period_key TEXT NOT NULL,
+                post_id INTEGER,
+                published_at TEXT NOT NULL,
+                PRIMARY KEY (campaign, slug, period_key)
+            )
+            """
         )
-        """
-    )
+    except BaseException:
+        db.close()
+        raise
     return db
 
 
@@ -177,7 +182,7 @@ def period_key(now: datetime) -> str:
 
 
 def already_published(campaign: str, slug: str, key: str) -> bool:
-    with _db() as db:
+    with closing(_db()) as db, db:
         row = db.execute(
             "SELECT 1 FROM vk_autopost_log WHERE campaign=? AND slug=? AND period_key=?",
             (campaign, slug, key),
@@ -186,7 +191,7 @@ def already_published(campaign: str, slug: str, key: str) -> bool:
 
 
 def mark_published(campaign: str, slug: str, key: str, post_id: int | None, now: datetime) -> None:
-    with _db() as db:
+    with closing(_db()) as db, db:
         db.execute(
             """
             INSERT OR IGNORE INTO vk_autopost_log(
