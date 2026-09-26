@@ -1,0 +1,68 @@
+name: Workflow Engine OAuth Project Probe
+
+on:
+  workflow_run:
+    workflows: ["Deploy TurBot"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 5
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 2
+
+      - name: Decide whether probe is needed
+        id: changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          parent="$(git rev-parse "${TARGET_SHA}^")"
+          changed="$(git diff --name-only "$parent" "$TARGET_SHA")"
+
+          if grep -Eq '^(deploy/turbot-deploy\.sh|\.github/workflows/workflow-engine-oauth-project-probe\.yml)$' <<<"$changed"; then
+            echo "probe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "probe=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Load restricted deploy key
+        if: steps.changes.outputs.probe == 'true'
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Read privacy-safe OAuth project number
+        if: steps.changes.outputs.probe == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$DEPLOY_HOST"
+          project_number="$(
+            printf 'WORKFLOW_ENGINE_GMAIL_OAUTH_PROJECT_NUMBER_V1\n' |
+              ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new                 "root@$DEPLOY_HOST" true
+          )"
+          [[ "$project_number" =~ ^[0-9]{6,20}$ ]] || {
+            echo "OAuth project probe returned an invalid value" >&2
+            exit 1
+          }
+          echo "Workflow Engine Gmail OAuth project number: $project_number"
+
+      - name: Report no-op
+        if: steps.changes.outputs.probe != 'true'
+        run: echo "OAuth probe inputs unchanged; skipped."
