@@ -335,11 +335,69 @@ def create_blueprint(
         if not isinstance(method, str) or not isinstance(params, dict):
             return rpc_error(request_id, -32600, "Invalid Request")
 
-        if method == "notifications/initialized":
+        meta = params.get("_meta")
+        envelope_version = (
+            meta.get(_PROTOCOL_VERSION_META_KEY)
+            if isinstance(meta, dict)
+            else None
+        )
+        modern = method == "server/discover" or envelope_version is not None
+
+        if modern:
+            if envelope_version != _MODERN_PROTOCOL:
+                return rpc_error(
+                    request_id,
+                    -32022,
+                    "Unsupported protocol version",
+                    status=400,
+                )
+            if (
+                request.headers.get("MCP-Protocol-Version") != _MODERN_PROTOCOL
+                or request.headers.get("Mcp-Method") != method
+            ):
+                return rpc_error(
+                    request_id,
+                    -32020,
+                    "MCP standard header mismatch",
+                    status=400,
+                )
+            if method == "tools/call":
+                tool_name = params.get("name")
+                if (
+                    not isinstance(tool_name, str)
+                    or not tool_name
+                    or request.headers.get("Mcp-Name") != tool_name
+                ):
+                    return rpc_error(
+                        request_id,
+                        -32020,
+                        "MCP tool name header mismatch",
+                        status=400,
+                    )
+
+        if method == "server/discover":
+            return response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "result": _complete_result(
+                        {
+                            "supportedVersions": [_MODERN_PROTOCOL],
+                            "capabilities": {"tools": {"listChanged": False}},
+                            "instructions": (
+                                "Read-only TurBot VK connector. "
+                                "VK write tools are disabled."
+                            ),
+                        }
+                    ),
+                }
+            )
+
+        if method == "notifications/initialized" and not modern:
             return Response(status=204, headers={"Cache-Control": "no-store"})
-        if method == "ping":
+        if method == "ping" and not modern:
             return response({"jsonrpc": "2.0", "id": request_id, "result": {}})
-        if method == "initialize":
+        if method == "initialize" and not modern:
             requested = str(params.get("protocolVersion") or "")
             protocol = requested if requested in _SUPPORTED_PROTOCOLS else "2025-11-25"
             return response(
@@ -349,16 +407,17 @@ def create_blueprint(
                     "result": {
                         "protocolVersion": protocol,
                         "capabilities": {"tools": {"listChanged": False}},
-                        "serverInfo": {"name": "turbot-vk", "version": "0.1.0"},
+                        "serverInfo": dict(_SERVER_INFO),
                     },
                 }
             )
         if method == "tools/list":
+            result = {"tools": actions.tools()}
             return response(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": {"tools": actions.tools()},
+                    "result": _complete_result(result) if modern else result,
                 }
             )
         if method == "tools/call":
@@ -376,7 +435,7 @@ def create_blueprint(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
-                    "result": _tool_result(data),
+                    "result": _tool_result(data, modern=modern),
                 }
             )
         return rpc_error(request_id, -32601, "Method not found")
