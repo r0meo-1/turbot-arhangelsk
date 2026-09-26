@@ -205,6 +205,8 @@ async def ensure_watch_cycle(
 
     if (
         state is not None
+        and state["topic_name"]
+        == cfg["pubsub_topic"]
         and int(
             state["expiration_ms"]
         ) - now_ms
