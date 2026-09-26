@@ -63,6 +63,19 @@ CREATE TABLE IF NOT EXISTS destination_objects (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (task_id, destination)
 );
+
+CREATE TABLE IF NOT EXISTS delivery_intents (
+    task_id TEXT NOT NULL,
+    destination TEXT NOT NULL,
+    idempotency_marker TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'creating',
+    external_object_id TEXT,
+    last_synced_version INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (task_id, destination),
+    UNIQUE(destination, idempotency_marker)
+);
 """
 
 
@@ -128,13 +141,16 @@ def _linear_request_sync(
             )
 
             if not retryable or attempt == attempts - 1:
-                try:
-                    detail = exc.read().decode(
-                        "utf-8",
-                        errors="replace",
-                    )
-                except Exception:
-                    detail = ""
+                detail = ""
+
+                if exc.code == 403:
+                    try:
+                        detail = exc.read().decode(
+                            "utf-8",
+                            errors="replace",
+                        )
+                    except Exception:
+                        detail = ""
 
                 if (
                     exc.code == 403
@@ -149,13 +165,13 @@ def _linear_request_sync(
                     ) from exc
 
                 raise LinearError(
-                    f"Linear HTTP {exc.code}: {detail[:500]}"
+                    f"Linear HTTP {exc.code}"
                 ) from exc
 
         except urllib.error.URLError as exc:
             if attempt == attempts - 1:
                 raise LinearError(
-                    f"Linear network error: {exc}"
+                    "Linear network request failed"
                 ) from exc
 
         time.sleep(min(2 ** attempt, 15))
@@ -222,6 +238,38 @@ mutation WorkflowIssueUpdate(
 """
 
 
+FIND_ISSUE_BY_MARKER = """
+query WorkflowIssueByMarker(
+  $marker: String!
+) {
+  issues(
+    first: 2,
+    filter: {
+      description: {
+        contains: $marker
+      }
+    }
+  ) {
+    nodes {
+      id
+      identifier
+      title
+      description
+    }
+  }
+}
+"""
+
+
+def linear_task_marker(
+    task_id: str,
+) -> str:
+    return (
+        "workflow-engine-task:"
+        f"{task_id}"
+    )
+
+
 def task_description(
     *,
     task_id: str,
@@ -231,10 +279,14 @@ def task_description(
     due_date: str | None,
 ) -> str:
     due = due_date or "none"
+    marker = linear_task_marker(
+        task_id
+    )
 
     return (
         "Created by workflow-engine from validated canonical state.\n\n"
         f"- Task ID: `{task_id}`\n"
+        f"- Idempotency marker: `{marker}`\n"
         f"- Version: `{version}`\n"
         f"- Project: `{project}`\n"
         f"- Priority: `{priority}`\n"
@@ -375,6 +427,145 @@ async def _save_mapping(
             version,
         ),
     )
+
+
+async def _ensure_create_intent(
+    db: aiosqlite.Connection,
+    *,
+    task_id: str,
+    version: int,
+) -> str:
+    marker = linear_task_marker(
+        task_id
+    )
+
+    await db.execute(
+        """
+        INSERT INTO delivery_intents (
+            task_id,
+            destination,
+            idempotency_marker,
+            status,
+            last_synced_version,
+            updated_at
+        )
+        VALUES (
+            ?,
+            'linear',
+            ?,
+            'creating',
+            ?,
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT(task_id, destination)
+        DO UPDATE SET
+            idempotency_marker = excluded.idempotency_marker,
+            status = CASE
+                WHEN delivery_intents.external_object_id IS NULL
+                    THEN 'creating'
+                ELSE delivery_intents.status
+            END,
+            last_synced_version = MAX(
+                delivery_intents.last_synced_version,
+                excluded.last_synced_version
+            ),
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            task_id,
+            marker,
+            version,
+        ),
+    )
+
+    await db.commit()
+    return marker
+
+
+async def _resolve_create_intent(
+    db: aiosqlite.Connection,
+    *,
+    task_id: str,
+    external_object_id: str,
+    version: int,
+) -> None:
+    await db.execute(
+        """
+        UPDATE delivery_intents
+        SET
+            status = 'resolved',
+            external_object_id = ?,
+            last_synced_version = MAX(
+                last_synced_version,
+                ?
+            ),
+            last_error = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE task_id = ?
+          AND destination = 'linear'
+        """,
+        (
+            external_object_id,
+            version,
+            task_id,
+        ),
+    )
+
+
+async def _record_intent_error(
+    db: aiosqlite.Connection,
+    *,
+    task_id: str,
+    error: str,
+) -> None:
+    await db.execute(
+        """
+        UPDATE delivery_intents
+        SET
+            last_error = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE task_id = ?
+          AND destination = 'linear'
+        """,
+        (
+            error[:500],
+            task_id,
+        ),
+    )
+
+
+async def _find_issue_by_marker(
+    marker: str,
+) -> dict | None:
+    data = await linear_request(
+        FIND_ISSUE_BY_MARKER,
+        {
+            "marker": marker,
+        },
+    )
+
+    nodes = (
+        (data.get("issues") or {})
+        .get("nodes")
+        or []
+    )
+
+    matches = [
+        node
+        for node in nodes
+        if marker in (
+            node.get("description")
+            or ""
+        )
+    ]
+
+    if len(matches) > 1:
+        raise LinearError(
+            "multiple Linear issues match "
+            "the workflow idempotency marker"
+        )
+
+    return matches[0] if matches else None
 
 
 async def _mark_delivery(
@@ -573,33 +764,82 @@ async def sync_linear_live(
             due_date=due_date,
         )
 
+        create_path = (
+            external_id is None
+            or is_dryrun_mapping
+        )
+
         try:
-            if external_id is None or is_dryrun_mapping:
-                data = await linear_request(
-                    CREATE_ISSUE,
-                    {
-                        "teamId": LINEAR_TEAM_ID,
-                        "title": title,
-                        "description": description,
-                    },
+            if create_path:
+                marker = await _ensure_create_intent(
+                    db,
+                    task_id=task_id,
+                    version=version,
                 )
 
-                result = data.get("issueCreate") or {}
-                issue = result.get("issue") or {}
+                recovered = (
+                    await _find_issue_by_marker(
+                        marker
+                    )
+                )
 
-                if not result.get("success") or not issue.get("id"):
-                    raise LinearError(
-                        "issueCreate returned no issue id"
+                if recovered is not None:
+                    external_id = recovered["id"]
+
+                    log.info(
+                        "linear RECONCILE task=%s version=%s issue=%s",
+                        task_id,
+                        version,
+                        (
+                            recovered.get(
+                                "identifier"
+                            )
+                            or external_id
+                        ),
                     )
 
-                external_id = issue["id"]
+                else:
+                    data = await linear_request(
+                        CREATE_ISSUE,
+                        {
+                            "teamId": LINEAR_TEAM_ID,
+                            "title": title,
+                            "description": description,
+                        },
+                    )
 
-                log.info(
-                    "linear CREATE task=%s version=%s issue=%s",
-                    task_id,
-                    version,
-                    issue.get("identifier") or external_id,
-                )
+                    result = (
+                        data.get(
+                            "issueCreate"
+                        )
+                        or {}
+                    )
+                    issue = (
+                        result.get("issue")
+                        or {}
+                    )
+
+                    if (
+                        not result.get("success")
+                        or not issue.get("id")
+                    ):
+                        raise LinearError(
+                            "issueCreate returned no issue id"
+                        )
+
+                    external_id = issue["id"]
+
+                    log.info(
+                        "linear CREATE task=%s version=%s issue=%s",
+                        task_id,
+                        version,
+                        (
+                            issue.get(
+                                "identifier"
+                            )
+                            or external_id
+                        ),
+                    )
 
             else:
                 data = await linear_request(
@@ -611,8 +851,16 @@ async def sync_linear_live(
                     },
                 )
 
-                result = data.get("issueUpdate") or {}
-                issue = result.get("issue") or {}
+                result = (
+                    data.get(
+                        "issueUpdate"
+                    )
+                    or {}
+                )
+                issue = (
+                    result.get("issue")
+                    or {}
+                )
 
                 if not result.get("success"):
                     raise LinearError(
@@ -624,7 +872,10 @@ async def sync_linear_live(
                     task_id,
                     last_version,
                     version,
-                    issue.get("identifier") or external_id,
+                    (
+                        issue.get("identifier")
+                        or external_id
+                    ),
                 )
 
             await _save_mapping(
@@ -633,6 +884,14 @@ async def sync_linear_live(
                 external_object_id=external_id,
                 version=version,
             )
+
+            if create_path:
+                await _resolve_create_intent(
+                    db,
+                    task_id=task_id,
+                    external_object_id=external_id,
+                    version=version,
+                )
 
             await _mark_delivery(
                 db,
@@ -646,6 +905,13 @@ async def sync_linear_live(
             await db.commit()
 
         except LinearRegionBlocked as exc:
+            if create_path:
+                await _record_intent_error(
+                    db,
+                    task_id=task_id,
+                    error=str(exc),
+                )
+
             await _mark_delivery(
                 db,
                 event_id=event_id,
@@ -665,6 +931,13 @@ async def sync_linear_live(
             )
 
         except Exception as exc:
+            if create_path:
+                await _record_intent_error(
+                    db,
+                    task_id=task_id,
+                    error=str(exc),
+                )
+
             await _mark_delivery(
                 db,
                 event_id=event_id,
