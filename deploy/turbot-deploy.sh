@@ -265,6 +265,7 @@ workflow_bundle_revision_is_healthy() {
 deploy_workflow_engine_bundle() {
   local target_sha bundle stage source app wvenv db backup
   local new_package old_package had_package=0
+  local services_stopped=0 swap_started=0 deps_changed=0
 
   IFS= read -r target_sha || {
     echo "Missing Workflow Engine bundle commit SHA" >&2
@@ -375,11 +376,66 @@ PY
   done
 
   # Snapshot the exact installed dependency set before changing the shared
-  # virtualenv. If the new runtime later fails, rollback restores both code and
-  # Python packages instead of leaving old code on a new dependency graph.
+  # virtualenv. Arm rollback before the first mutating pip operation so a
+  # failed install/selftest/test cannot leave production on a half-updated
+  # dependency graph.
   "$wvenv/pip" freeze > "$backup/requirements.freeze"
 
-  # Validate the exact staged source before touching either running service.
+  rollback_workflow_bundle() {
+    local original_status=$?
+    echo "Workflow Engine deployment failed; restoring previous runtime" >&2
+    trap - ERR
+    set +e
+
+    if [[ "$services_stopped" == "1" ]]; then
+      systemctl stop workflow-delivery 2>/dev/null || true
+      systemctl stop workflow-engine 2>/dev/null || true
+    fi
+
+    if [[ "$swap_started" == "1" ]]; then
+      rm -rf "$app/workflow_engine"
+      if [[ -d "$old_package" ]]; then
+        mv "$old_package" "$app/workflow_engine"
+      elif [[ "$had_package" == "1" && -d "$backup/workflow_engine" ]]; then
+        cp -a "$backup/workflow_engine" "$app/workflow_engine"
+      fi
+
+      if [[ -f "$backup/requirements.txt" ]]; then
+        install -o root -g root -m 0644 "$backup/requirements.txt" "$app/requirements.txt"
+      else
+        rm -f "$app/requirements.txt"
+      fi
+
+      if [[ -f "$backup/README.md" ]]; then
+        install -o root -g root -m 0644 "$backup/README.md" "$app/README.md"
+      else
+        rm -f "$app/README.md"
+      fi
+
+      if [[ -f "$backup/deployed-revision" ]]; then
+        install -o root -g root -m 0644 "$backup/deployed-revision" "$app/.deployed-revision"
+      else
+        rm -f "$app/.deployed-revision"
+      fi
+    fi
+
+    if [[ "$deps_changed" == "1" && -s "$backup/requirements.freeze" ]]; then
+      if ! "$wvenv/pip" install --force-reinstall --requirement "$backup/requirements.freeze"; then
+        echo "WARNING: Workflow Engine dependency rollback was incomplete" >&2
+      fi
+    fi
+
+    if [[ "$services_stopped" == "1" ]]; then
+      systemctl start workflow-engine 2>/dev/null || true
+      systemctl start workflow-delivery 2>/dev/null || true
+    fi
+
+    set -e
+    return "$original_status"
+  }
+  trap rollback_workflow_bundle ERR
+
+  deps_changed=1
   "$wvenv/pip" install --requirement "$source/requirements.txt"
   PYTHONPATH="$source" "$wvenv/python" -m compileall -q "$source/workflow_engine"
   PYTHONPATH="$source" "$wvenv/python" -m workflow_engine.main selftest
@@ -410,51 +466,11 @@ PY
   cp -a "$source/workflow_engine" "$new_package"
   chown -R root:root "$new_package"
 
-  rollback_workflow_bundle() {
-    echo "Workflow Engine deployment failed; restoring previous runtime" >&2
-    trap - ERR
-    systemctl stop workflow-delivery 2>/dev/null || true
-    systemctl stop workflow-engine 2>/dev/null || true
-
-    rm -rf "$app/workflow_engine"
-    if [[ -d "$old_package" ]]; then
-      mv "$old_package" "$app/workflow_engine"
-    elif [[ "$had_package" == "1" && -d "$backup/workflow_engine" ]]; then
-      cp -a "$backup/workflow_engine" "$app/workflow_engine"
-    fi
-
-    if [[ -f "$backup/requirements.txt" ]]; then
-      install -o root -g root -m 0644 "$backup/requirements.txt" "$app/requirements.txt"
-    else
-      rm -f "$app/requirements.txt"
-    fi
-
-    if [[ -f "$backup/README.md" ]]; then
-      install -o root -g root -m 0644 "$backup/README.md" "$app/README.md"
-    else
-      rm -f "$app/README.md"
-    fi
-
-    if [[ -f "$backup/deployed-revision" ]]; then
-      install -o root -g root -m 0644 "$backup/deployed-revision" "$app/.deployed-revision"
-    else
-      rm -f "$app/.deployed-revision"
-    fi
-
-    if [[ -s "$backup/requirements.freeze" ]]; then
-      if ! "$wvenv/pip" install --force-reinstall --requirement "$backup/requirements.freeze"; then
-        echo "WARNING: Workflow Engine dependency rollback was incomplete" >&2
-      fi
-    fi
-
-    systemctl start workflow-engine 2>/dev/null || true
-    systemctl start workflow-delivery 2>/dev/null || true
-  }
-  trap rollback_workflow_bundle ERR
-
+  services_stopped=1
   systemctl stop workflow-delivery
   systemctl stop workflow-engine
 
+  swap_started=1
   if [[ -d "$app/workflow_engine" ]]; then
     mv "$app/workflow_engine" "$old_package"
   fi
