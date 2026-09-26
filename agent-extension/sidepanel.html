@@ -12,7 +12,7 @@
       <strong>TurBot Agent Desk</strong>
       <small>бесплатный пульт турагента</small>
     </div>
-    <span class="badge">MVP</span>
+    <span class="badge" id="versionBadge">v…</span>
   </header>
 
   <main>
@@ -105,7 +105,7 @@
                 <option value="lost">Потеряно</option>
               </select>
             </label>
-            <label>Причина<input id="outcomeReason" placeholder="дорого / забронировано"></label>
+            <label>Причина<input id="outcomeReason" maxlength="500" placeholder="дорого / забронировано"></label>
           </div>
           <button id="saveOutcome" class="secondary">Сохранить результат</button>
         </details>
@@ -153,7 +153,11 @@
         <label>Agent token
           <input id="token" type="password" autocomplete="off" placeholder="вставляется один раз">
         </label>
-        <button id="saveToken" class="secondary">Сохранить токен локально</button>
+        <div class="connection-actions">
+          <button id="saveToken" class="secondary">Сохранить токен локально</button>
+          <button id="clearToken" class="secondary danger">Очистить привязку</button>
+        </div>
+        <p id="connectionState" class="connection-state" aria-live="polite">Не подключено</p>
         <p class="hint">Токен хранится только в chrome.storage.local и не попадает в GitHub.</p>
       </details>
     </section>
