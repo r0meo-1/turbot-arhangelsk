@@ -3,8 +3,17 @@ from pathlib import Path
 import pytest
 
 from workflow_engine.db import Repository, SCHEMA
-from workflow_engine.gmail_source import GmailBatch, GmailSource
-from workflow_engine.main import settings, source_cycle
+from workflow_engine.gmail_source import (
+    GmailBatch,
+    GmailSource,
+    GmailWatch,
+)
+from workflow_engine.main import (
+    ensure_watch_cycle,
+    notification_cycle,
+    settings,
+    source_cycle,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,12 +120,22 @@ class _FakeUsers:
     def __init__(self):
         self.history_api = _FakeHistory()
         self.messages_api = _FakeMessages()
+        self.watch_calls = []
 
     def history(self):
         return self.history_api
 
     def messages(self):
         return self.messages_api
+
+    def watch(self, **kwargs):
+        self.watch_calls.append(
+            kwargs
+        )
+        return _Request({
+            "historyId": "300",
+            "expiration": "9999999999999",
+        })
 
     def getProfile(self, **kwargs):
         assert kwargs == {"userId": "me"}
@@ -150,14 +169,56 @@ def test_runtime_defaults_are_explicit(monkeypatch):
         "GMAIL_TOKEN_FILE",
         "GMAIL_QUERY",
         "POLL_INTERVAL_SECONDS",
+        "GMAIL_INGEST_MODE",
+        "GMAIL_NOTIFICATION_POLL_SECONDS",
+        "GMAIL_PUBSUB_TOPIC",
+        "GMAIL_PUBSUB_BIND",
+        "GMAIL_PUBSUB_PORT",
+        "GMAIL_PUBSUB_PATH",
+        "GMAIL_PUBSUB_AUDIENCE",
+        "GMAIL_PUBSUB_SERVICE_ACCOUNT",
+        "GMAIL_WATCH_CHECK_SECONDS",
+        "GMAIL_WATCH_RENEW_BEFORE_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
 
     cfg = settings()
     assert cfg["source"] == "auto"
+    assert cfg["gmail_ingest"] == "poll"
     assert cfg["query"] == "newer_than:2d"
     assert cfg["poll"] == 30
+    assert cfg["notification_poll"] == 1
+    assert cfg["pubsub_bind"] == "127.0.0.1"
+    assert cfg["pubsub_port"] == 8091
+    assert cfg["pubsub_path"] == "/gmail/pubsub"
+    assert cfg["watch_check"] == 3600
+    assert cfg["watch_renew_before"] == 86400
     assert cfg["token"] == "/etc/workflow-engine/token.json"
+
+
+def test_gmail_users_watch_uses_topic_and_validates_result():
+    source = _source_with_fake_service()
+
+    watch = source._start_watch_sync(
+        "projects/test/topics/gmail"
+    )
+
+    assert watch == GmailWatch(
+        history_id="300",
+        expiration_ms=9999999999999,
+    )
+    calls = (
+        source.service.users_api
+        .watch_calls
+    )
+    assert calls == [{
+        "userId": "me",
+        "body": {
+            "topicName": (
+                "projects/test/topics/gmail"
+            ),
+        },
+    }]
 
 
 def test_gmail_history_sync_pages_and_deduplicates():
@@ -243,8 +304,215 @@ async def test_gmail_checkpoint_is_monotonic(tmp_path):
             await repo.gmail_history_id()
             == "101"
         )
+
+        await repo.record_gmail_watch(
+            topic_name=(
+                "projects/test/topics/gmail"
+            ),
+            history_id="101",
+            expiration_ms=9999999999999,
+        )
+        watch = (
+            await repo.gmail_watch_state()
+        )
+        assert watch["history_id"] == "101"
+
+        assert (
+            await repo.record_gmail_notification(
+                pubsub_message_id="m-1",
+                history_id="102",
+            )
+        )
+        assert not (
+            await repo.record_gmail_notification(
+                pubsub_message_id="m-2",
+                history_id="102",
+            )
+        )
+
+        pending = (
+            await repo.pending_gmail_notification()
+        )
+        assert pending[
+            "history_id"
+        ] == "102"
+
+        assert (
+            await repo.mark_gmail_notifications_through(
+                "102"
+            )
+            == 1
+        )
+        assert (
+            await repo.pending_gmail_notification()
+            is None
+        )
     finally:
         await repo.close()
+
+
+@pytest.mark.asyncio
+async def test_watch_cycle_persists_state_and_enqueues_catchup():
+    class RepoStub:
+        def __init__(self):
+            self.watch = None
+            self.notifications = []
+
+        async def gmail_watch_state(self):
+            return self.watch
+
+        async def record_gmail_watch(
+            self,
+            **kwargs,
+        ):
+            self.watch = kwargs
+
+        async def record_gmail_notification(
+            self,
+            **kwargs,
+        ):
+            self.notifications.append(
+                kwargs
+            )
+            return True
+
+    class SourceStub:
+        def __init__(self):
+            self.calls = []
+
+        async def start_watch(
+            self,
+            topic_name,
+        ):
+            self.calls.append(
+                topic_name
+            )
+            return GmailWatch(
+                history_id="500",
+                expiration_ms=200000,
+            )
+
+    cfg = {
+        "pubsub_topic": (
+            "projects/test/topics/gmail"
+        ),
+        "watch_renew_before": 60,
+    }
+    repo = RepoStub()
+    source = SourceStub()
+
+    assert await ensure_watch_cycle(
+        source,
+        repo,
+        cfg,
+        now_ms=100000,
+    )
+
+    assert source.calls == [
+        "projects/test/topics/gmail"
+    ]
+    assert repo.watch[
+        "history_id"
+    ] == "500"
+    assert repo.notifications == [{
+        "pubsub_message_id": (
+            "watch:500:200000"
+        ),
+        "history_id": "500",
+    }]
+
+    repo.watch = {
+        "expiration_ms": 300000,
+    }
+
+    assert not await ensure_watch_cycle(
+        source,
+        repo,
+        cfg,
+        now_ms=100000,
+    )
+    assert len(source.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_notification_cycle_marks_only_after_sync_success():
+    class RepoStub:
+        def __init__(self):
+            self.checkpoint = "100"
+            self.marked = []
+
+        async def pending_gmail_notification(self):
+            return {
+                "history_id": "101",
+            }
+
+        async def gmail_history_id(self):
+            return self.checkpoint
+
+        async def advance_gmail_history_id(
+            self,
+            history_id,
+        ):
+            self.checkpoint = history_id
+            return True
+
+        async def mark_gmail_notifications_through(
+            self,
+            history_id,
+        ):
+            self.marked.append(
+                history_id
+            )
+            return 1
+
+    class SourceStub:
+        async def fetch(
+            self,
+            start_history_id=None,
+        ):
+            assert start_history_id == "100"
+            return GmailBatch(
+                messages=["message"],
+                next_history_id="101",
+                mode="history",
+            )
+
+    class WorkingEngine:
+        async def process(self, message):
+            assert message == "message"
+            return True
+
+    class FailingEngine:
+        async def process(self, message):
+            raise RuntimeError("boom")
+
+    repo = RepoStub()
+    source = SourceStub()
+
+    with pytest.raises(
+        RuntimeError,
+        match="boom",
+    ):
+        await notification_cycle(
+            source,
+            FailingEngine(),
+            repo,
+        )
+
+    assert repo.marked == []
+    assert repo.checkpoint == "100"
+
+    result = await notification_cycle(
+        source,
+        WorkingEngine(),
+        repo,
+    )
+
+    assert repo.checkpoint == "101"
+    assert repo.marked == ["101"]
+    assert result[
+        "notifications_marked"
+    ] == 1
 
 
 @pytest.mark.asyncio
@@ -345,7 +613,10 @@ def test_sqlite_contract_has_message_and_outbox_idempotency():
 
     assert "UNIQUE(source, external_id)" in SCHEMA
     assert "gmail_mailbox" in SCHEMA
+    assert "gmail_watch" in SCHEMA
+    assert "gmail_notification" in SCHEMA
     assert "history_id TEXT NOT NULL" in SCHEMA
+    assert "pubsub_message_id TEXT NOT NULL UNIQUE" in SCHEMA
     assert "dedupe_key TEXT NOT NULL UNIQUE" in SCHEMA
     assert "event_key TEXT NOT NULL UNIQUE" in SCHEMA
     assert "BEGIN IMMEDIATE" in db_source
