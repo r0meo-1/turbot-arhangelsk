@@ -42,8 +42,9 @@ or any write action.
 
 ## Protocol
 
-The endpoint implements the stateless JSON-RPC subset needed for the
-2025-11-25 MCP tool flow:
+The endpoint supports both protocol eras used by the current MCP SDK:
+
+Legacy 2025 flow:
 
 - `initialize`
 - `notifications/initialized`
@@ -51,9 +52,21 @@ The endpoint implements the stateless JSON-RPC subset needed for the
 - `tools/list`
 - `tools/call`
 
-The connector is intentionally versioned as `turbot-vk 0.1.0`. Modern
-2026-protocol negotiation and Streamable HTTP session features are a separate
-follow-up before claiming broad client compatibility.
+Modern `2026-07-28` read/tool flow:
+
+- `server/discover`
+- per-request `_meta` protocol-version envelope;
+- `MCP-Protocol-Version` and `Mcp-Method` header validation;
+- exact `Mcp-Name` validation for `tools/call`;
+- required `resultType=complete` wire discriminator;
+- server identity under `_meta["io.modelcontextprotocol/serverInfo"]`.
+
+The modern endpoint is intentionally stateless and JSON-response-only. It does
+not yet implement `subscriptions/listen`, SSE notifications, resources,
+prompts or multi-round input-required flows. None are needed by the current
+read-only VK tools.
+
+The connector identifies itself as `turbot-vk 0.2.0`.
 
 ## Local fixture check
 
@@ -97,8 +110,9 @@ and a tool call looks like:
 3. Verify missing/wrong connector authorization returns HTTP 401.
 4. Verify `tools/list` exposes only the four read-only tools.
 5. Exercise the read tools with the existing server-side VK credentials.
-6. Do not add write tools until explicit per-action authorization,
-   idempotency/audit semantics and current MCP transport compatibility are
-   implemented and accepted.
+6. Verify both legacy `initialize` and modern `server/discover` fixture
+   flows before enabling a client.
+7. Do not add write tools until explicit per-action authorization and
+   idempotency/audit semantics are implemented and accepted.
 
 No production write is enabled by this slice.
