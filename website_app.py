@@ -36,6 +36,7 @@ from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import travel_crm_store as _travel_crm_store
 from shared.telegram_webapp import MiniAppValidationError, validate_init_data
 from shared.vk_miniapp import validate_launch_params as validate_vk_launch_params
+from shared.vk_connector import create_blueprint as create_vk_connector_blueprint
 from shared.runtime_metrics import lead_delivery_snapshot
 from shared.utc_time import utc_now_naive as _utc_now_naive
 from shared.travel_crm import (
@@ -57,6 +58,13 @@ from shared.manager_web import manager_web
 
 if "manager_web" not in app.blueprints:
     app.register_blueprint(manager_web)
+if "vk_connector" not in app.blueprints:
+    app.register_blueprint(
+        create_vk_connector_blueprint(
+            _bot._db_cursor,
+            token_getter=lambda: os.getenv("VK_CONNECTOR_TOKEN", ""),
+        )
+    )
 logger = logging.getLogger("turbot.website")
 
 
