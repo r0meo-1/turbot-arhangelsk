@@ -88,6 +88,61 @@ External provisioning still required before watch mode can be activated:
 6. verify one real notification, duplicate delivery, restart recovery and
    watch renewal without recording mail bodies or OAuth/token material.
 
+## Production Pub/Sub provisioning helper
+
+The Google Cloud half of watch mode is reproducible with
+`tools/workflow-engine/provision_gmail_pubsub.sh`. It is intentionally
+separate from runtime deployment and does **not** switch production from polling.
+
+Required input is deliberately non-secret:
+
+```bash
+export GCP_PROJECT_ID='<google-cloud-project-id>'
+export GMAIL_PUBSUB_PUSH_ENDPOINT='https://<public-host>/gmail/pubsub'
+
+bash tools/workflow-engine/provision_gmail_pubsub.sh
+```
+
+Optional names can be overridden with
+`GMAIL_PUBSUB_TOPIC_ID`, `GMAIL_PUBSUB_SUBSCRIPTION_ID`,
+`GMAIL_PUBSUB_PUSH_SERVICE_ACCOUNT_ID`, `GMAIL_PUBSUB_PATH` and
+`GMAIL_PUBSUB_AUDIENCE`.
+
+The helper:
+
+- enables the Gmail and Pub/Sub APIs;
+- creates the user-managed push service account without creating any key;
+- grants Pub/Sub's service agent OIDC token-minting permission on only that
+  push service account;
+- creates the topic if absent and grants
+  `gmail-api-push@system.gserviceaccount.com` only
+  `roles/pubsub.publisher` on it;
+- creates or repairs the authenticated push configuration;
+- refuses to repoint an existing subscription to a different topic;
+- prints only the non-secret Workflow Engine settings required by watch mode.
+
+The caller still needs permission to enable APIs, manage Pub/Sub/IAM, and
+attach the push service account. No broad project role is added by the helper.
+
+Before watch mode, expose only the receiver path through the existing HTTPS
+reverse proxy. A minimal Nginx location is:
+
+```nginx
+location = /gmail/pubsub {
+    proxy_pass http://127.0.0.1:8091/gmail/pubsub;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto https;
+    client_max_body_size 64k;
+    limit_except POST { deny all; }
+}
+```
+
+An unauthenticated POST to the public endpoint must be rejected with HTTP 401.
+Only after that check and Google Cloud provisioning should the printed values
+be installed in `/etc/workflow-engine/env` and
+`GMAIL_INGEST_MODE=watch` enabled.
+
 ## Linear delivery crash safety
 
 Live Linear creation has an explicit reconciliation protocol:
