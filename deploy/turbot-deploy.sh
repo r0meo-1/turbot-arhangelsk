@@ -59,6 +59,8 @@ PY
 install_systemd_units() {
   local main_unit="$repo/deploy/turbot.service"
   local vk_unit="$repo/deploy/vk-turbot.service"
+  local autopost_service="$repo/deploy/vk-autopost.service"
+  local autopost_timer="$repo/deploy/vk-autopost.timer"
 
   if [[ ! -f "$main_unit" || ! -f "$vk_unit" ]]; then
     echo "TurBot systemd unit files are missing from the deployed revision" >&2
@@ -67,7 +69,18 @@ install_systemd_units() {
 
   install -o root -g root -m 0644 "$main_unit" /etc/systemd/system/turbot.service
   install -o root -g root -m 0644 "$vk_unit" /etc/systemd/system/vk-turbot.service
-  systemctl daemon-reload
+
+  if [[ -f "$autopost_service" && -f "$autopost_timer" ]]; then
+    install -o root -g root -m 0644 "$autopost_service" /etc/systemd/system/vk-autopost.service
+    install -o root -g root -m 0644 "$autopost_timer" /etc/systemd/system/vk-autopost.timer
+    systemctl daemon-reload
+    systemctl enable --now vk-autopost.timer >/dev/null
+  else
+    # Rollback to a revision without autopost must also remove the scheduler.
+    systemctl disable --now vk-autopost.timer >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/vk-autopost.service /etc/systemd/system/vk-autopost.timer
+    systemctl daemon-reload
+  fi
 }
 
 
