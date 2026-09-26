@@ -42,8 +42,8 @@ jobs:
         run: |
           grep -q 'WORKFLOW_ENGINE_DEPLOY_BUNDLE_V1' deploy/turbot-deploy.sh
           grep -q 'WORKFLOW_ENGINE_DEPLOY_BUNDLE_V1' deploy/send-workflow-engine-bundle.sh
-          grep -q 'workflow-engine.main selftest' deploy/turbot-deploy.sh
-          grep -q 'workflow-engine.main status' deploy/turbot-deploy.sh
+          grep -q 'workflow_engine.main selftest' deploy/turbot-deploy.sh
+          grep -q 'workflow_engine.main status' deploy/turbot-deploy.sh
 
       - name: Check Python syntax
         run: |
