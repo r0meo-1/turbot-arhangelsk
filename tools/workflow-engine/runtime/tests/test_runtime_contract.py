@@ -422,6 +422,9 @@ async def test_watch_cycle_persists_state_and_enqueues_catchup():
     }]
 
     repo.watch = {
+        "topic_name": (
+            "projects/test/topics/gmail"
+        ),
         "expiration_ms": 300000,
     }
 
@@ -432,6 +435,21 @@ async def test_watch_cycle_persists_state_and_enqueues_catchup():
         now_ms=100000,
     )
     assert len(source.calls) == 1
+
+    repo.watch = {
+        "topic_name": (
+            "projects/test/topics/old"
+        ),
+        "expiration_ms": 300000,
+    }
+
+    assert await ensure_watch_cycle(
+        source,
+        repo,
+        cfg,
+        now_ms=100000,
+    )
+    assert len(source.calls) == 2
 
 
 @pytest.mark.asyncio
