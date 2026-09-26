@@ -13,7 +13,11 @@ def test_mobile_shell_serves_only_allowlisted_assets():
         assert response.headers["Cache-Control"] == "no-store"
         assert "connect-src 'self'" in response.headers["Content-Security-Policy"]
         assert "script-src 'self' https://telegram.org" in response.headers["Content-Security-Policy"]
-        assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
+        csp = response.headers["Content-Security-Policy"]
+        assert "frame-ancestors https://vk.com https://vk.ru https://m.vk.com https://m.vk.ru" in csp
+        assert "frame-ancestors 'none'" not in csp
+        assert "https://*.vk.com" not in csp
+        assert "https://*.vk.ru" not in csp
     for path in ["/manager/.env", "/manager/owner-session.js", "/manager/live-validation.js", "/manager/website_app.py", "/manager/../bot.py"]:
         assert client.get(path).status_code == 404
 
