@@ -566,24 +566,52 @@ import os
 import re
 import stat
 
-path = "/etc/workflow-engine/token.json"
+import shlex
+from pathlib import Path
+
 if not hasattr(os, "O_NOFOLLOW"):
     raise SystemExit("OAuth project probe requires O_NOFOLLOW")
 
-fd = os.open(
-    path,
-    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-)
+def read_regular_text(path):
+    fd = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode):
+            raise SystemExit("Workflow Engine probe path is not a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
+            fd = -1
+            return handle.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+token_path = "/etc/workflow-engine/token.json"
+env_path = "/etc/workflow-engine/env"
 try:
-    mode = os.fstat(fd).st_mode
-    if not stat.S_ISREG(mode):
-        raise SystemExit("Workflow Engine Gmail token path is not a regular file")
-    with os.fdopen(fd, "r", encoding="utf-8") as handle:
-        fd = -1
-        payload = json.load(handle)
-finally:
-    if fd >= 0:
-        os.close(fd)
+    env_text = read_regular_text(env_path)
+except FileNotFoundError:
+    env_text = ""
+
+for raw_line in env_text.splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, raw_value = line.split("=", 1)
+    if key.strip() != "GMAIL_TOKEN_FILE":
+        continue
+    values = shlex.split(raw_value, posix=True)
+    if len(values) != 1 or not values[0]:
+        raise SystemExit("GMAIL_TOKEN_FILE has an invalid value")
+    token_path = values[0]
+
+token = Path(token_path)
+if not token.is_absolute():
+    token = Path("/opt/workflow-engine") / token
+
+payload = json.loads(read_regular_text(str(token)))
 
 client_id = str(payload.get("client_id") or "").strip()
 match = re.fullmatch(
