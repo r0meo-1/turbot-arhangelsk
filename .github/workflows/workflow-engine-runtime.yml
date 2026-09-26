@@ -1,0 +1,69 @@
+name: Workflow Engine Runtime
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "tools/workflow-engine/runtime/**"
+      - ".github/workflows/workflow-engine-runtime.yml"
+  pull_request:
+    paths:
+      - "tools/workflow-engine/runtime/**"
+      - ".github/workflows/workflow-engine-runtime.yml"
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workflow-engine-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r tools/workflow-engine/runtime/requirements.txt
+
+      - name: Compile runtime package
+        run: |
+          python -m compileall -q tools/workflow-engine/runtime/workflow_engine
+
+      - name: Run built-in selftest
+        env:
+          PYTHONPATH: tools/workflow-engine/runtime
+        run: |
+          python -m workflow_engine.main selftest
+
+      - name: Run runtime contract tests
+        env:
+          PYTHONPATH: tools/workflow-engine/runtime
+        run: |
+          python -m pytest -q tools/workflow-engine/runtime/tests
+
+      - name: Reject obvious runtime state or secrets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if find tools/workflow-engine/runtime -type f \
+            | grep -Ei '(^|/)(\.env|token\.json|credentials.*\.json|.*\.sqlite|.*\.db|.*\.bak)$'; then
+            echo "Forbidden runtime state file committed" >&2
+            exit 1
+          fi
+
+          if grep -RInE --exclude='PROVENANCE.txt' -- \
+            '-----BEGIN .*PRIVATE KEY-----|AIza[0-9A-Za-z_-]{20,}|github_pat_[0-9A-Za-z_]{20,}|ghp_[0-9A-Za-z]{20,}|sk-[0-9A-Za-z_-]{20,}|[0-9]{5,}:[A-Za-z0-9_-]{20,}|1//[A-Za-z0-9._-]{20,}' \
+            tools/workflow-engine/runtime; then
+            echo "Possible embedded secret detected" >&2
+            exit 1
+          fi
