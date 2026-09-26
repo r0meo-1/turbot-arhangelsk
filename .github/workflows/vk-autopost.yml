@@ -41,7 +41,7 @@ jobs:
         env:
           VK_TOKEN: ${{ secrets.VK_TOKEN }}
           VK_OWNER_ID: ${{ vars.VK_OWNER_ID }}
-          VK_AUTOPOST_ENABLED: ${{ vars.VK_AUTOPOST_ENABLED }}
+          # Activated 2026-09-26 by explicit campaign instruction.\n          # plan.enabled remains the repository kill switch.\n          VK_AUTOPOST_ENABLED: "true"
         run: python vk_autopost.py run
 
   manual:
