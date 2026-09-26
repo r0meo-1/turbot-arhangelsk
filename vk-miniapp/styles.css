@@ -77,3 +77,8 @@ dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
 
 .legal-links { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 12px; margin:2px 8px 0; font-size:12px; }
 .legal-links a { color:var(--muted); text-underline-offset:3px; }
+
+.manager-entry { display: grid; gap: 10px; margin-bottom: 16px; }
+.manager-entry h2, .manager-entry p { margin: 0; }
+.manager-entry .hint { margin-top: 4px; }
+.manager-link { display: block; margin: 0; text-align: center; text-decoration: none; }

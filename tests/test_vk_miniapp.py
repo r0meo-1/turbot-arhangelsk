@@ -175,3 +175,29 @@ def test_vk_blueprint_security_headers():
     assert "default-src 'self'" in csp
     assert "object-src 'none'" in csp
     assert "frame-ancestors" not in csp
+
+
+def test_manager_entry_is_hidden_until_signed_probe_succeeds():
+    app = Flask(__name__)
+    app.register_blueprint(
+        create_blueprint(
+            lambda *_: None,
+            lambda: (SECRET, "123", 999),
+        )
+    )
+    client = app.test_client()
+
+    index = client.get("/vk/miniapp/").get_data(as_text=True)
+    script = client.get("/vk/miniapp/app.js").get_data(as_text=True)
+
+    assert 'id="manager-entry"' in index
+    assert 'id="manager-link"' in index
+    assert 'manager-entry" class="card manager-entry" hidden' in index
+    assert "/agent-extension/crm/summary" in script
+    assert "'X-VK-Launch-Params': effectiveLaunchParams" in script
+    assert "managerLink.href = '/manager/?' + effectiveLaunchParams" in script
+    assert "managerEntry.hidden = false" in script
+    assert "hasSignedLaunch" in script
+    for forbidden in ("MANAGER_VK_IDS", "LEAD_OWNER_VK_ID", "VK_MINI_APP_SECRET"):
+        assert forbidden not in index
+        assert forbidden not in script
