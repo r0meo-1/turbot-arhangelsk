@@ -38,6 +38,7 @@ esac
 gcloud services enable \
   pubsub.googleapis.com \
   gmail.googleapis.com \
+  iam.googleapis.com \
   --project "$project" \
   --quiet
 
@@ -54,6 +55,30 @@ push_sa_email="${push_sa_id}@${project}.iam.gserviceaccount.com"
 pubsub_service_agent="service-${project_number}@gcp-sa-pubsub.iam.gserviceaccount.com"
 topic_resource="projects/${project}/topics/${topic_id}"
 
+wait_for_service_account() {
+  local email="$1"
+
+  for _ in {1..30}; do
+    if gcloud iam service-accounts describe "$email" \
+      --project "$project" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Service account did not become visible: $email" >&2
+  return 1
+}
+
+# Ensure the Pub/Sub service agent exists before granting it token-minting
+# permission. API enablement can be eventually consistent.
+gcloud beta services identity create \
+  --service=pubsub.googleapis.com \
+  --project "$project" \
+  --quiet >/dev/null
+
+wait_for_service_account "$pubsub_service_agent"
+
 if ! gcloud iam service-accounts describe "$push_sa_email" \
   --project "$project" >/dev/null 2>&1; then
   gcloud iam service-accounts create "$push_sa_id" \
@@ -61,6 +86,8 @@ if ! gcloud iam service-accounts describe "$push_sa_email" \
     --display-name="Workflow Engine Pub/Sub push" \
     --quiet
 fi
+
+wait_for_service_account "$push_sa_email"
 
 # Least-privilege grant: Pub/Sub's service agent may mint OIDC tokens as only
 # this user-managed push identity, rather than receiving project-wide access.
