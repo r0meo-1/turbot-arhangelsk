@@ -374,6 +374,11 @@ PY
     fi
   done
 
+  # Snapshot the exact installed dependency set before changing the shared
+  # virtualenv. If the new runtime later fails, rollback restores both code and
+  # Python packages instead of leaving old code on a new dependency graph.
+  "$wvenv/pip" freeze > "$backup/requirements.freeze"
+
   # Validate the exact staged source before touching either running service.
   "$wvenv/pip" install --requirement "$source/requirements.txt"
   PYTHONPATH="$source" "$wvenv/python" -m compileall -q "$source/workflow_engine"
@@ -434,6 +439,12 @@ PY
       install -o root -g root -m 0644 "$backup/deployed-revision" "$app/.deployed-revision"
     else
       rm -f "$app/.deployed-revision"
+    fi
+
+    if [[ -s "$backup/requirements.freeze" ]]; then
+      if ! "$wvenv/pip" install --force-reinstall --requirement "$backup/requirements.freeze"; then
+        echo "WARNING: Workflow Engine dependency rollback was incomplete" >&2
+      fi
     fi
 
     systemctl start workflow-engine 2>/dev/null || true
