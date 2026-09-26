@@ -128,6 +128,18 @@ class VKReadActions:
                 },
             },
             {
+                "name": "vk.get_post_stats",
+                "description": "Read aggregate public counters for one configured-community post.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "post_id": {"type": "integer", "minimum": 1, "maximum": 2147483647}
+                    },
+                    "required": ["post_id"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "vk.get_campaign_attribution",
                 "description": "Return privacy-minimized VK funnel counts by source tag.",
                 "inputSchema": {
@@ -166,6 +178,8 @@ class VKReadActions:
             return self.get_group(arguments)
         if name == "vk.list_posts":
             return self.list_posts(arguments)
+        if name == "vk.get_post_stats":
+            return self.get_post_stats(arguments)
         if name == "vk.get_campaign_attribution":
             return self.get_campaign_attribution(arguments)
         if name == "vk.get_leads_by_source":
@@ -219,6 +233,48 @@ class VKReadActions:
             "count": int(raw.get("count") or 0) if isinstance(raw, dict) else 0,
             "offset": offset,
             "items": [_post_item(item) for item in items if isinstance(item, dict)],
+        }
+
+    def get_post_stats(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if set(arguments) != {"post_id"}:
+            raise VKConnectorError(
+                "vk.get_post_stats requires only post_id",
+                code=-32602,
+            )
+        post_id = _positive_int(
+            arguments,
+            "post_id",
+            default=0,
+            maximum=2_147_483_647,
+        )
+        if post_id < 1:
+            raise VKConnectorError("post_id must be at least 1", code=-32602)
+
+        token, owner_id, _group_id = self.resolve_identity()
+        raw = self.vk_call(
+            "wall.getById",
+            token,
+            posts=f"{owner_id}_{post_id}",
+            extended=0,
+        )
+        items = raw.get("items", []) if isinstance(raw, dict) else raw
+        post = items[0] if isinstance(items, list) and items else None
+        if not isinstance(post, dict):
+            raise VKConnectorError("VK post not found", code=-32044)
+
+        actual_owner = int(post.get("owner_id") or 0)
+        actual_id = int(post.get("id") or 0)
+        if actual_owner != owner_id or actual_id != post_id:
+            raise VKConnectorError("VK post identity mismatch", code=-32044)
+
+        return {
+            "post_id": actual_id,
+            "owner_id": actual_owner,
+            "date": int(post.get("date") or 0),
+            "comments": int((post.get("comments") or {}).get("count") or 0),
+            "likes": int((post.get("likes") or {}).get("count") or 0),
+            "reposts": int((post.get("reposts") or {}).get("count") or 0),
+            "views": int((post.get("views") or {}).get("count") or 0),
         }
 
     def _vk_snapshot(self, arguments: dict[str, Any]) -> tuple[int, dict[str, Any]]:
