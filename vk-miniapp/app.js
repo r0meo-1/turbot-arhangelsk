@@ -312,11 +312,11 @@
     $('save').disabled = false;
   }
 
-  await probeManagerEntry();
-
   if (inVK && bridge) {
     bridge.send('VKWebAppInit').catch(() => {
       $('welcome').textContent = 'Соберём параметры поездки. Если приложение работает некорректно, откройте его заново.';
     });
   }
+
+  probeManagerEntry();
 })();
