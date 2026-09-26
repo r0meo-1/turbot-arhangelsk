@@ -28,6 +28,29 @@ CREATE TABLE IF NOT EXISTS gmail_mailbox (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS gmail_watch (
+    mailbox TEXT PRIMARY KEY,
+    topic_name TEXT NOT NULL,
+    history_id TEXT NOT NULL,
+    expiration_ms INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gmail_notification (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mailbox TEXT NOT NULL,
+    pubsub_message_id TEXT NOT NULL UNIQUE,
+    history_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending', 'done')),
+    received_at TEXT NOT NULL,
+    processed_at TEXT,
+    UNIQUE(mailbox, history_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gmail_notification_pending
+ON gmail_notification(status, id);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     dedupe_key TEXT NOT NULL UNIQUE,
@@ -76,6 +99,17 @@ ON outbox(status, created_at);
 """
 
 
+def _history_value(value):
+    raw = str(value).strip()
+
+    if not raw.isdigit():
+        raise ValueError(
+            "Gmail history_id must be decimal"
+        )
+
+    return str(int(raw))
+
+
 class Repository:
     def __init__(self, path: str):
         self.path = path
@@ -118,12 +152,9 @@ class Repository:
         history_id,
         mailbox="me",
     ):
-        value = str(history_id).strip()
-
-        if not value.isdigit():
-            raise ValueError(
-                "Gmail history_id must be decimal"
-            )
+        value = _history_value(
+            history_id
+        )
 
         async with self.lock:
             await self.db.execute(
@@ -175,6 +206,192 @@ class Repository:
             except Exception:
                 await self.db.rollback()
                 raise
+
+    async def gmail_watch_state(
+        self,
+        mailbox="me",
+    ):
+        cur = await self.db.execute(
+            """
+            SELECT
+                mailbox,
+                topic_name,
+                history_id,
+                expiration_ms,
+                updated_at
+            FROM gmail_watch
+            WHERE mailbox = ?
+            """,
+            (mailbox,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def record_gmail_watch(
+        self,
+        *,
+        topic_name,
+        history_id,
+        expiration_ms,
+        mailbox="me",
+    ):
+        history = _history_value(
+            history_id
+        )
+        expiration = int(
+            expiration_ms
+        )
+
+        if expiration <= 0:
+            raise ValueError(
+                "Gmail watch expiration must be positive"
+            )
+
+        async with self.lock:
+            await self.db.execute(
+                """
+                INSERT INTO gmail_watch (
+                    mailbox,
+                    topic_name,
+                    history_id,
+                    expiration_ms,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(mailbox)
+                DO UPDATE SET
+                    topic_name = excluded.topic_name,
+                    history_id = excluded.history_id,
+                    expiration_ms = excluded.expiration_ms,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    mailbox,
+                    str(topic_name),
+                    history,
+                    expiration,
+                    utcnow().isoformat(),
+                ),
+            )
+            await self.db.commit()
+
+    async def record_gmail_notification(
+        self,
+        *,
+        pubsub_message_id,
+        history_id,
+        mailbox="me",
+    ):
+        message_id = str(
+            pubsub_message_id
+        ).strip()
+        history = _history_value(
+            history_id
+        )
+
+        if (
+            not message_id
+            or len(message_id) > 256
+        ):
+            raise ValueError(
+                "Invalid Pub/Sub message id"
+            )
+
+        async with self.lock:
+            await self.db.execute(
+                """
+                INSERT OR IGNORE INTO gmail_notification (
+                    mailbox,
+                    pubsub_message_id,
+                    history_id,
+                    received_at
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    mailbox,
+                    message_id,
+                    history,
+                    utcnow().isoformat(),
+                ),
+            )
+
+            cur = await self.db.execute(
+                "SELECT changes()"
+            )
+            inserted = (
+                await cur.fetchone()
+            )[0] == 1
+
+            await self.db.commit()
+            return inserted
+
+    async def pending_gmail_notification(
+        self,
+        mailbox="me",
+    ):
+        cur = await self.db.execute(
+            """
+            SELECT *
+            FROM gmail_notification
+            WHERE mailbox = ?
+              AND status = 'pending'
+            ORDER BY
+                LENGTH(history_id) DESC,
+                history_id DESC,
+                id DESC
+            LIMIT 1
+            """,
+            (mailbox,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def mark_gmail_notifications_through(
+        self,
+        history_id,
+        mailbox="me",
+    ):
+        history = _history_value(
+            history_id
+        )
+        now = utcnow().isoformat()
+
+        async with self.lock:
+            await self.db.execute(
+                """
+                UPDATE gmail_notification
+                SET
+                    status = 'done',
+                    processed_at = ?
+                WHERE mailbox = ?
+                  AND status = 'pending'
+                  AND (
+                    LENGTH(history_id) < LENGTH(?)
+                    OR (
+                        LENGTH(history_id) = LENGTH(?)
+                        AND history_id <= ?
+                    )
+                  )
+                """,
+                (
+                    now,
+                    mailbox,
+                    history,
+                    history,
+                    history,
+                ),
+            )
+
+            cur = await self.db.execute(
+                "SELECT changes()"
+            )
+            changed = (
+                await cur.fetchone()
+            )[0]
+
+            await self.db.commit()
+            return changed
 
     async def ingest(
         self,
@@ -495,6 +712,8 @@ class Repository:
         for table in (
             "messages",
             "gmail_mailbox",
+            "gmail_watch",
+            "gmail_notification",
             "tasks",
             "review_queue",
             "outbox",
@@ -515,6 +734,18 @@ class Repository:
         )
 
         result["outbox_pending"] = (
+            await cur.fetchone()
+        )[0]
+
+        cur = await self.db.execute(
+            """
+            SELECT COUNT(*)
+            FROM gmail_notification
+            WHERE status = 'pending'
+            """
+        )
+
+        result["gmail_notification_pending"] = (
             await cur.fetchone()
         )[0]
 
