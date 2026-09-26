@@ -34,14 +34,18 @@ The plan lives in `marketing/vk_autopost_plan.json` and uses
 | Dream | Thursday 12:30 |
 | Battle | Sunday 18:30 |
 
-The workflow is intentionally disabled at two levels until the launch gate is
-ready:
+The organic schedule was activated on **2026-09-26** after the attribution gate
+had passed. The first active slot is **Sunday, 2026-09-27 at 18:30
+Europe/Moscow**.
+
+The repository plan remains the emergency kill switch:
 
 1. `marketing/vk_autopost_plan.json` must have `"enabled": true`.
-2. GitHub repository variable `VK_AUTOPOST_ENABLED` must be `true`.
+2. The scheduled workflow passes `VK_AUTOPOST_ENABLED=true` explicitly.
 
-This prevents organic promotion from accidentally getting ahead of the
-campaign smoke/release gates.
+To pause scheduled publishing, set the plan back to `"enabled": false`.
+Manual publication still requires the explicit `--force` path and is separate
+from the recurring schedule.
 
 ## Secrets and variables
 
