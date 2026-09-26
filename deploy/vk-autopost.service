@@ -1,0 +1,28 @@
+[Unit]
+Description=TurBot VK marketing autopost
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=turbot
+Group=turbot
+WorkingDirectory=/opt/turbot
+Environment=HOME=/opt/turbot
+EnvironmentFile=/opt/turbot/.env
+Environment=VK_AUTOPOST_ENABLED=true
+ExecStart=/opt/turbot/venv/bin/python /opt/turbot/vk_autopost.py run
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/turbot
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
