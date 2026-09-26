@@ -21,6 +21,10 @@ _MAX_BODY_BYTES = 64 * 1024
 _MAX_POST_TEXT = 4000
 _SOURCE_TAG = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SUPPORTED_PROTOCOLS = {"2025-03-26", "2025-06-18", "2025-11-25"}
+_MODERN_PROTOCOL = "2026-07-28"
+_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
+_SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
+_SERVER_INFO = {"name": "turbot-vk", "version": "0.2.0"}
 _WRITE_TOOLS = {
     "vk.create_post",
     "vk.schedule_post",
@@ -69,13 +73,26 @@ def _post_item(item: Any) -> dict[str, Any]:
     }
 
 
-def _tool_result(data: dict[str, Any]) -> dict[str, Any]:
-    text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+def _server_meta() -> dict[str, Any]:
+    return {_SERVER_INFO_META_KEY: dict(_SERVER_INFO)}
+
+
+def _complete_result(data: dict[str, Any]) -> dict[str, Any]:
     return {
+        "resultType": "complete",
+        **data,
+        "_meta": _server_meta(),
+    }
+
+
+def _tool_result(data: dict[str, Any], *, modern: bool = False) -> dict[str, Any]:
+    text = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    result = {
         "content": [{"type": "text", "text": text}],
         "structuredContent": data,
         "isError": False,
     }
+    return _complete_result(result) if modern else result
 
 
 class VKReadActions:
