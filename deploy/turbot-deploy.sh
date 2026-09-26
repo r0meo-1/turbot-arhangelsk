@@ -554,6 +554,52 @@ apply_stdin_config() {
     exit $?
   fi
 
+  if [[ "$marker" == "WORKFLOW_ENGINE_GMAIL_OAUTH_PROJECT_NUMBER_V1" ]]; then
+    if IFS= read -r _unexpected; then
+      echo "Unexpected OAuth project probe payload" >&2
+      return 1
+    fi
+
+    python3 - <<'PY'
+import json
+import os
+import re
+import stat
+
+path = "/etc/workflow-engine/token.json"
+if not hasattr(os, "O_NOFOLLOW"):
+    raise SystemExit("OAuth project probe requires O_NOFOLLOW")
+
+fd = os.open(
+    path,
+    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+)
+try:
+    mode = os.fstat(fd).st_mode
+    if not stat.S_ISREG(mode):
+        raise SystemExit("Workflow Engine Gmail token path is not a regular file")
+    with os.fdopen(fd, "r", encoding="utf-8") as handle:
+        fd = -1
+        payload = json.load(handle)
+finally:
+    if fd >= 0:
+        os.close(fd)
+
+client_id = str(payload.get("client_id") or "").strip()
+match = re.fullmatch(
+    r"([0-9]{6,20})-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com",
+    client_id,
+)
+if match is None:
+    raise SystemExit("Workflow Engine Gmail OAuth client_id has an unexpected format")
+
+# Privacy-safe output: project number only. Never print client_id, token fields,
+# client_secret, refresh token, access token or email contents.
+print(match.group(1))
+PY
+    exit $?
+  fi
+
   if [[ "$marker" == "TURBOT_BACKUP_DRILL_V1" ]]; then
     if IFS= read -r _unexpected; then
       echo "Unexpected backup drill marker payload" >&2
