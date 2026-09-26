@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from flask import Response, jsonify, request
+import requests
 
 import bot as _bot
 from shared import mdt as mdt_shared
@@ -57,6 +58,75 @@ from shared.manager_web import manager_web
 if "manager_web" not in app.blueprints:
     app.register_blueprint(manager_web)
 logger = logging.getLogger("turbot.website")
+
+
+_GMAIL_PUBSUB_RELAY_URL = os.getenv(
+    "GMAIL_PUBSUB_RELAY_URL",
+    "http://127.0.0.1:8091/gmail/pubsub",
+).strip()
+_GMAIL_PUBSUB_RELAY_MAX_BYTES = 64 * 1024
+_GMAIL_PUBSUB_RELAY_TIMEOUT_SECONDS = 5
+
+
+if "gmail_pubsub_relay" not in app.view_functions:
+
+    @app.post("/gmail/pubsub")
+    def gmail_pubsub_relay() -> Response:
+        """Forward authenticated Pub/Sub pushes to the loopback-only receiver.
+
+        TurBot never verifies the OIDC token or processes Gmail notification
+        content. The Workflow Engine receiver remains the sole auth/persistence
+        boundary. This route only exposes that loopback listener through the
+        already deployed HTTPS virtual host.
+        """
+        if request.query_string:
+            return Response(status=400)
+
+        authorization = request.headers.get("Authorization", "").strip()
+        if not authorization.startswith("Bearer ") or not authorization[7:].strip():
+            return Response(status=401, headers={"Cache-Control": "no-store"})
+
+        if request.mimetype != "application/json":
+            return Response(status=415, headers={"Cache-Control": "no-store"})
+
+        content_length = request.content_length
+        if content_length is not None and content_length > _GMAIL_PUBSUB_RELAY_MAX_BYTES:
+            return Response(status=413, headers={"Cache-Control": "no-store"})
+
+        body = request.get_data(cache=False)
+        if len(body) > _GMAIL_PUBSUB_RELAY_MAX_BYTES:
+            return Response(status=413, headers={"Cache-Control": "no-store"})
+
+        try:
+            upstream = requests.post(
+                _GMAIL_PUBSUB_RELAY_URL,
+                data=body,
+                headers={
+                    "Authorization": authorization,
+                    "Content-Type": "application/json",
+                },
+                timeout=_GMAIL_PUBSUB_RELAY_TIMEOUT_SECONDS,
+                allow_redirects=False,
+            )
+        except requests.RequestException:
+            logger.warning("Workflow Engine Gmail Pub/Sub receiver unavailable")
+            return Response(
+                status=503,
+                headers={"Cache-Control": "no-store", "Retry-After": "5"},
+            )
+
+        if upstream.status_code not in {204, 400, 401, 403}:
+            logger.warning(
+                "Workflow Engine Gmail Pub/Sub receiver returned status %s",
+                upstream.status_code,
+            )
+            return Response(status=502, headers={"Cache-Control": "no-store"})
+
+        return Response(
+            status=upstream.status_code,
+            headers={"Cache-Control": "no-store"},
+        )
+
 
 _WEBSITE_SOURCE = os.getenv("WEBSITE_MDT_SOURCE", "Website Aprel Tour").strip() or "Website Aprel Tour"
 _ALLOWED_ORIGINS = {

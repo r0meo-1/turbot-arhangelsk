@@ -300,8 +300,8 @@ deploy_workflow_engine_bundle() {
   bundle="$(mktemp)"
   stage="$(mktemp -d)"
   backup="$(mktemp -d)"
-  new_package="$app/.workflow_engine.new.$"
-  old_package="$app/.workflow_engine.old.$"
+  new_package="$app/.workflow_engine.new.${BASHPID}"
+  old_package="$app/.workflow_engine.old.${BASHPID}"
 
   cleanup_workflow_bundle() {
     rm -f "$bundle"
