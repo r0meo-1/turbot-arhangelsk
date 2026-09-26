@@ -57,3 +57,11 @@ textarea{min-height:48px;resize:vertical}
 .quote-card strong{font-size:12px}.quote-card small{color:#7f93aa;font-size:10px}
 .activity-title{display:block;margin-top:10px;font-size:11px}
 .activity-row{margin:0;padding:7px 0;border-bottom:1px solid #202d40;color:#aebdd0;font-size:10px;line-height:1.4}
+
+.connection-actions{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:8px}
+.connection-actions button{width:100%}
+.danger{color:#ffb4b4}
+.connection-state{margin:8px 0 0;font-size:11px;color:#8094ad}
+.connection-state.ok{color:#77e3a1}
+.connection-state.bad{color:#ff9d9d}
+.connection-state.checking{color:#ffd37a}
