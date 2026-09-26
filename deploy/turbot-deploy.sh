@@ -251,6 +251,248 @@ PY
   return 1
 }
 
+workflow_bundle_revision_is_healthy() {
+  local target_sha="$1" current_sha
+  local app="/opt/workflow-engine"
+
+  [[ -f "$app/.deployed-revision" ]] || return 1
+  IFS= read -r current_sha < "$app/.deployed-revision" || return 1
+  [[ "$current_sha" == "$target_sha" ]] || return 1
+  systemctl is-active --quiet workflow-engine     && systemctl is-active --quiet workflow-delivery
+}
+
+
+deploy_workflow_engine_bundle() {
+  local target_sha bundle stage source app wvenv db backup
+  local new_package old_package had_package=0
+
+  IFS= read -r target_sha || {
+    echo "Missing Workflow Engine bundle commit SHA" >&2
+    return 1
+  }
+  if [[ ! "$target_sha" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Invalid Workflow Engine bundle commit SHA" >&2
+    return 1
+  fi
+
+  app="/opt/workflow-engine"
+  wvenv="$app/.venv/bin"
+  db="/var/lib/workflow-engine/workflow.db"
+
+  if [[ ! -x "$wvenv/python" || ! -x "$wvenv/pip" ]]; then
+    echo "Workflow Engine virtualenv is missing" >&2
+    return 1
+  fi
+
+  # Drain the archive even on an idempotent repeat so the sender never sees
+  # a broken pipe while writing the verified payload.
+  if workflow_bundle_revision_is_healthy "$target_sha"; then
+    cat >/dev/null
+    (
+      cd "$app"
+      "$wvenv/python" -m workflow_engine.main status >/dev/null
+    )
+    echo "Workflow Engine runtime already runs: $target_sha"
+    return 0
+  fi
+
+  bundle="$(mktemp)"
+  stage="$(mktemp -d)"
+  backup="$(mktemp -d)"
+  new_package="$app/.workflow_engine.new.$"
+  old_package="$app/.workflow_engine.old.$"
+
+  cleanup_workflow_bundle() {
+    rm -f "$bundle"
+    rm -rf "$stage" "$backup" "$new_package" "$old_package"
+  }
+  trap cleanup_workflow_bundle RETURN
+
+  cat > "$bundle"
+
+  "$wvenv/python" - "$bundle" "$stage" <<'PY'
+import tarfile
+from pathlib import Path, PurePosixPath
+import sys
+
+archive = Path(sys.argv[1])
+stage = Path(sys.argv[2])
+prefix = ("tools", "workflow-engine", "runtime")
+forbidden = {
+    ".env",
+    "token.json",
+    "credentials.json",
+    "workflow.db",
+}
+
+with tarfile.open(archive, "r:gz") as tar:
+    members = tar.getmembers()
+    if not members:
+        raise SystemExit("Workflow Engine bundle is empty")
+
+    for member in members:
+        path = PurePosixPath(member.name)
+        if (
+            path.is_absolute()
+            or ".." in path.parts
+            or tuple(path.parts[:3]) != prefix
+        ):
+            raise SystemExit(
+                f"Unsafe Workflow Engine bundle path: {member.name!r}"
+            )
+
+        if (
+            member.issym()
+            or member.islnk()
+            or member.isdev()
+            or member.isfifo()
+        ):
+            raise SystemExit(
+                f"Unsupported Workflow Engine bundle member: {member.name!r}"
+            )
+
+        name = path.name.lower()
+        if (
+            name in forbidden
+            or name.endswith(".sqlite")
+            or name.endswith(".db")
+            or name.endswith(".bak")
+        ):
+            raise SystemExit(
+                f"Runtime state is forbidden in deploy bundle: {member.name!r}"
+            )
+
+    tar.extractall(stage, filter="data")
+PY
+
+  source="$stage/tools/workflow-engine/runtime"
+
+  for required in     "$source/workflow_engine/main.py"     "$source/workflow_engine/db.py"     "$source/workflow_engine/delivery_worker.py"     "$source/requirements.txt"; do
+    if [[ ! -f "$required" ]]; then
+      echo "Workflow Engine deploy source is incomplete: $required" >&2
+      return 1
+    fi
+  done
+
+  # Snapshot the exact installed dependency set before changing the shared
+  # virtualenv. If the new runtime later fails, rollback restores both code and
+  # Python packages instead of leaving old code on a new dependency graph.
+  "$wvenv/pip" freeze > "$backup/requirements.freeze"
+
+  # Validate the exact staged source before touching either running service.
+  "$wvenv/pip" install --requirement "$source/requirements.txt"
+  PYTHONPATH="$source" "$wvenv/python" -m compileall -q "$source/workflow_engine"
+  PYTHONPATH="$source" "$wvenv/python" -m workflow_engine.main selftest
+  PYTHONPATH="$source" "$wvenv/python" -m pytest -q "$source/tests"
+
+  if [[ -f "$db" ]]; then
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+      echo "Workflow Engine deploy requires sqlite3 for an online backup" >&2
+      return 1
+    fi
+
+    sqlite3 "$db" ".backup '$backup/workflow.db'"
+    if [[ "$(sqlite3 "$backup/workflow.db" 'PRAGMA integrity_check;')" != "ok" ]]; then
+      echo "Workflow Engine SQLite backup integrity check failed" >&2
+      return 1
+    fi
+  fi
+
+  if [[ -d "$app/workflow_engine" ]]; then
+    cp -a "$app/workflow_engine" "$backup/workflow_engine"
+    had_package=1
+  fi
+  [[ ! -f "$app/requirements.txt" ]] || cp -a "$app/requirements.txt" "$backup/requirements.txt"
+  [[ ! -f "$app/README.md" ]] || cp -a "$app/README.md" "$backup/README.md"
+  [[ ! -f "$app/.deployed-revision" ]] || cp -a "$app/.deployed-revision" "$backup/deployed-revision"
+
+  rm -rf "$new_package" "$old_package"
+  cp -a "$source/workflow_engine" "$new_package"
+  chown -R root:root "$new_package"
+
+  rollback_workflow_bundle() {
+    echo "Workflow Engine deployment failed; restoring previous runtime" >&2
+    trap - ERR
+    systemctl stop workflow-delivery 2>/dev/null || true
+    systemctl stop workflow-engine 2>/dev/null || true
+
+    rm -rf "$app/workflow_engine"
+    if [[ -d "$old_package" ]]; then
+      mv "$old_package" "$app/workflow_engine"
+    elif [[ "$had_package" == "1" && -d "$backup/workflow_engine" ]]; then
+      cp -a "$backup/workflow_engine" "$app/workflow_engine"
+    fi
+
+    if [[ -f "$backup/requirements.txt" ]]; then
+      install -o root -g root -m 0644 "$backup/requirements.txt" "$app/requirements.txt"
+    else
+      rm -f "$app/requirements.txt"
+    fi
+
+    if [[ -f "$backup/README.md" ]]; then
+      install -o root -g root -m 0644 "$backup/README.md" "$app/README.md"
+    else
+      rm -f "$app/README.md"
+    fi
+
+    if [[ -f "$backup/deployed-revision" ]]; then
+      install -o root -g root -m 0644 "$backup/deployed-revision" "$app/.deployed-revision"
+    else
+      rm -f "$app/.deployed-revision"
+    fi
+
+    if [[ -s "$backup/requirements.freeze" ]]; then
+      if ! "$wvenv/pip" install --force-reinstall --requirement "$backup/requirements.freeze"; then
+        echo "WARNING: Workflow Engine dependency rollback was incomplete" >&2
+      fi
+    fi
+
+    systemctl start workflow-engine 2>/dev/null || true
+    systemctl start workflow-delivery 2>/dev/null || true
+  }
+  trap rollback_workflow_bundle ERR
+
+  systemctl stop workflow-delivery
+  systemctl stop workflow-engine
+
+  if [[ -d "$app/workflow_engine" ]]; then
+    mv "$app/workflow_engine" "$old_package"
+  fi
+  mv "$new_package" "$app/workflow_engine"
+
+  install -o root -g root -m 0644 "$source/requirements.txt" "$app/requirements.txt"
+  if [[ -f "$source/README.md" ]]; then
+    install -o root -g root -m 0644 "$source/README.md" "$app/README.md"
+  fi
+  printf '%s\n' "$target_sha" > "$app/.deployed-revision"
+  chown root:root "$app/.deployed-revision"
+  chmod 0644 "$app/.deployed-revision"
+
+  systemctl start workflow-engine
+  systemctl start workflow-delivery
+
+  for _ in {1..15}; do
+    if systemctl is-active --quiet workflow-engine       && systemctl is-active --quiet workflow-delivery       && (
+        cd "$app"
+        "$wvenv/python" -m workflow_engine.main status >/dev/null
+      ); then
+      trap - ERR
+      rm -rf "$old_package"
+      echo "Workflow Engine runtime deployed: $target_sha"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Workflow Engine services did not become healthy" >&2
+  systemctl status workflow-engine --no-pager -l || true
+  systemctl status workflow-delivery --no-pager -l || true
+  journalctl -u workflow-engine -n 80 --no-pager || true
+  journalctl -u workflow-delivery -n 80 --no-pager || true
+  return 1
+}
+
+
 ensure_backup_and_restore_drill() {
   if ! command -v sqlite3 >/dev/null 2>&1; then
     echo "Production backup safety requires sqlite3" >&2
@@ -288,6 +530,11 @@ apply_stdin_config() {
 
   if [[ "$marker" == "TURBOT_DEPLOY_BUNDLE_V1" ]]; then
     deploy_bundle
+    exit $?
+  fi
+
+  if [[ "$marker" == "WORKFLOW_ENGINE_DEPLOY_BUNDLE_V1" ]]; then
+    deploy_workflow_engine_bundle
     exit $?
   fi
 

@@ -71,6 +71,54 @@ rm -f /tmp/record_linear_mapping.sh
 
 This preserves the same dedupe invariant as live API delivery: one canonical task maps to one Linear issue.
 
+## Deploy the complete canonical runtime
+
+Production runtime deployment is isolated from TurBot even though it reuses the
+same restricted SSH entrypoint.
+
+The GitHub workflow `.github/workflows/workflow-engine-deploy.yml` runs only
+after a successful **Deploy TurBot** workflow (or by manual dispatch). For an
+automatic run it first checks whether the triggering commit changed the
+Workflow Engine runtime or its deployment protocol.
+
+The sender refuses a dirty checkout, a moving branch and any SHA that is no
+longer the current `main` revision. The server accepts only the dedicated
+`WORKFLOW_ENGINE_DEPLOY_BUNDLE_V1` protocol.
+
+Server-side deployment:
+
+1. accepts only files under `tools/workflow-engine/runtime/`;
+2. rejects symlinks, device files, path traversal, SQLite/runtime state,
+   `.env`, OAuth token files and backups;
+3. installs runtime dependencies;
+4. compiles the staged package and runs the built-in selftest + runtime tests
+   before either service is stopped;
+5. creates an online SQLite backup and verifies `PRAGMA integrity_check`;
+6. swaps only `/opt/workflow-engine/workflow_engine`,
+   `requirements.txt`, `README.md` and the non-secret deployed revision;
+7. never edits `/etc/workflow-engine/env`, OAuth token JSON or
+   `/var/lib/workflow-engine/workflow.db`;
+8. restarts only `workflow-engine` and `workflow-delivery`;
+9. verifies both services and `python -m workflow_engine.main status`;
+10. restores the previous runtime package on failure. The SQLite database is
+    deliberately not rolled back because schema changes are additive and a
+    database rollback could discard messages accepted during recovery.
+
+`GMAIL_INGEST_MODE=poll` remains the runtime default. Deploying code that
+contains the Pub/Sub receiver therefore does **not** enable watch mode until
+the protected server configuration and external Google Cloud resources are
+explicitly provisioned.
+
+Manual exact-SHA sender usage from a clean tested checkout:
+
+```bash
+export DEPLOY_HOST=<production-host>
+bash deploy/send-workflow-engine-bundle.sh "$(git rev-parse HEAD)"
+```
+
+The restricted deploy key remains server-controlled; no Workflow Engine secret
+is transmitted in the bundle.
+
 ## Deploy the version-aware delivery worker
 
 The deployment helper backs up the current worker, validates Python syntax, replaces the worker from `main`, restarts the service, and leaves `LINEAR_MODE` unchanged.

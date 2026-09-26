@@ -1,0 +1,92 @@
+name: Deploy Workflow Engine Runtime
+
+on:
+  workflow_run:
+    workflows: ["Deploy TurBot"]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: workflow-engine-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main'
+      )
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 20
+    env:
+      TARGET_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 2
+
+      - name: Decide whether runtime deploy is needed
+        id: changes
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          parent="$(git rev-parse "${TARGET_SHA}^")"
+          changed="$(git diff --name-only "$parent" "$TARGET_SHA")"
+
+          if grep -Eq '^(tools/workflow-engine/runtime/|deploy/turbot-deploy\.sh$|deploy/send-workflow-engine-bundle\.sh$|\.github/workflows/workflow-engine-deploy\.yml$)' <<<"$changed"; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v6
+        if: steps.changes.outputs.deploy == 'true'
+        with:
+          python-version: "3.14"
+
+      - name: Validate exact runtime source
+        if: steps.changes.outputs.deploy == 'true'
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r tools/workflow-engine/runtime/requirements.txt
+          python -m compileall -q tools/workflow-engine/runtime/workflow_engine
+          PYTHONPATH=tools/workflow-engine/runtime \
+            python -m workflow_engine.main selftest
+          PYTHONPATH=tools/workflow-engine/runtime \
+            python -m pytest -q tools/workflow-engine/runtime/tests
+
+      - name: Load restricted deploy key
+        if: steps.changes.outputs.deploy == 'true'
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Deploy exact runtime bundle
+        if: steps.changes.outputs.deploy == 'true'
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "$DEPLOY_HOST"
+          bash deploy/send-workflow-engine-bundle.sh "$TARGET_SHA"
+
+      - name: Report no-op
+        if: steps.changes.outputs.deploy != 'true'
+        run: echo "Workflow Engine runtime unchanged; production deploy skipped."
