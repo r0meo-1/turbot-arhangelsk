@@ -34,23 +34,26 @@ The plan lives in `marketing/vk_autopost_plan.json` and uses
 | Dream | Thursday 12:30 |
 | Battle | Sunday 18:30 |
 
-The workflow is intentionally disabled at two levels until the launch gate is
-ready:
+The organic schedule was activated on **2026-09-26** after the attribution gate
+had passed. The first active slot is **Sunday, 2026-09-27 at 18:30
+Europe/Moscow**.
+
+Production scheduling runs on the existing TurBot VPS through
+`vk-autopost.timer` + `vk-autopost.service`. The service reads the existing
+protected `/opt/turbot/.env` and therefore reuses the same server-side
+`VK_ACCESS_TOKEN` / `VK_GROUP_ID` already used by the VK bot. No VK token is
+copied into GitHub Actions.
+
+The repository plan remains the emergency kill switch:
 
 1. `marketing/vk_autopost_plan.json` must have `"enabled": true`.
-2. GitHub repository variable `VK_AUTOPOST_ENABLED` must be `true`.
+2. The production oneshot service sets `VK_AUTOPOST_ENABLED=true`.
 
-This prevents organic promotion from accidentally getting ahead of the
-campaign smoke/release gates.
+To pause scheduled publishing, set the plan back to `"enabled": false` and
+deploy. Manual publication still requires the explicit `--force` path and is
+separate from the recurring schedule.
 
-## Secrets and variables
-
-The scheduled workflow reuses the existing settings used by VK tooling:
-
-- GitHub secret `VK_TOKEN`
-- GitHub variable `VK_OWNER_ID`
-
-No token is written to the repository or logs.
+The GitHub workflow is preview/manual-only. It is not the production scheduler.
 
 ## Manual QA
 
@@ -72,12 +75,13 @@ VK_TOKEN=... VK_OWNER_ID=-240310110 \
 
 Two layers are used:
 
-1. a local SQLite ledger keyed by `campaign + slug + ISO week`;
+1. a persistent VPS SQLite ledger keyed by `campaign + slug + ISO week`;
 2. a `wall.get` check for the same `ref=<source_tag>` marker on the VK wall
    during the current ISO week.
 
-The second layer is the durable one for GitHub Actions, whose runners are
-ephemeral. A retried scheduled job therefore does not become a duplicate post.
+The VK-wall check remains the external durable fallback if the local ledger is
+lost or a deployment is retried. A repeated timer activation therefore does not
+become a duplicate post.
 
 ## Visuals
 

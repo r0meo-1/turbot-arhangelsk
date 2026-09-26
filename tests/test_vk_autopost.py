@@ -130,3 +130,11 @@ def test_campaign_date_gate():
         {"start_date": "2026-11-01", "end_date": "2027-02-28"},
         datetime(2026, 10, 31).date(),
     )
+
+
+def test_production_plan_is_activated_for_first_sunday_slot():
+    plan = ap.load_plan(ap.DEFAULT_PLAN)
+    assert plan["enabled"] is True
+    assert plan["start_date"] == "2026-09-27"
+    assert ap._campaign_active(plan, datetime(2026, 9, 27).date())
+    assert not ap._campaign_active(plan, datetime(2026, 9, 26).date())

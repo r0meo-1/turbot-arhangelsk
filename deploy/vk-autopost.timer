@@ -1,0 +1,14 @@
+[Unit]
+Description=Schedule TurBot VK marketing autopost
+
+[Timer]
+# Europe/Moscow is UTC+3 year-round.
+OnCalendar=Tue *-*-* 16:30:00 UTC
+OnCalendar=Thu *-*-* 09:30:00 UTC
+OnCalendar=Sun *-*-* 15:30:00 UTC
+Persistent=true
+AccuracySec=1min
+Unit=vk-autopost.service
+
+[Install]
+WantedBy=timers.target
