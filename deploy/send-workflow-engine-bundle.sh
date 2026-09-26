@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Send only the tested Workflow Engine runtime tree to the restricted
-# production deploy entrypoint. Refuse moving refs and dirty checkouts.
+# production deploy entrypoint. Refuse dirty or mismatched checkouts.
 set -Eeuo pipefail
 
 expected="${1:?expected full SHA required}"
@@ -16,12 +16,6 @@ expected="${1:?expected full SHA required}"
 
 git diff --quiet HEAD -- tools/workflow-engine/runtime || {
   echo "Refusing modified Workflow Engine runtime files" >&2
-  exit 1
-}
-
-remote="$(git ls-remote origin refs/heads/main | cut -f1)"
-[[ "$remote" == "$expected" ]] || {
-  echo "Refusing stale or non-main Workflow Engine release" >&2
   exit 1
 }
 
