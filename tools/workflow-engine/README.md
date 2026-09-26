@@ -4,6 +4,12 @@ Operational helpers for the standalone workflow engine running under `/opt/workf
 
 These files intentionally contain **no secrets**.
 
+## Canonical runtime source
+
+The versioned runtime package now lives under [`runtime/`](runtime/). It was imported from the sanitized production source snapshot captured on 2026-09-26. Operational helpers in this directory must reference that runtime tree rather than maintaining a second Python copy.
+
+The source import does not deploy or restart the running VPS service by itself.
+
 ## Configure Linear without an editor
 
 Run the helper as root. It securely prompts for the API key, rewrites only the `LINEAR_*` entries in `/etc/workflow-engine/env`, preserves the rest of the environment file, fixes permissions, and restarts the delivery worker.
