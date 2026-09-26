@@ -220,8 +220,7 @@ async function sendLead() {
       candidates: []
     });
     renderCandidates([]);
-    await loadLeads().catch(() => {});
-    await loadToday().catch(() => {});
+    await refreshConnectionState();
   } catch (error) {
     setStatus("Не отправлено: " + (error.message || "ошибка"));
   } finally {
@@ -707,7 +706,9 @@ async function updateLeadStatus(leadId, status, note, followUpOn, button) {
     }
     setStatus("Статус заявки #" + leadId + " сохранён.", true);
     await loadLeads();
-  await loadToday().catch(() => {});
+    await loadToday().catch((error) => {
+      setStatus("Очередь не обновлена: " + connectionMessage(error));
+    });
   } catch (error) {
     setStatus("Статус не сохранён: " + (error.message || "ошибка"));
   } finally {
