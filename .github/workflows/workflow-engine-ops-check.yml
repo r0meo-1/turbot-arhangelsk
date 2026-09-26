@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "tools/workflow-engine/**"
+      - "deploy/turbot-deploy.sh"
+      - "deploy/send-workflow-engine-bundle.sh"
+      - ".github/workflows/workflow-engine-deploy.yml"
       - ".github/workflows/workflow-engine-ops-check.yml"
   push:
     branches:
@@ -11,6 +14,9 @@ on:
       - workflow-engine-linear-live
     paths:
       - "tools/workflow-engine/**"
+      - "deploy/turbot-deploy.sh"
+      - "deploy/send-workflow-engine-bundle.sh"
+      - ".github/workflows/workflow-engine-deploy.yml"
       - ".github/workflows/workflow-engine-ops-check.yml"
 
 permissions:
@@ -29,6 +35,15 @@ jobs:
           bash -n tools/workflow-engine/probe_linear.sh
           bash -n tools/workflow-engine/deploy_delivery_worker.sh
           bash -n tools/workflow-engine/record_linear_mapping.sh
+          bash -n deploy/send-workflow-engine-bundle.sh
+          bash -n deploy/turbot-deploy.sh
+
+      - name: Check Workflow Engine deploy protocol
+        run: |
+          grep -q 'WORKFLOW_ENGINE_DEPLOY_BUNDLE_V1' deploy/turbot-deploy.sh
+          grep -q 'WORKFLOW_ENGINE_DEPLOY_BUNDLE_V1' deploy/send-workflow-engine-bundle.sh
+          grep -q 'workflow-engine.main selftest' deploy/turbot-deploy.sh
+          grep -q 'workflow-engine.main status' deploy/turbot-deploy.sh
 
       - name: Check Python syntax
         run: |
