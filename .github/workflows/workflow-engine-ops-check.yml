@@ -37,6 +37,7 @@ jobs:
           bash -n tools/workflow-engine/deploy_delivery_worker.sh
           bash -n tools/workflow-engine/record_linear_mapping.sh
           bash -n tools/workflow-engine/provision_gmail_pubsub.sh
+          bash -n tools/workflow-engine/provision_gmail_pubsub_production.sh
           bash -n deploy/send-workflow-engine-bundle.sh
           bash -n deploy/turbot-deploy.sh
 
@@ -51,6 +52,9 @@ jobs:
           grep -q 'gmail-api-push@system.gserviceaccount.com' tools/workflow-engine/provision_gmail_pubsub.sh
           grep -q 'roles/iam.serviceAccountTokenCreator' tools/workflow-engine/provision_gmail_pubsub.sh
           grep -q 'workload-identity service-agents generate' tools/workflow-engine/provision_gmail_pubsub.sh
+          grep -q 'GCP_EXPECTED_PROJECT_NUMBER' tools/workflow-engine/provision_gmail_pubsub.sh
+          grep -q '387497694802' tools/workflow-engine/provision_gmail_pubsub_production.sh
+          grep -q 'r0meo1-90ffe' tools/workflow-engine/provision_gmail_pubsub_production.sh
 
       - name: Check Python syntax
         run: |

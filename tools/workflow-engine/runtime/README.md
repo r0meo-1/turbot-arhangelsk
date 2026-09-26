@@ -90,6 +90,29 @@ External provisioning still required before watch mode can be activated:
 
 ## Production Pub/Sub provisioning helper
 
+### Verified production identity
+
+Production OAuth evidence now pins the Gmail watch project to:
+
+- project ID: `r0meo1-90ffe`
+- project number: `387497694802`
+- public push endpoint: `https://bot.r0meo1.ru/gmail/pubsub`
+
+The public route is already a deploy gate: GET must return 405 and an
+unauthenticated JSON POST must return 401.
+
+Once a trusted operator or automation principal is authenticated to Google
+Cloud with the required IAM/API permissions, the production invocation is:
+
+```bash
+bash tools/workflow-engine/provision_gmail_pubsub_production.sh
+```
+
+The wrapper contains no credentials. It pins both the project ID and expected
+numeric project identity, and the generic helper fails closed if Google Cloud
+resolves the project to a different project number.
+
+
 The Google Cloud half of watch mode is reproducible with
 `tools/workflow-engine/provision_gmail_pubsub.sh`. It is intentionally
 separate from runtime deployment and does **not** switch production from polling.
