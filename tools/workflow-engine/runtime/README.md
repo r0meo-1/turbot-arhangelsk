@@ -28,17 +28,34 @@ The imported Gmail source is a polling implementation:
 - default query `newer_than:2d`
 - message dedupe through `UNIQUE(source, external_id)`
 
-Known gaps intentionally remain visible rather than being papered over:
+Known Gmail gaps intentionally remain visible rather than being papered over:
 
 - no Gmail History `historyId` checkpoint
 - no `history.list`
 - no `users.watch`
 - no Pub/Sub notification path
 - no pagination of `messages.list`; a cycle is capped by `maxResults`
-- live Linear issue creation has an external-create → local-commit crash window
 
-The current production VPS must keep `LINEAR_MODE=dry_run` because Linear
-blocks that execution region.
+## Linear delivery crash safety
+
+Live Linear creation now has an explicit reconciliation protocol:
+
+1. Before any external create, persist a `delivery_intents` row and commit it.
+2. Derive a deterministic marker from the canonical task ID:
+   `workflow-engine-task:<task_id>`.
+3. Search Linear for an existing issue whose description contains that marker.
+4. Create only when no matching issue exists.
+5. Store the Linear mapping, resolve the intent and mark delivery in one local commit.
+6. If the process dies after Linear creates the issue but before that commit, the retry
+   finds the existing marker and repairs the local mapping instead of creating a duplicate.
+7. More than one matching marker fails closed for manual reconciliation.
+
+Later task versions update the already-mapped Linear issue. HTTP response bodies are not
+propagated into ordinary Linear delivery errors/logs.
+
+The current production VPS must still keep `LINEAR_MODE=dry_run` because Linear
+blocks that execution region. Crash-safe code is a prerequisite for future live enablement,
+not permission to bypass the regional restriction.
 
 ## CI
 
@@ -48,6 +65,8 @@ The dedicated runtime workflow:
 2. compiles the package;
 3. runs `python -m workflow_engine.main selftest`;
 4. runs runtime contract tests;
-5. rejects obvious secret/runtime-state files.
+5. tests Linear post-create crash recovery and later-version update behavior;
+6. rejects obvious secret/runtime-state files.
 
-This source import does **not** deploy or restart the Workflow Engine.
+This source tree does **not** deploy or restart the Workflow Engine merely because
+it changes. Production deployment remains a separate controlled step.
