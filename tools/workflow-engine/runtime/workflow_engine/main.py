@@ -63,19 +63,62 @@ def settings():
     }
 
 
+async def source_cycle(
+    source,
+    engine,
+    repo,
+):
+    checkpoint = await repo.gmail_history_id()
+
+    batch = await source.fetch(
+        start_history_id=checkpoint
+    )
+
+    for message in batch.messages:
+        await engine.process(
+            message
+        )
+
+    advanced = False
+
+    if batch.next_history_id:
+        advanced = (
+            await repo.advance_gmail_history_id(
+                batch.next_history_id
+            )
+        )
+
+    return {
+        "mode": batch.mode,
+        "messages": len(batch.messages),
+        "checkpoint_advanced": advanced,
+    }
+
+
 async def source_loop(
     source,
     engine,
+    repo,
     interval,
 ):
     while True:
         try:
-            messages = await source.fetch()
+            result = await source_cycle(
+                source,
+                engine,
+                repo,
+            )
 
-            for message in messages:
-                await engine.process(
-                    message
-                )
+            log.info(
+                "Gmail sync mode=%s "
+                "messages=%d "
+                "checkpoint_advanced=%s",
+                result["mode"],
+                result["messages"],
+                result[
+                    "checkpoint_advanced"
+                ],
+            )
 
         except asyncio.CancelledError:
             raise
@@ -131,6 +174,7 @@ async def run_service():
                 cfg["query"],
             ),
             engine,
+            repo,
             cfg["poll"],
         )
 
@@ -149,6 +193,7 @@ async def run_service():
                 cfg["query"],
             ),
             engine,
+            repo,
             cfg["poll"],
         )
 
@@ -169,6 +214,9 @@ async def show_status():
 
     try:
         result = await repo.counts()
+        history_id = (
+            await repo.gmail_history_id()
+        )
 
         result.update({
             "db": cfg["db"],
@@ -177,6 +225,9 @@ async def show_status():
             "gmail_token_present": Path(
                 cfg["token"]
             ).exists(),
+            "gmail_checkpoint_present": (
+                history_id is not None
+            ),
         })
 
         print(
@@ -239,11 +290,23 @@ async def selftest():
         assert not await engine.process(first)
         assert await engine.process(conflict)
 
+        assert (
+            await repo.advance_gmail_history_id(
+                "100"
+            )
+        )
+        assert not (
+            await repo.advance_gmail_history_id(
+                "99"
+            )
+        )
+
         await worker.drain()
 
         counts = await repo.counts()
 
         assert counts["messages"] == 2
+        assert counts["gmail_mailbox"] == 1
         assert counts["tasks"] == 1
         assert counts["review_queue"] == 1
 

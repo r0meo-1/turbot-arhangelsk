@@ -17,24 +17,31 @@ The file-level hashes captured on the VPS are stored in `PROVENANCE.txt`.
 No `.env`, OAuth token file, SQLite database, backup file, customer email,
 or secret value is part of this source snapshot.
 
-## Current ingestion baseline
+## Current Gmail ingestion
 
-The imported Gmail source is a polling implementation:
+The runtime now keeps a durable Gmail History checkpoint in SQLite:
 
 - Gmail readonly OAuth scope
-- `users().messages().list(..., maxResults=limit)`
-- per-message `messages().get(..., format="full")`
+- initial bootstrap reads `users.getProfile().historyId` before listing mail
+- bootstrap `messages.list` follows all result pages for the configured query
+- incremental cycles use paginated `history.list(startHistoryId=...)`
+- `messagesAdded` IDs are deduplicated before `messages.get(format="full")`
+- the durable checkpoint advances only after the complete batch is processed
+- a crash after message persistence but before checkpoint advance safely replays mail;
+  `UNIQUE(source, external_id)` makes that replay idempotent
+- an expired Gmail History checkpoint (HTTP 404) falls back to a paginated bootstrap
+  instead of silently skipping forward
 - default `POLL_INTERVAL_SECONDS=30`
-- default query `newer_than:2d`
-- message dedupe through `UNIQUE(source, external_id)`
+- default bootstrap/recovery query `newer_than:2d`
 
-Known gaps intentionally remain visible rather than being papered over:
+The checkpoint is monotonic, so an older or duplicate cycle cannot move it backwards.
 
-- no Gmail History `historyId` checkpoint
-- no `history.list`
+Known gaps deliberately remain visible:
+
 - no `users.watch`
-- no Pub/Sub notification path
-- no pagination of `messages.list`; a cycle is capped by `maxResults`
+- no Pub/Sub notification receiver
+- no persisted notification table / acknowledgement path
+- polling still triggers synchronization every 30 seconds
 - live Linear issue creation has an external-create → local-commit crash window
 
 The current production VPS must keep `LINEAR_MODE=dry_run` because Linear
@@ -47,7 +54,8 @@ The dedicated runtime workflow:
 1. installs only this runtime's dependencies;
 2. compiles the package;
 3. runs `python -m workflow_engine.main selftest`;
-4. runs runtime contract tests;
+4. runs runtime contract tests, including Gmail History pagination/checkpoint tests;
 5. rejects obvious secret/runtime-state files.
 
-This source import does **not** deploy or restart the Workflow Engine.
+This source tree does **not** deploy or restart the Workflow Engine merely because
+it changes. Production deployment remains a separate controlled step.
