@@ -3,3 +3,5 @@ google-api-python-client>=2.0
 google-auth>=2.0
 pytest>=8
 pytest-asyncio>=0.24
+aiohttp>=3.12
+requests>=2.31
