@@ -23,6 +23,12 @@ class GmailBatch:
     mode: str
 
 
+@dataclass(slots=True)
+class GmailWatch:
+    history_id: str
+    expiration_ms: int
+
+
 def decode_payload(payload):
     parts = payload.get("parts")
 
@@ -88,6 +94,77 @@ class GmailSource:
         )
 
         self.query = query
+
+    async def start_watch(
+        self,
+        topic_name,
+    ):
+        return await asyncio.to_thread(
+            self._start_watch_sync,
+            topic_name,
+        )
+
+    def _start_watch_sync(
+        self,
+        topic_name,
+    ):
+        topic = str(
+            topic_name
+        ).strip()
+
+        parts = topic.split("/")
+
+        if (
+            len(parts) != 4
+            or parts[0] != "projects"
+            or parts[2] != "topics"
+            or not parts[1]
+            or not parts[3]
+        ):
+            raise ValueError(
+                "Invalid Gmail Pub/Sub topic name"
+            )
+
+        result = (
+            self.service.users()
+            .watch(
+                userId="me",
+                body={
+                    "topicName": topic,
+                },
+            )
+            .execute()
+        )
+
+        history_id = str(
+            result.get(
+                "historyId",
+                "",
+            )
+        ).strip()
+        expiration = str(
+            result.get(
+                "expiration",
+                "",
+            )
+        ).strip()
+
+        if (
+            not history_id.isdigit()
+            or not expiration.isdigit()
+        ):
+            raise RuntimeError(
+                "Gmail watch returned invalid state"
+            )
+
+        return GmailWatch(
+            history_id=str(
+                int(history_id)
+            ),
+            expiration_ms=int(
+                expiration
+            ),
+        )
 
     async def fetch(
         self,
