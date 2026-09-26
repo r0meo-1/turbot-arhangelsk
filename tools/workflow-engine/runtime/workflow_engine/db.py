@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS messages (
     UNIQUE(source, external_id)
 );
 
+CREATE TABLE IF NOT EXISTS gmail_mailbox (
+    mailbox TEXT PRIMARY KEY,
+    history_id TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS tasks (
     id TEXT PRIMARY KEY,
     dedupe_key TEXT NOT NULL UNIQUE,
@@ -91,6 +97,84 @@ class Repository:
 
         await self.db.executescript(SCHEMA)
         await self.db.commit()
+
+    async def gmail_history_id(
+        self,
+        mailbox="me",
+    ):
+        cur = await self.db.execute(
+            """
+            SELECT history_id
+            FROM gmail_mailbox
+            WHERE mailbox = ?
+            """,
+            (mailbox,),
+        )
+        row = await cur.fetchone()
+        return row["history_id"] if row else None
+
+    async def advance_gmail_history_id(
+        self,
+        history_id,
+        mailbox="me",
+    ):
+        value = str(history_id).strip()
+
+        if not value.isdigit():
+            raise ValueError(
+                "Gmail history_id must be decimal"
+            )
+
+        async with self.lock:
+            await self.db.execute(
+                "BEGIN IMMEDIATE"
+            )
+
+            try:
+                cur = await self.db.execute(
+                    """
+                    SELECT history_id
+                    FROM gmail_mailbox
+                    WHERE mailbox = ?
+                    """,
+                    (mailbox,),
+                )
+                row = await cur.fetchone()
+
+                if (
+                    row is not None
+                    and int(value)
+                    <= int(row["history_id"])
+                ):
+                    await self.db.rollback()
+                    return False
+
+                await self.db.execute(
+                    """
+                    INSERT INTO gmail_mailbox (
+                        mailbox,
+                        history_id,
+                        updated_at
+                    )
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(mailbox)
+                    DO UPDATE SET
+                        history_id = excluded.history_id,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        mailbox,
+                        value,
+                        utcnow().isoformat(),
+                    ),
+                )
+
+                await self.db.commit()
+                return True
+
+            except Exception:
+                await self.db.rollback()
+                raise
 
     async def ingest(
         self,
@@ -410,6 +494,7 @@ class Repository:
 
         for table in (
             "messages",
+            "gmail_mailbox",
             "tasks",
             "review_queue",
             "outbox",
