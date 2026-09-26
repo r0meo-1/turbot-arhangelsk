@@ -107,6 +107,115 @@ def client():
     return website_app.app.test_client()
 
 
+
+
+class _RelayResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+
+def test_gmail_pubsub_relay_rejects_missing_bearer_without_upstream(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        website_app.requests,
+        "post",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    response = client.post(
+        "/gmail/pubsub",
+        data=b'{"message":{}}',
+        content_type="application/json",
+    )
+
+    assert response.status_code == 401
+    assert calls == []
+
+
+def test_gmail_pubsub_relay_forwards_raw_json_and_authorization(client, monkeypatch):
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return _RelayResponse(204)
+
+    monkeypatch.setattr(website_app.requests, "post", fake_post)
+    body = b'{"message":{"messageId":"m1","data":"e30="}}'
+
+    response = client.post(
+        "/gmail/pubsub",
+        data=body,
+        headers={"Authorization": "Bearer oidc-token"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Cache-Control"] == "no-store"
+    assert len(calls) == 1
+    url, kwargs = calls[0]
+    assert url == "http://127.0.0.1:8091/gmail/pubsub"
+    assert kwargs["data"] == body
+    assert kwargs["headers"]["Authorization"] == "Bearer oidc-token"
+    assert kwargs["headers"]["Content-Type"] == "application/json"
+    assert kwargs["allow_redirects"] is False
+    assert kwargs["timeout"] == 5
+
+
+@pytest.mark.parametrize("status", [400, 401, 403])
+def test_gmail_pubsub_relay_preserves_receiver_rejection(client, monkeypatch, status):
+    monkeypatch.setattr(
+        website_app.requests,
+        "post",
+        lambda *args, **kwargs: _RelayResponse(status),
+    )
+
+    response = client.post(
+        "/gmail/pubsub",
+        data=b'{}',
+        headers={"Authorization": "Bearer oidc-token"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == status
+
+
+def test_gmail_pubsub_relay_rejects_wrong_media_type(client):
+    response = client.post(
+        "/gmail/pubsub",
+        data=b'{}',
+        headers={"Authorization": "Bearer oidc-token"},
+        content_type="text/plain",
+    )
+    assert response.status_code == 415
+
+
+def test_gmail_pubsub_relay_rejects_oversized_body(client):
+    response = client.post(
+        "/gmail/pubsub",
+        data=b"x" * (64 * 1024 + 1),
+        headers={"Authorization": "Bearer oidc-token"},
+        content_type="application/json",
+    )
+    assert response.status_code == 413
+
+
+def test_gmail_pubsub_relay_returns_503_when_receiver_is_down(client, monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise website_app.requests.ConnectionError("down")
+
+    monkeypatch.setattr(website_app.requests, "post", unavailable)
+
+    response = client.post(
+        "/gmail/pubsub",
+        data=b'{}',
+        headers={"Authorization": "Bearer oidc-token"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "5"
+
+
 def test_website_lead_cors_preflight(client):
     response = client.options("/website/lead", headers={"Origin": ORIGIN})
     assert response.status_code == 204
