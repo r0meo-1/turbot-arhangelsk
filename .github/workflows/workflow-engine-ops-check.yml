@@ -32,4 +32,4 @@ jobs:
 
       - name: Check Python syntax
         run: |
-          python -m py_compile tools/workflow-engine/delivery_worker.py
+          python -m py_compile tools/workflow-engine/runtime/workflow_engine/delivery_worker.py
