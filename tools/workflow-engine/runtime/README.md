@@ -94,7 +94,8 @@ The Google Cloud half of watch mode is reproducible with
 `tools/workflow-engine/provision_gmail_pubsub.sh`. It is intentionally
 separate from runtime deployment and does **not** switch production from polling.
 
-Required input is deliberately non-secret:
+Required input is deliberately non-secret. `GCP_PROJECT_ID` must be the same Google developer project that owns the OAuth client executing `users.watch`; Gmail rejects a topic from a different project.
+
 
 ```bash
 export GCP_PROJECT_ID='<google-cloud-project-id>'
