@@ -52,6 +52,18 @@ def _client(db, calls):
                 "members_count": 123,
                 "ignored_secret": "must-not-pass-through",
             }]
+        if method == "wall.getById":
+            return [{
+                "id": 101,
+                "owner_id": -240310110,
+                "date": 1_790_000_000,
+                "text": "Не должен попадать в stats",
+                "comments": {"count": 3},
+                "likes": {"count": 4},
+                "reposts": {"count": 5},
+                "views": {"count": 6},
+                "attachments": [{"type": "photo", "access_key": "private-ish"}],
+            }]
         if method == "wall.get":
             return {
                 "count": 2,
@@ -177,6 +189,7 @@ def test_initialize_and_tool_list_are_read_only():
         assert names == {
             "vk.get_group",
             "vk.list_posts",
+            "vk.get_post_stats",
             "vk.get_campaign_attribution",
             "vk.get_leads_by_source",
         }
@@ -229,6 +242,52 @@ def test_group_and_wall_reads_reuse_server_side_vk_identity():
         assert calls[0][0] == "groups.getById"
         assert calls[1][0] == "wall.get"
         assert all(call[1] == VK_TOKEN for call in calls)
+    finally:
+        db.close()
+
+
+def test_post_stats_returns_aggregate_counters_only():
+    db = FixtureDB()
+    calls = []
+    try:
+        client = _client(db, calls)
+        response = _rpc(
+            client,
+            "tools/call",
+            {"name": "vk.get_post_stats", "arguments": {"post_id": 101}},
+        )
+        assert response.status_code == 200
+        data = response.json["result"]["structuredContent"]
+        assert data == {
+            "post_id": 101,
+            "owner_id": -240310110,
+            "date": 1_790_000_000,
+            "comments": 3,
+            "likes": 4,
+            "reposts": 5,
+            "views": 6,
+        }
+        serialized = response.get_data(as_text=True)
+        assert "Не должен попадать" not in serialized
+        assert "access_key" not in serialized
+        assert calls == [
+            (
+                "wall.getById",
+                VK_TOKEN,
+                {
+                    "posts": "-240310110_101",
+                    "extended": 0,
+                },
+            )
+        ]
+
+        invalid = _rpc(
+            client,
+            "tools/call",
+            {"name": "vk.get_post_stats", "arguments": {"post_id": 0}},
+        )
+        assert invalid.json["error"]["code"] == -32602
+        assert len(calls) == 1
     finally:
         db.close()
 
@@ -333,6 +392,7 @@ def test_modern_discover_and_tools_work_without_initialize():
         assert {tool["name"] for tool in listed_result["tools"]} == {
             "vk.get_group",
             "vk.list_posts",
+            "vk.get_post_stats",
             "vk.get_campaign_attribution",
             "vk.get_leads_by_source",
         }
