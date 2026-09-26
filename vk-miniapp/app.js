@@ -8,7 +8,9 @@
   const REQUEST_TIMEOUT_MS = 15000;
   const launchParams = location.search.slice(1);
   const params = new URLSearchParams(launchParams);
-  let inVK = params.has('sign') && params.has('vk_app_id');
+  const hasSignedLaunch = (query) => ['sign', 'vk_app_id', 'vk_user_id', 'vk_ts']
+    .every((key) => Boolean(query.get(key)));
+  let inVK = hasSignedLaunch(params);
   const bridge = window.vkBridge;
   let effectiveLaunchParams = launchParams;
   let payload;
@@ -256,6 +258,35 @@
     }
   });
 
+  const probeManagerEntry = async () => {
+    const managerEntry = $('manager-entry');
+    const managerLink = $('manager-link');
+    if (!managerEntry || !managerLink || !inVK || !effectiveLaunchParams) return;
+
+    managerEntry.hidden = true;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch('/agent-extension/crm/summary', {
+        method: 'GET',
+        signal: controller.signal,
+        cache: 'no-store',
+        credentials: 'omit',
+        headers: {
+          'Accept': 'application/json',
+          'X-VK-Launch-Params': effectiveLaunchParams
+        }
+      });
+      if (response.status !== 200) return;
+      managerLink.href = '/manager/?' + effectiveLaunchParams;
+      managerEntry.hidden = false;
+    } catch (_) {
+      managerEntry.hidden = true;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   installDestinationAutocomplete();
   installDepartureAutocomplete();
 
@@ -269,7 +300,7 @@
       });
       effectiveLaunchParams = qp.toString();
       const effectiveParams = new URLSearchParams(effectiveLaunchParams);
-      inVK = effectiveParams.has('sign') && effectiveParams.has('vk_app_id');
+      inVK = hasSignedLaunch(effectiveParams);
     } catch (_) {
       effectiveLaunchParams = launchParams;
     }
@@ -280,6 +311,8 @@
     $('status').textContent = '';
     $('save').disabled = false;
   }
+
+  await probeManagerEntry();
 
   if (inVK && bridge) {
     bridge.send('VKWebAppInit').catch(() => {
