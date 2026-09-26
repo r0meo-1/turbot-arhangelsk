@@ -73,6 +73,7 @@ from shared import travel_crm_store as _travel_crm_store
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import provider_status as _provider_status
 from shared import webhook_delivery as _webhook_delivery
+from shared.utc_time import utc_now_naive as _utc_now_naive
 from shared.validation import (
     validate_phone, validate_people, validate_budget,
     parse_kids_ages, party_bands, party_text as _party_text,
@@ -992,7 +993,7 @@ def save_lead(
             _travel_crm_store.ensure_initial_task(
                 cur.connection,
                 crm_request.request_id,
-                datetime.utcnow(),
+                _utc_now_naive(),
             )
         except Exception as exc:
             # CRM mirroring is additive. A malformed legacy field must never
