@@ -35,6 +35,7 @@ jobs:
           bash -n tools/workflow-engine/probe_linear.sh
           bash -n tools/workflow-engine/deploy_delivery_worker.sh
           bash -n tools/workflow-engine/record_linear_mapping.sh
+          bash -n tools/workflow-engine/provision_gmail_pubsub.sh
           bash -n deploy/send-workflow-engine-bundle.sh
           bash -n deploy/turbot-deploy.sh
 
@@ -44,6 +45,8 @@ jobs:
           grep -q 'WORKFLOW_ENGINE_DEPLOY_BUNDLE_V1' deploy/send-workflow-engine-bundle.sh
           grep -q 'workflow_engine.main selftest' deploy/turbot-deploy.sh
           grep -q 'workflow_engine.main status' deploy/turbot-deploy.sh
+          grep -q 'gmail-api-push@system.gserviceaccount.com' tools/workflow-engine/provision_gmail_pubsub.sh
+          grep -q 'roles/iam.serviceAccountTokenCreator' tools/workflow-engine/provision_gmail_pubsub.sh
 
       - name: Check Python syntax
         run: |
