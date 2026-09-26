@@ -180,5 +180,21 @@ jobs:
             exit 1
           fi
 
-          echo "Public Mini App routes, VK app_payload assets, auth rejection, and signed VK auth smoke: ok"
+          gmail_pubsub_get_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            "https://bot.r0meo1.ru/gmail/pubsub")"
+          if [[ "$gmail_pubsub_get_status" != "405" ]]; then
+            echo "Gmail Pub/Sub GET returned HTTP $gmail_pubsub_get_status, expected 405" >&2
+            exit 1
+          fi
+
+          gmail_pubsub_unauth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+            -X POST "https://bot.r0meo1.ru/gmail/pubsub" \
+            -H 'Content-Type: application/json' \
+            --data '{}')"
+          if [[ "$gmail_pubsub_unauth_status" != "401" ]]; then
+            echo "Gmail Pub/Sub unauthenticated POST returned HTTP $gmail_pubsub_unauth_status, expected 401" >&2
+            exit 1
+          fi
+
+          echo "Public Mini App routes, Gmail Pub/Sub relay, auth rejection, and signed VK auth smoke: ok"
 
