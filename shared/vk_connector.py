@@ -286,13 +286,20 @@ def create_blueprint(
         result.headers["Referrer-Policy"] = "no-referrer"
         return result
 
-    def rpc_error(request_id: Any, code: int, message: str) -> Response:
+    def rpc_error(
+        request_id: Any,
+        code: int,
+        message: str,
+        *,
+        status: int = 200,
+    ) -> Response:
         return response(
             {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "error": {"code": int(code), "message": str(message)},
-            }
+            },
+            status=status,
         )
 
     @bp.post("/mcp/vk")
