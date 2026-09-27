@@ -269,7 +269,7 @@ def add_tourist_temp(
     if manager_id is not None:
         params["manager_id"] = manager_id
     result = request_fn("add-tourist-temp", params)
-    tid = extract_id(result, "id", "tourist_id")
+    tid = extract_id(result, "id", "tourist_id", "tourist_temp_id")
     if tid is None and result is not None:
         log.warning("Could not extract tourist ID from add-tourist-temp: %s", result)
     return tid
