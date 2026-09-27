@@ -1,3 +1,4 @@
+from contextlib import closing
 import os
 from pathlib import Path
 import shutil
@@ -88,7 +89,7 @@ def test_backup_and_restore_drill_are_isolated_and_do_not_print_row_values(tmp_p
     assert "VK_SECRET_TEST_VALUE" not in output
 
     # The drill must never mutate or replace the live files.
-    with sqlite3.connect(app_dir / "bot_state.sqlite") as connection:
+    with closing(sqlite3.connect(app_dir / "bot_state.sqlite")) as connection:
         assert connection.execute("SELECT value FROM leads").fetchone()[0] == secret
 
 
