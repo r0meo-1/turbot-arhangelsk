@@ -20,6 +20,9 @@ from the existing `VK_TOKEN` / `VK_ACCESS_TOKEN` plus
 - Only JSON POST is accepted.
 - Read results are projected to bounded, explicit fields instead of returning
   raw VK API payloads.
+- Wall lists reject malformed item collections, responses exceeding the requested
+  limit, foreign owner IDs, invalid post IDs and non-string post text before
+  returning any records. Structured text is never stringified into tool output.
 - Attribution actions use the existing privacy-minimized funnel table and
   return counts only, not customer names, phones, message bodies or platform
   user IDs.
