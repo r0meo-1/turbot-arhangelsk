@@ -58,14 +58,21 @@ def _source_tag(arguments: dict[str, Any]) -> str:
     return raw.lower()
 
 
-def _post_item(item: Any) -> dict[str, Any]:
-    if not isinstance(item, dict):
-        return {}
+def _post_item(item: Any, owner_id: int) -> dict[str, Any]:
+    if (
+        not isinstance(item, dict)
+        or type(item.get("owner_id")) is not int
+        or item["owner_id"] != owner_id
+        or type(item.get("id")) is not int
+        or not 1 <= item["id"] <= 2_147_483_647
+        or not isinstance(item.get("text", ""), str)
+    ):
+        raise VKConnectorError("Invalid VK wall response", code=-32020)
     return {
         "id": int(item.get("id") or 0),
         "owner_id": int(item.get("owner_id") or 0),
         "date": int(item.get("date") or 0),
-        "text": str(item.get("text") or "")[:_MAX_POST_TEXT],
+        "text": item.get("text", "")[:_MAX_POST_TEXT],
         "comments": int((item.get("comments") or {}).get("count") or 0),
         "likes": int((item.get("likes") or {}).get("count") or 0),
         "reposts": int((item.get("reposts") or {}).get("count") or 0),
@@ -228,11 +235,15 @@ class VKReadActions:
             offset=offset,
             filter="owner",
         )
-        items = raw.get("items", []) if isinstance(raw, dict) else []
+        if not isinstance(raw, dict) or not isinstance(raw.get("items"), list):
+            raise VKConnectorError("Invalid VK wall response", code=-32020)
+        items = raw["items"]
+        if len(items) > limit:
+            raise VKConnectorError("Invalid VK wall response", code=-32020)
         return {
             "count": int(raw.get("count") or 0) if isinstance(raw, dict) else 0,
             "offset": offset,
-            "items": [_post_item(item) for item in items if isinstance(item, dict)],
+            "items": [_post_item(item, owner_id) for item in items],
         }
 
     def get_post_stats(self, arguments: dict[str, Any]) -> dict[str, Any]:

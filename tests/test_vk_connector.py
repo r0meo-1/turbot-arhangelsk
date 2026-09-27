@@ -2,6 +2,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 
+import pytest
 from flask import Flask
 
 from shared.funnel_metrics import init_schema
@@ -13,6 +14,52 @@ VK_TOKEN = "server-only-vk-token"
 MODERN_PROTOCOL = "2026-07-28"
 PROTOCOL_META_KEY = "io.modelcontextprotocol/protocolVersion"
 SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
+
+
+@pytest.mark.parametrize("modern", [False, True])
+@pytest.mark.parametrize("upstream", [
+    {"count": 1, "items": [{"id": 101, "owner_id": -999, "text": "foreign"}]},
+    {"count": 1, "items": [{"id": 101, "owner_id": -240310110,
+                              "text": {"access_key": "fixture-private-field"}}]},
+    {"count": 1, "items": [{"id": True, "owner_id": -240310110, "text": "bad id"}]},
+    {"count": 1, "items": ["fixture-private-field"]},
+    {"count": 1, "items": {}},
+    {},
+    {"count": 2, "items": [
+        {"id": 101, "owner_id": -240310110, "text": "first"},
+        {"id": 102, "owner_id": -240310110, "text": "second"},
+    ]},
+])
+def test_wall_response_fails_closed_before_returning_untrusted_fields(upstream, modern):
+    db = FixtureDB()
+    calls = []
+    try:
+        def fixture_call(method, token, **params):
+            calls.append((method, params))
+            return upstream
+
+        app = Flask(__name__)
+        app.register_blueprint(create_blueprint(
+            db.cursor,
+            token_getter=lambda: AUTH_TOKEN,
+            resolve_identity=lambda: (VK_TOKEN, -240310110, 240310110),
+            vk_call=fixture_call,
+        ))
+        send = _modern_rpc if modern else _rpc
+        response = send(app.test_client(), "tools/call", {
+            "name": "vk.list_posts", "arguments": {"limit": 1},
+        })
+        assert response.status_code == 200
+        assert response.json["error"] == {
+            "code": -32020, "message": "Invalid VK wall response",
+        }
+        assert "result" not in response.json
+        assert "fixture-private-field" not in response.get_data(as_text=True)
+        assert calls == [("wall.get", {
+            "owner_id": -240310110, "count": 1, "offset": 0, "filter": "owner",
+        })]
+    finally:
+        db.close()
 
 
 class FixtureDB:
