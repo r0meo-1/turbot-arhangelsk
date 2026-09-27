@@ -30,7 +30,7 @@ jobs:
       - name: Fail on leaked test files or SQLite connections
         run: |
           python -m pytest -W error::ResourceWarning -W error::pytest.PytestUnraisableExceptionWarning \
-            tests/test_backup_restore.py tests/test_manager_web.py tests/test_vk_miniapp.py \
+            tests/test_e2e_resources.py tests/test_backup_restore.py tests/test_manager_web.py tests/test_vk_miniapp.py \
             tests/test_partner_click_analytics.py tests/test_travel_crm_store.py tests/test_webhook_delivery.py
 
   pytest:

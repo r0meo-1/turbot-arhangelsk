@@ -1,10 +1,12 @@
 import json
-import threading
+from contextlib import ExitStack
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+
+from e2e_resources import local_server
 
 playwright_sync = pytest.importorskip(
     "playwright.sync_api", reason="Telegram Mini App browser E2E runs in Edge Bot CI"
@@ -64,15 +66,15 @@ def _assert_zoom_and_default_contrast(page):
 def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width, asset_dir):
     handler = partial(_QuietHandler, directory=str(asset_dir))
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
     captured = []
 
-    try:
+    with local_server(server):
         url = f"http://127.0.0.1:{server.server_port}/index.html"
-        with sync_playwright() as pw:
+        with sync_playwright() as pw, ExitStack() as resources:
             browser = pw.chromium.launch(channel="msedge", headless=True)
+            resources.callback(browser.close)
             context = browser.new_context(viewport={"width": width, "height": 760})
+            resources.callback(context.close)
             context.add_init_script(
                 f"""
                 window.__tgClosed = false;
@@ -239,10 +241,6 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
             page.locator("#review").wait_for(state="visible")
             page.locator("#save").click()
             page.wait_for_function("window.__tgClosed === true")
-            browser.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
 
     assert len(captured) == 1
     request_body = captured[0]
@@ -265,3 +263,58 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
         "source": "telegram_mini_app",
     }
     assert payload["date"]
+
+
+@pytest.mark.parametrize("failure", ["network", "http_500", "invalid_json"])
+def test_failed_submit_preserves_review_and_retries_same_submission(failure):
+    handler = partial(_QuietHandler, directory=str(MINIAPP_DIR))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    attempts = []
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel="msedge", headless=True)
+        resources.callback(browser.close)
+        context = browser.new_context(viewport={"width": 390, "height": 844})
+        resources.callback(context.close)
+        context.add_init_script("""
+            window.__tgClosed = false;
+            window.Telegram = {WebApp: {
+                initData: 'synthetic-test-init-data',
+                ready() {}, expand() {},
+                close() { window.__tgClosed = true; }
+            }};
+        """)
+        page = context.new_page()
+        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        def submit(route, request):
+            attempts.append(request.post_data_json)
+            if len(attempts) == 1 and failure == "network":
+                route.abort()
+                return
+            first = len(attempts) == 1
+            route.fulfill(
+                status=500 if first and failure == "http_500" else 200,
+                content_type="application/json",
+                body="not json" if first and failure == "invalid_json" else ('{"ok":false}' if first else '{"ok":true}'),
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+        page.route(API_URL, submit)
+        page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
+        page.locator("#destination").fill("Пхукет, Таиланд")
+        page.locator("#departure").fill("Архангельск")
+        page.locator("#consent").check()
+        page.locator("#submit").click()
+        page.locator("#review").wait_for(state="visible")
+        summary = page.locator("#summary").inner_text()
+        page.locator("#save").click()
+        page.wait_for_function("document.getElementById('review').getAttribute('aria-busy') === 'false' && document.getElementById('status').textContent !== ''")
+        assert len(attempts) == 1
+        assert not page.evaluate("window.__tgClosed")
+        assert page.locator("#review").is_visible()
+        assert page.locator("#summary").inner_text() == summary
+        assert page.locator("#save").is_enabled()
+        assert page.locator("#edit").is_enabled()
+        page.locator("#save").click()
+        page.wait_for_function("window.__tgClosed === true")
+        assert len(attempts) == 2
+        assert attempts[0] == attempts[1]
+        assert attempts[0]["submissionId"]

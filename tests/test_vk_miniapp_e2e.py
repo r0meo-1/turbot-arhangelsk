@@ -1,11 +1,13 @@
 import base64
 import hashlib
 import hmac
-import threading
+from contextlib import ExitStack
 import time
 from urllib.parse import urlencode
 
 import pytest
+
+from e2e_resources import local_server
 from flask import Flask
 from werkzeug.serving import make_server
 
@@ -99,14 +101,14 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
     )
 
     server = make_server("127.0.0.1", 0, app)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
 
-    try:
+    with local_server(server):
         url = f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}"
-        with sync_playwright() as pw:
+        with sync_playwright() as pw, ExitStack() as resources:
             browser = pw.chromium.launch(channel="msedge", headless=True)
+            resources.callback(browser.close)
             context = browser.new_context(viewport={"width": width, "height": 760})
+            resources.callback(context.close)
             page = context.new_page()
             page.goto(url, wait_until="domcontentloaded")
             _assert_zoom_and_default_contrast(page)
@@ -261,10 +263,6 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
                 "payload": REVIEW_PAYLOAD,
             }
             assert fallback_calls[1]["params"] == {"text": REVIEW_COMMAND}
-            browser.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
 
     assert len(saved) == 2
     uid, info = saved[0]
@@ -286,11 +284,10 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
         lambda: (SECRET, APP_ID, GROUP_ID),
     ))
     server = make_server('127.0.0.1', 0, app)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        with sync_playwright() as pw:
+    with local_server(server):
+        with sync_playwright() as pw, ExitStack() as resources:
             browser = pw.chromium.launch(channel='msedge', headless=True)
+            resources.callback(browser.close)
             page = browser.new_page()
             page.route('**/vk-bridge.js', lambda route: route.fulfill(
                 content_type='application/javascript',
@@ -328,7 +325,56 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
                 page.locator('#save').click()
                 page.locator('#chat').wait_for(state='visible')
                 assert len(saved) == 1
-            browser.close()
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("failure", ["network", "http_500", "invalid_json"])
+def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
+    saved = []
+    attempts = []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(
+        lambda uid, info: saved.append((uid, info)),
+        lambda: (SECRET, APP_ID, GROUP_ID),
+    ))
+    server = make_server("127.0.0.1", 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel="msedge", headless=True)
+        resources.callback(browser.close)
+        context = browser.new_context(viewport={"width": 390, "height": 844})
+        resources.callback(context.close)
+        page = context.new_page()
+        def submit(route, request):
+            attempts.append(request.post_data_json)
+            if len(attempts) > 1:
+                route.continue_()
+            elif failure == "network":
+                route.abort()
+            else:
+                route.fulfill(
+                    status=500 if failure == "http_500" else 200,
+                    content_type="application/json",
+                    body='{"ok":false}' if failure == "http_500" else "not json",
+                )
+        page.route("**/vk/miniapp/draft", submit)
+        page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
+        page.locator("#destination").fill("Пхукет, Таиланд")
+        page.locator("#departure").fill("Архангельск")
+        page.locator("#consent").check()
+        page.locator("#terms-accepted").check()
+        page.locator("#submit").click()
+        page.locator("#review").wait_for(state="visible")
+        summary = page.locator("#summary").inner_text()
+        page.locator("#save").click()
+        page.wait_for_function("document.getElementById('review').getAttribute('aria-busy') === 'false' && document.getElementById('status').textContent !== ''")
+        assert len(attempts) == 1
+        assert saved == []
+        assert page.locator("#chat").is_hidden()
+        assert page.locator("#review").is_visible()
+        assert page.locator("#summary").inner_text() == summary
+        assert page.locator("#edit").is_enabled()
+        assert page.locator("#save").is_enabled()
+        page.locator("#save").click()
+        page.locator("#chat").wait_for(state="visible")
+        assert len(attempts) == 2
+        assert attempts[0] == attempts[1]
+        assert len(saved) == 1
