@@ -330,6 +330,61 @@ def test_website_request_id_is_idempotent(client, monkeypatch):
         assert cur.fetchone()[0] == 1
 
 
+@pytest.mark.parametrize("field,value", [
+    ("destination", "Таиланд"), ("phone", "+79161234568"),
+    ("budget", "200000"), ("name", "Другой клиент"),
+    ("utm_content", "contact_telegram"),
+])
+def test_website_changed_payload_conflicts_without_overwrite(client, monkeypatch, field, value):
+    deliveries = []
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args: deliveries.append(args))
+    original = _payload("website-conflict-0001")
+    first = client.post("/website/lead", headers={"Origin": ORIGIN}, json=original)
+    changed = {**original, field: value}
+    second = client.post("/website/lead", headers={"Origin": ORIGIN}, json=changed)
+    assert first.status_code == 202
+    assert second.status_code == 409
+    assert second.get_json() == {"ok": False, "error": "request_id_conflict"}
+    assert len(deliveries) == 1
+    with bot._db_cursor() as cur:
+        rows = cur.execute("SELECT destination, phone, budget, name FROM website_leads").fetchall()
+        assert len(rows) == 1
+        assert tuple(rows[0]) == ("Турция", "+79161234567", 150000, "Роман")
+
+
+def test_stored_retry_ignores_server_generated_timestamps(monkeypatch):
+    payload, error = website_app._validate_payload(_payload("website-time-retry-0001"))
+    assert error is None
+    lead_id, duplicate = website_app._store_lead(payload)
+    assert duplicate is False
+    retry = {**payload, "created_at": payload["created_at"] + 60, "consent_at": payload["consent_at"] + 60}
+    assert website_app._store_lead(retry) == (lead_id, True)
+
+
+def test_agent_changed_candidates_conflict_without_duplicate_delivery(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    deliveries = []
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args: deliveries.append(args))
+    headers = {"Origin": "chrome-extension://abcdefghijklmnop", "Authorization": "Bearer agent-secret"}
+    payload = {**_payload("agent-conflict-0001"), "candidates": [{"title": "Original hotel"}]}
+    assert client.post("/agent-extension/lead", headers=headers, json=payload).status_code == 202
+    assert client.post("/agent-extension/lead", headers=headers, json=payload).status_code == 200
+    payload["candidates"] = [{"title": "Changed hotel"}]
+    response = client.post("/agent-extension/lead", headers=headers, json=payload)
+    assert response.status_code == 409
+    assert response.get_json() == {"ok": False, "error": "request_id_conflict"}
+    assert len(deliveries) == 1
+
+
+def test_missing_stored_payload_is_not_acknowledged_as_identical(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args: None)
+    payload = _payload("website-missing-snapshot-0001")
+    assert client.post("/website/lead", headers={"Origin": ORIGIN}, json=payload).status_code == 202
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("UPDATE website_leads SET mdt_payload='invalid'")
+    assert client.post("/website/lead", headers={"Origin": ORIGIN}, json=payload).status_code == 409
+
+
 def test_website_delivery_uses_website_source_and_marks_synced(monkeypatch):
     payload, error = website_app._validate_payload(_payload("website-mdt-0001"))
     assert error is None

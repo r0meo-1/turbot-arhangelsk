@@ -858,6 +858,17 @@ def _start_worker_once() -> None:
         logger.info("Website lead delivery retry worker started")
 
 
+class LeadRequestConflict(ValueError):
+    """A retry key belongs to a different, already accepted request."""
+
+
+def _request_content(payload: Dict[str, Any]) -> Dict[str, Any]:
+    # Validation generates fresh timestamps on every retry. All submitted
+    # business fields, including agent candidates, remain part of the identity.
+    return {key: value for key, value in payload.items()
+            if key not in {"created_at", "consent_at"}}
+
+
 def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
     request_key = "website:" + str(payload["request_id"])
     serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -917,9 +928,15 @@ def _store_lead(payload: Dict[str, Any]) -> Tuple[int, bool]:
             # sqlite3.IntegrityError is deliberately not imported just for this
             # branch.  Verify the unique request key before treating the error
             # as an idempotent replay; otherwise propagate the real DB failure.
-            cur.execute("SELECT id FROM website_leads WHERE request_key=?", (request_key,))
+            cur.execute("SELECT id, mdt_payload FROM website_leads WHERE request_key=?", (request_key,))
             row = cur.fetchone()
             if row:
+                try:
+                    original = json.loads(row[1])
+                except (TypeError, ValueError):
+                    raise LeadRequestConflict("request_id_conflict") from None
+                if not isinstance(original, dict) or _request_content(original) != _request_content(payload):
+                    raise LeadRequestConflict("request_id_conflict") from None
                 lead_id = int(row[0])
                 duplicate = True
             else:
@@ -2135,7 +2152,10 @@ if "agent_extension_lead" not in app.view_functions:
         payload["utm_medium"] = "browser_sidepanel"
         payload["utm_content"] = _safe_text(raw.get("active_service"), 80)
 
-        lead_id, duplicate = _store_lead(payload)
+        try:
+            lead_id, duplicate = _store_lead(payload)
+        except LeadRequestConflict:
+            return _agent_json_response({"ok": False, "error": "request_id_conflict"}, 409)
         if not duplicate:
             _kick_delivery(lead_id, payload)
         return _agent_json_response(
@@ -2177,7 +2197,10 @@ if "website_lead" not in app.view_functions:
         if not _rate_allowed(_client_key()):
             return _json_response({"ok": False, "error": "rate_limited"}, 429)
 
-        lead_id, duplicate = _store_lead(payload)
+        try:
+            lead_id, duplicate = _store_lead(payload)
+        except LeadRequestConflict:
+            return _json_response({"ok": False, "error": "request_id_conflict"}, 409)
         if not duplicate:
             _kick_delivery(lead_id, payload)
 
