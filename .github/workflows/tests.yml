@@ -14,6 +14,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  resource-ownership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Install resource regression dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y sqlite3
+          python -m pip install -r requirements-dev.txt
+      - name: Fail on leaked test files or SQLite connections
+        run: |
+          python -m pytest -W error::ResourceWarning -W error::pytest.PytestUnraisableExceptionWarning \
+            tests/test_e2e_resources.py tests/test_backup_restore.py tests/test_manager_web.py tests/test_vk_miniapp.py \
+            tests/test_partner_click_analytics.py tests/test_travel_crm_store.py tests/test_webhook_delivery.py
+
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 20
