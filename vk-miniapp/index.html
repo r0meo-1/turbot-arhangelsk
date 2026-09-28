@@ -6,7 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#0b1220">
   <title>АПРЕЛЬ тур — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=20260928-ru-date">
   <script src="./vk-bridge.js"></script>
 </head>
 <body>
@@ -61,10 +61,13 @@
 
       <section class="card">
         <div class="section-row">
-          <label for="date">Дата вылета</label>
+          <label for="date-display">Дата вылета</label>
           <span class="hint">можно примерно</span>
         </div>
-        <input id="date" name="date" class="full-input" type="date" required>
+        <div class="date-field full-input">
+          <input id="date-display" type="text" inputmode="decimal" placeholder="ДД.ММ.ГГГГ" maxlength="10" autocomplete="off" required>
+          <input id="date" name="date" type="date" aria-label="Выбрать дату в календаре" title="Выбрать дату в календаре" required>
+        </div>
       </section>
 
       <section class="grid two-col">
@@ -138,6 +141,6 @@
     </section>
   </main>
 
-  <script src="./app.js?v=20260919-vk-legal"></script>
+  <script src="./app.js?v=20260928-ru-date"></script>
 </body>
 </html>
