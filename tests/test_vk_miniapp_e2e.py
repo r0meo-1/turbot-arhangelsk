@@ -88,6 +88,45 @@ def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator("#chat").wait_for(state="visible")
 
 
+@pytest.mark.parametrize("locale,width", [("en-US", 1280), ("en-US", 320), ("ru-RU", 390)])
+def test_flight_date_uses_russian_display_and_iso_payload(locale, width, tmp_path):
+    saved = []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(
+        lambda uid, info: saved.append(info), lambda: (SECRET, APP_ID, GROUP_ID)
+    ))
+    server = make_server("127.0.0.1", 0, app)
+    with local_server(server):
+        with sync_playwright() as pw, ExitStack() as resources:
+            browser = pw.chromium.launch(channel="msedge", headless=True)
+            resources.callback(browser.close)
+            page = browser.new_page(locale=locale, viewport={"width": width, "height": 900})
+            page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
+            display = page.get_by_label("Дата вылета", exact=True)
+            native = page.get_by_label("Выбрать дату в календаре", exact=True)
+            assert display.input_value() == ".".join(reversed(native.input_value().split("-")))
+            native.fill("2032-10-28")
+            assert display.input_value() == "28.10.2032"
+            display.fill("31.02.2032")
+            assert not display.evaluate("el => el.checkValidity()")
+            assert native.input_value() == ""
+            display.fill("01.01.2000")
+            assert not display.evaluate("el => el.checkValidity()")
+            display.fill("")
+            assert not display.evaluate("el => el.checkValidity()")
+            display.fill("29.02.2032")
+            assert display.evaluate("el => el.checkValidity()")
+            assert native.input_value() == "2032-02-29"
+            display.scroll_into_view_if_needed()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            page.screenshot(path=str(tmp_path / f"flight-date-{locale}-{width}.png"))
+            page.evaluate("() => { window.vkBridge.send = () => Promise.reject(new Error('test fallback')); }")
+            _fill_review_and_save(page)
+            assert "29.02.2032" in page.locator("#summary").inner_text()
+            assert len(saved) == 1
+            assert saved[0]["dates"] == "2032-02-29"
+
+
 @pytest.mark.parametrize("width", [320, 390, 1280])
 def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallback(width):
     saved = []

@@ -78,6 +78,26 @@
   today.setDate(today.getDate() + 30);
   $('date').value = localDate(today);
 
+  // Native date inputs follow the device locale; keep the visible value Russian.
+  const dateInput = $('date');
+  const dateDisplay = $('date-display');
+  const syncDateDisplay = () => {
+    dateDisplay.value = dateInput.value ? dateInput.value.split('-').reverse().join('.') : '';
+    dateDisplay.setCustomValidity(dateInput.validity.rangeUnderflow ? 'Дата вылета не может быть в прошлом.' : '');
+  };
+  const syncDateValue = () => {
+    const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(dateDisplay.value.trim());
+    const iso = match ? `${match[3]}-${match[2]}-${match[1]}` : '';
+    dateInput.value = iso;
+    const valid = Boolean(iso) && dateInput.value === iso;
+    dateDisplay.setCustomValidity(!valid ? 'Введите дату в формате ДД.ММ.ГГГГ.'
+      : dateInput.validity.rangeUnderflow ? 'Дата вылета не может быть в прошлом.' : '');
+  };
+  syncDateDisplay();
+  dateInput.addEventListener('input', syncDateDisplay);
+  dateInput.addEventListener('change', syncDateDisplay);
+  dateDisplay.addEventListener('input', syncDateValue);
+
   $('budget').addEventListener('input', () => {
     $('budget-output').textContent = money($('budget').value);
   });
