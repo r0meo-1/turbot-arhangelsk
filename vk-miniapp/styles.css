@@ -35,6 +35,11 @@ form { display: grid; gap: 12px; min-width: 0; }
 input[type="text"], input[type="number"], input[type="date"], .full-input { width: 100%; border: 0; outline: 0; color: var(--tg-theme-text-color, #f8fafc); background: transparent; min-height: 48px; }
 input::placeholder { color: color-mix(in srgb, var(--muted) 72%, transparent); }
 .full-input { padding: 0 12px; background: rgba(255,255,255,.04); border: 1px solid var(--border) !important; border-radius: 14px; }
+.date-field { display: flex; align-items: center; gap: 8px; }
+.date-field #date-display { flex: 1; width: 0; }
+.date-field #date { flex: 0 0 44px; width: 44px; padding: 0; cursor: pointer; color-scheme: dark; }
+.date-field #date::-webkit-datetime-edit { display: none; }
+.date-field #date::-webkit-calendar-picker-indicator { width: 24px; height: 24px; margin: 0 auto; padding: 10px; cursor: pointer; }
 .grid { display: grid; gap: 12px; min-width: 0; }
 .two-col { grid-template-columns: 1fr 1fr; }
 .field-card input { font-size: 17px; font-weight: 700; }
