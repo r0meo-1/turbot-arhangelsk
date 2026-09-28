@@ -36,6 +36,7 @@ jobs:
       - name: Install Playwright browsers
         run: |
           python -m playwright install msedge
+          python -m playwright install chromium
 
       - name: Smoke import test
         run: |
@@ -57,6 +58,9 @@ jobs:
       - name: VK Mini App browser roundtrip
         run: |
           python -m pytest -q tests/test_vk_miniapp_e2e.py
+
+      - name: Agent Desk isolated extension browser contract
+        run: python -m pytest -q tests/test_agent_extension_e2e.py
 
       - name: Telegram Mini App browser roundtrip
         run: |
