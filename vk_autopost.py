@@ -10,7 +10,8 @@ The scheduler is intentionally gated:
 - manual publishing requires an explicit --force flag.
 
 Environment:
-  VK_TOKEN or VK_ACCESS_TOKEN
+  VK_AUTOPOST_TOKEN (user token for wall.get and wall.post)
+  VK_TOKEN or VK_ACCESS_TOKEN (legacy fallback when no dedicated token is set)
   VK_OWNER_ID (negative community wall id) OR VK_GROUP_ID (positive community id)
   VK_AUTOPOST_ENABLED=true
   VK_AUTOPOST_DB=vk_autopost.sqlite        # optional local ledger
@@ -97,9 +98,13 @@ def _parse_hhmm(value: str) -> tuple[int, int]:
 
 
 def resolve_identity() -> tuple[str, int, int]:
-    token = (os.getenv("VK_TOKEN") or os.getenv("VK_ACCESS_TOKEN") or "").strip()
+    token = next(
+        (value for name in ("VK_AUTOPOST_TOKEN", "VK_TOKEN", "VK_ACCESS_TOKEN")
+         if (value := os.getenv(name, "").strip())),
+        "",
+    )
     if not token:
-        raise VKAutopostError("VK_TOKEN or VK_ACCESS_TOKEN is not set")
+        raise VKAutopostError("VK_AUTOPOST_TOKEN (or legacy VK_TOKEN/VK_ACCESS_TOKEN) is not set")
 
     owner_raw = os.getenv("VK_OWNER_ID", "").strip()
     group_raw = os.getenv("VK_GROUP_ID", "").strip()
@@ -135,6 +140,12 @@ def vk_call(method: str, token: str, **params: Any) -> Any:
         raise VKAutopostError(f"VK network/JSON error: {exc}") from exc
     if "error" in body:
         err = body["error"]
+        if err.get("error_code") == 27:
+            raise VKAutopostError(
+                f"VK API error 27 in {method}: group authentication is unavailable. "
+                "Configure VK_AUTOPOST_TOKEN with user access to wall.get and wall.post; "
+                "keep the bot messaging token unchanged."
+            )
         raise VKAutopostError(
             f"VK API error {err.get('error_code')}: {err.get('error_msg')}"
         )
