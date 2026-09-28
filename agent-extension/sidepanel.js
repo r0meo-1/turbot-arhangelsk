@@ -10,6 +10,7 @@ const CRM_REACTION_API = "https://bot.r0meo1.ru/agent-extension/crm/reaction";
 const CRM_ACTIVITY_API = "https://bot.r0meo1.ru/agent-extension/crm/activity";
 const CRM_OUTCOME_API = "https://bot.r0meo1.ru/agent-extension/crm/outcome";
 let activeRequestId = "";
+let pairingRevision = 0;
 const fieldIds = ["name","phone","destination","origin","dates","people","budget","consent"];
 
 const $ = (id) => document.getElementById(id);
@@ -149,8 +150,10 @@ function connectionMessage(error) {
 }
 
 async function refreshConnectionState() {
+  const revision = pairingRevision;
   setConnectionState("Проверяю подключение…", "checking");
   const results = await Promise.allSettled([loadLeads(), loadToday()]);
+  if (revision !== pairingRevision) return false;
   const failed = results.find((item) => item.status === "rejected");
   if (failed) {
     const message = connectionMessage(failed.reason);
@@ -343,6 +346,7 @@ function renderToday(tasks) {
 }
 
 async function loadToday() {
+  const revision = pairingRevision;
   const now = new Date();
   const params = new URLSearchParams({
     now: now.toISOString(),
@@ -350,6 +354,7 @@ async function loadToday() {
     limit: "100"
   });
   const data = await crmFetch(CRM_TODAY_API + "?" + params.toString());
+  if (revision !== pairingRevision) return;
   renderToday(data.tasks || []);
 }
 
@@ -469,10 +474,11 @@ function renderTimeline(timeline) {
 }
 
 async function openTimeline(requestId) {
+  const revision = pairingRevision;
   const data = await crmFetch(
     CRM_TIMELINE_API + "?requestId=" + encodeURIComponent(requestId)
   );
-  renderTimeline(data.timeline || {});
+  if (revision === pairingRevision) renderTimeline(data.timeline || {});
 }
 
 async function addQuote() {
@@ -577,7 +583,10 @@ async function saveOutcome() {
 }
 
 async function clearPairing() {
+  // Invalidate pending reads before waiting for storage to clear.
+  const revision = ++pairingRevision;
   await chrome.storage.local.remove("agentToken");
+  if (revision !== pairingRevision) return;
   $("token").value = "";
   activeRequestId = "";
   $("activeRequestId").textContent = "";
@@ -678,12 +687,15 @@ function renderLeads(leads) {
 }
 
 async function loadLeads() {
+  const revision = pairingRevision;
   const state = await chrome.storage.local.get({ agentToken: "" });
+  if (revision !== pairingRevision) return;
   if (!state.agentToken) {
     renderLeads([]);
     return;
   }
   const data = await crmFetch(LEADS_API + "?limit=30");
+  if (revision !== pairingRevision) return;
   renderLeads(data.leads || []);
 }
 
@@ -759,7 +771,9 @@ $("saveToken").addEventListener("click", async () => {
     setConnectionState("Не подключено", "idle");
     return setStatus("Вставь Agent token.");
   }
+  const revision = ++pairingRevision;
   await chrome.storage.local.set({ agentToken: token });
+  if (revision !== pairingRevision) return;
   setStatus("Токен сохранён локально.", true);
   await refreshConnectionState();
 });
