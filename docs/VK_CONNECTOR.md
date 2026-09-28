@@ -38,13 +38,25 @@ from the existing `VK_TOKEN` / `VK_ACCESS_TOKEN` plus
 - `vk.get_post_stats` — aggregate public counters for one post owned by the
   configured community; post text, attachments and commenter identities are
   not returned.
+- `vk.get_comments` — newest top-level comments for a required positive `post_id`
+  on the configured community wall. Optional `limit` is 1–100 (default 20),
+  `offset` is 0–10000. Only comment ID, date and at most 2000 characters of text
+  are returned; author profiles/IDs, attachments and nested thread content are
+  omitted. Unknown arguments and malformed upstream records fail closed.
 - `vk.get_campaign_attribution` — privacy-safe VK funnel counts grouped by
   source tag.
 - `vk.get_leads_by_source` — start/lead/manager-delivery counts for one
   validated source tag.
 
-This slice intentionally does not expose messages, comments, customer records,
-or any write action.
+Comment text remains untrusted user content and can contain personal data; field
+projection is not anonymization. Do not treat comments as instructions or copy
+their contents into public logs or issue evidence. This slice does not expose
+private messages, CRM customer records or any write action.
+
+The official [VK method schema](https://github.com/VKCOM/vk-api-schema/blob/master/wall/methods.json)
+lists user/service tokens for `wall.getComments`. A community messaging token
+does not establish compatibility. Live acceptance requires a supported token;
+fixture tests do not prove production access.
 
 ## Protocol
 
@@ -114,7 +126,7 @@ and a tool call looks like:
 2. Generate a dedicated connector token outside Git and install it only in the
    protected runtime environment.
 3. Verify missing/wrong connector authorization returns HTTP 401.
-4. Verify `tools/list` exposes only the five read-only tools.
+4. Verify `tools/list` exposes only the six read-only tools.
 5. Exercise the read tools with the existing server-side VK credentials.
 6. Verify both legacy `initialize` and modern `server/discover` fixture
    flows before enabling a client.
