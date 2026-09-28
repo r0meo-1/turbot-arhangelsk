@@ -81,21 +81,26 @@ def test_draft_api_and_static():
         '', 'app.js', 'styles.css', 'vk-bridge.js', 'legal.js',
         'privacy.html', 'consent.html', 'terms.html', 'moderation.html',
     ):
-        assert client.get('/vk/miniapp/' + path).status_code == 200
+        with client.get('/vk/miniapp/' + path) as static_response:
+            assert static_response.status_code == 200
     legal = client.get('/vk/miniapp/legal.json')
     assert legal.status_code == 200
     assert legal.json['operatorName'] == 'ИП Замятина Мария Андреевна, ОГРНИП 311293232600026'
     assert legal.json['operatorName'] != 'ТА «АПРЕЛЬ тур»'
     assert legal.json['projectUrl'] == 'https://r0meo1.ru/apreltour/'
-    privacy = client.get('/vk/miniapp/privacy.html').get_data(as_text=True)
+    with client.get('/vk/miniapp/privacy.html') as static_response:
+        privacy = static_response.get_data(as_text=True)
     assert 'ЧЕРНОВИК' not in privacy
     assert 'Telegram' not in privacy
     assert 'Политика обработки персональных данных' in privacy
     assert 'Рекламные сообщения' in privacy
     assert 'https://r0meo1.ru/apreltour/' not in privacy
-    consent = client.get('/vk/miniapp/consent.html').get_data(as_text=True)
-    terms = client.get('/vk/miniapp/terms.html').get_data(as_text=True)
-    moderation = client.get('/vk/miniapp/moderation.html').get_data(as_text=True)
+    with client.get('/vk/miniapp/consent.html') as static_response:
+        consent = static_response.get_data(as_text=True)
+    with client.get('/vk/miniapp/terms.html') as static_response:
+        terms = static_response.get_data(as_text=True)
+    with client.get('/vk/miniapp/moderation.html') as static_response:
+        moderation = static_response.get_data(as_text=True)
     assert 'Согласие на обработку персональных данных' in consent
     assert 'Условия использования VK Mini App' in terms
     assert 'Правила модерации и безопасного использования' in moderation
@@ -187,8 +192,10 @@ def test_manager_entry_is_hidden_until_signed_probe_succeeds():
     )
     client = app.test_client()
 
-    index = client.get("/vk/miniapp/").get_data(as_text=True)
-    script = client.get("/vk/miniapp/app.js").get_data(as_text=True)
+    with client.get("/vk/miniapp/") as static_response:
+        index = static_response.get_data(as_text=True)
+    with client.get("/vk/miniapp/app.js") as static_response:
+        script = static_response.get_data(as_text=True)
 
     assert 'id="manager-entry"' in index
     assert 'id="manager-link"' in index
