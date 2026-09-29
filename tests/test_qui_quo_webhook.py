@@ -249,6 +249,50 @@ def test_unlinked_event_waits_until_explicit_quote_mapping(qq):
     assert "item_order" in activity[2]
 
 
+def test_unmatched_rows_do_not_starve_newly_linked_events(qq):
+    client, db_cursor, inbox = qq
+    inbox.batch_size = 1
+
+    old = payload("quote_open")
+    old["quote"]["id"] = "QQ-OLD"
+    assert client.post(f"/qq-webhook/{SECRET}", json=old).status_code == 200
+    assert inbox.process_pending_once(now=1000) == 0
+
+    with db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE qui_quo_events SET received_at=1, next_retry_at=0 "
+            "WHERE quote_id=?",
+            ("QQ-OLD",),
+        )
+        assert link_quote(
+            cur.connection,
+            "QQ-NEW",
+            "request-new",
+            "main",
+            now=1001,
+        ) is True
+
+    new = payload("quote_open")
+    new["quote"]["id"] = "QQ-NEW"
+    assert client.post(f"/qq-webhook/{SECRET}", json=new).status_code == 200
+    with db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE qui_quo_events SET received_at=2 WHERE quote_id=?",
+            ("QQ-NEW",),
+        )
+
+    assert inbox.process_pending_once(now=2000) == 1
+    with db_cursor() as cur:
+        statuses = {
+            str(row[0]): str(row[1])
+            for row in cur.execute(
+                "SELECT quote_id, status FROM qui_quo_events"
+            ).fetchall()
+        }
+    assert statuses["QQ-OLD"] == "unmatched"
+    assert statuses["QQ-NEW"] == "processed"
+
+
 def test_event_projects_once_after_explicit_mapping(qq):
     client, db_cursor, inbox = qq
     with db_cursor(commit=True) as cur:
