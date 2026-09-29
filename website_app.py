@@ -37,7 +37,13 @@ from shared import travel_crm_store as _travel_crm_store
 from shared.telegram_webapp import MiniAppValidationError, validate_init_data
 from shared.vk_miniapp import validate_launch_params as validate_vk_launch_params
 from shared.vk_connector import create_blueprint as create_vk_connector_blueprint
-from shared.qui_quo_webhook import create_blueprint as create_qui_quo_webhook_blueprint
+from shared.qui_quo_webhook import (
+    QuiQuoLinkConflict,
+    QuiQuoValidationError,
+    cleanup_before as _cleanup_qui_quo_before,
+    create_blueprint as create_qui_quo_webhook_blueprint,
+    link_quote as _link_qui_quo_quote,
+)
 from shared.runtime_metrics import lead_delivery_snapshot
 from shared.utc_time import utc_now_naive as _utc_now_naive
 from shared.travel_crm import (
@@ -64,18 +70,6 @@ if "vk_connector" not in app.blueprints:
         create_vk_connector_blueprint(
             _bot._db_cursor,
             token_getter=lambda: os.getenv("VK_CONNECTOR_TOKEN", ""),
-        )
-    )
-if "qui_quo_webhook" not in app.blueprints:
-    _qui_quo_worker_enabled = (
-        len(os.getenv("QUI_QUO_WEBHOOK_SECRET", "").strip()) >= 32
-        and os.getenv("QUI_QUO_WORKER_ENABLED", "true").strip().lower()
-        not in {"0", "false", "no", "off"}
-    )
-    app.register_blueprint(
-        create_qui_quo_webhook_blueprint(
-            _bot._db_cursor,
-            start_worker=_qui_quo_worker_enabled,
         )
     )
 logger = logging.getLogger("turbot.website")
@@ -811,6 +805,7 @@ def _cleanup_old_leads() -> None:
             lead_ids,
             channel="website",
         )
+        _cleanup_qui_quo_before(cur.connection, cutoff)
         cur.execute("DELETE FROM website_leads WHERE created_at < ?", (cutoff,))
 
 
@@ -2118,6 +2113,98 @@ if "agent_extension_crm_outcome" not in app.view_functions:
         })
 
 
+def _project_qui_quo_activity(
+    store: str,
+    request_id: str,
+    activity_id: str,
+    summary: str,
+    created_at: int,
+) -> None:
+    """Idempotently project a linked Qui-Quo event into the selected CRM store."""
+
+    with _agent_crm_cursor(store, commit=True) as cur:
+        if cur is None or _travel_crm_store.load_timeline(
+            cur.connection, request_id
+        ) is None:
+            raise LookupError("request_not_found")
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO crm_activities (
+                activity_id, request_id, activity_type, summary, created_at
+            ) VALUES (?, ?, ?, 'note', ?)
+            """,
+            (
+                activity_id,
+                request_id,
+                summary,
+                int(created_at),
+            ),
+        )
+
+
+if "agent_extension_crm_qui_quo_link" not in app.view_functions:
+
+    @app.route("/agent-extension/crm/qui-quo-link", methods=["POST", "OPTIONS"])
+    def agent_extension_crm_qui_quo_link() -> Response:
+        if request.method == "OPTIONS":
+            return _agent_json_response({"ok": True}, 204)
+        denied = _agent_crm_guard()
+        if denied is not None:
+            return denied
+        if not request.is_json:
+            return _agent_json_response(
+                {"ok": False, "error": "json_required"}, 415
+            )
+        raw = request.get_json(silent=True)
+        if not isinstance(raw, dict):
+            return _agent_json_response(
+                {"ok": False, "error": "invalid_json"}, 400
+            )
+
+        request_id = str(raw.get("requestId") or "").strip()
+        quote_id = str(raw.get("quiQuoQuoteId") or "").strip()
+        if not request_id or not quote_id:
+            return _agent_json_response(
+                {"ok": False, "error": "invalid_link"}, 400
+            )
+
+        store = _agent_crm_store_for_request(request_id)
+        with _agent_crm_cursor(store) as cur:
+            if cur is None or _travel_crm_store.load_timeline(
+                cur.connection, request_id
+            ) is None:
+                return _agent_json_response(
+                    {"ok": False, "error": "request_not_found"}, 404
+                )
+
+        try:
+            with _bot._db_cursor(commit=True) as cur:
+                created = _link_qui_quo_quote(
+                    cur.connection,
+                    quote_id,
+                    request_id,
+                    store,
+                )
+        except QuiQuoLinkConflict:
+            return _agent_json_response(
+                {"ok": False, "error": "quote_already_linked"}, 409
+            )
+        except (QuiQuoValidationError, ValueError):
+            return _agent_json_response(
+                {"ok": False, "error": "invalid_link"}, 400
+            )
+
+        return _agent_json_response(
+            {
+                "ok": True,
+                "requestId": request_id,
+                "quiQuoQuoteId": quote_id,
+                "store": store,
+                "created": created,
+            }
+        )
+
+
 if "agent_extension_lead" not in app.view_functions:
 
     @app.route("/agent-extension/lead", methods=["POST", "OPTIONS"])
@@ -2229,4 +2316,19 @@ if "website_lead" not in app.view_functions:
 
 
 _init_schema()
+
+if "qui_quo_webhook" not in app.blueprints:
+    _qui_quo_worker_enabled = (
+        len(os.getenv("QUI_QUO_WEBHOOK_SECRET", "").strip()) >= 32
+        and os.getenv("QUI_QUO_WORKER_ENABLED", "true").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
+    app.register_blueprint(
+        create_qui_quo_webhook_blueprint(
+            _bot._db_cursor,
+            start_worker=_qui_quo_worker_enabled,
+            projector=_project_qui_quo_activity,
+        )
+    )
+
 _start_worker_once()
