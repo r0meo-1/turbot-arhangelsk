@@ -607,6 +607,21 @@ def delete_for_lead_ids(
         return 0
 
     req_placeholders = ",".join("?" for _ in request_ids)
+
+    # Optional provider inbox/link tables live in the main CRM database. Erase
+    # their external identifiers before removing the canonical request row.
+    for optional_table in ("qui_quo_events", "qui_quo_quote_links"):
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (optional_table,),
+        ).fetchone()
+        if exists is not None:
+            conn.execute(
+                f"DELETE FROM {optional_table} "
+                f"WHERE request_id IN ({req_placeholders})",
+                request_ids,
+            )
+
     for table in (
         "crm_quote_reactions",
         "crm_quotes",
