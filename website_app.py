@@ -2131,7 +2131,7 @@ def _project_qui_quo_activity(
             """
             INSERT OR IGNORE INTO crm_activities (
                 activity_id, request_id, activity_type, summary, created_at
-            ) VALUES (?, ?, ?, 'note', ?)
+            ) VALUES (?, ?, 'note', ?, ?)
             """,
             (
                 activity_id,
