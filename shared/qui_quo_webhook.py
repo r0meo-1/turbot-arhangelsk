@@ -687,6 +687,9 @@ def create_blueprint(
         try:
             raw = _extract_payload(limit)
             event = sanitize_event(raw)
+            if event.get("is_test") is True:
+                return _json_response({"success": True})
+            inserted = inbox.enqueue(event)
         except QuiQuoValidationError as exc:
             error = exc.code
             status = (
@@ -700,11 +703,16 @@ def create_blueprint(
                 {"success": False, "error": error},
                 status,
             )
+        except Exception as exc:
+            logger.error(
+                "Qui-Quo request persistence failed: %s",
+                type(exc).__name__,
+            )
+            return _json_response(
+                {"success": False, "error": "temporarily_unavailable"},
+                503,
+            )
 
-        if event.get("is_test") is True:
-            return _json_response({"success": True})
-
-        inserted = inbox.enqueue(event)
         return _json_response(
             {"success": True, "duplicate": not inserted}
         )
