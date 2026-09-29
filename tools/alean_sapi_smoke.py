@@ -11,9 +11,14 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import replace
+from pathlib import Path
 from datetime import date, timedelta
 
 import requests
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from shared.alean import AleanSettings, readiness_probe, search_tours
 
