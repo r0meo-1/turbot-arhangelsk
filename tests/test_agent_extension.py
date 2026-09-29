@@ -64,6 +64,7 @@ def test_agent_extension_points_only_to_protected_agent_endpoint():
     assert "https://bot.r0meo1.ru/agent-extension/crm/today" in js
     assert "https://bot.r0meo1.ru/agent-extension/crm/timeline" in js
     assert "https://bot.r0meo1.ru/agent-extension/crm/quote" in js
+    assert "https://bot.r0meo1.ru/agent-extension/crm/qui-quo-link" in js
     assert "https://bot.r0meo1.ru/agent-extension/crm/reaction" in js
     assert "https://bot.r0meo1.ru/agent-extension/crm/activity" in js
     assert "https://bot.r0meo1.ru/agent-extension/crm/outcome" in js
@@ -81,6 +82,19 @@ def test_agent_extension_every_static_button_has_js_wiring():
     assert button_ids
     for button_id in button_ids:
         assert f'$("{button_id}").addEventListener' in js, button_id
+
+
+def test_agent_extension_qui_quo_link_ui_is_wired():
+    html = (EXT / "sidepanel.html").read_text(encoding="utf-8")
+    js = (EXT / "sidepanel.js").read_text(encoding="utf-8")
+
+    assert 'id="quiQuoQuoteId" maxlength="128"' in html
+    assert 'id="linkQuiQuo"' in html
+    assert "Данные клиента сюда не вставляй" in html
+    assert 'const CRM_QUI_QUO_LINK_API = "https://bot.r0meo1.ru/agent-extension/crm/qui-quo-link";' in js
+    assert "async function linkQuiQuo()" in js
+    assert "quiQuoQuoteId: quoteId" in js
+    assert '$("linkQuiQuo").addEventListener("click", linkQuiQuo);' in js
 
 
 def test_agent_extension_outcome_ui_is_wired_and_bounded():
