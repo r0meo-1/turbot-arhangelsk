@@ -857,6 +857,28 @@ def test_agent_extension_links_qui_quo_quote_to_request(client, monkeypatch):
     assert replay.status_code == 200
     assert replay.get_json()["created"] is False
 
+    website_app._project_qui_quo_activity(
+        "main",
+        request_id,
+        "qui-quo:test-projection",
+        "Qui-Quo: quote_open; quote=QQ-EXT-123",
+        1234,
+    )
+    with bot._db_cursor() as cur:
+        projected = cur.execute(
+            """
+            SELECT activity_type, summary, created_at
+            FROM crm_activities
+            WHERE activity_id=?
+            """,
+            ("qui-quo:test-projection",),
+        ).fetchone()
+    assert tuple(projected) == (
+        "note",
+        "Qui-Quo: quote_open; quote=QQ-EXT-123",
+        1234,
+    )
+
     other = client.post(
         "/agent-extension/lead",
         headers=_agent_headers(),
