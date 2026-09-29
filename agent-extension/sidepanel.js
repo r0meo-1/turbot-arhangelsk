@@ -6,6 +6,7 @@ const CRM_TODAY_API = "https://bot.r0meo1.ru/agent-extension/crm/today";
 const CRM_TIMELINE_API = "https://bot.r0meo1.ru/agent-extension/crm/timeline";
 const CRM_TASK_API = "https://bot.r0meo1.ru/agent-extension/crm/task";
 const CRM_QUOTE_API = "https://bot.r0meo1.ru/agent-extension/crm/quote";
+const CRM_QUI_QUO_LINK_API = "https://bot.r0meo1.ru/agent-extension/crm/qui-quo-link";
 const CRM_REACTION_API = "https://bot.r0meo1.ru/agent-extension/crm/reaction";
 const CRM_ACTIVITY_API = "https://bot.r0meo1.ru/agent-extension/crm/activity";
 const CRM_OUTCOME_API = "https://bot.r0meo1.ru/agent-extension/crm/outcome";
@@ -512,6 +513,30 @@ async function addQuote() {
   }
 }
 
+async function linkQuiQuo() {
+  if (!activeRequestId) return setStatus("Сначала открой заявку.");
+  const quoteId = $("quiQuoQuoteId").value.trim();
+  if (!quoteId) return setStatus("Укажи ID подборки Qui-Quo.");
+  try {
+    const data = await crmFetch(CRM_QUI_QUO_LINK_API, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: activeRequestId,
+        quiQuoQuoteId: quoteId
+      })
+    });
+    $("quiQuoQuoteId").value = "";
+    setStatus(
+      data.created
+        ? "Подборка Qui-Quo привязана к заявке."
+        : "Эта подборка Qui-Quo уже привязана к заявке.",
+      true
+    );
+  } catch (error) {
+    setStatus("Qui-Quo не привязан: " + (error.message || "ошибка"));
+  }
+}
+
 async function addReaction(quoteId, reaction, note, button) {
   button.disabled = true;
   try {
@@ -785,6 +810,7 @@ $("refreshToday").addEventListener("click", () => {
   loadToday().catch((error) => setStatus("Очередь: " + error.message));
 });
 $("addQuote").addEventListener("click", addQuote);
+$("linkQuiQuo").addEventListener("click", linkQuiQuo);
 $("addActivity").addEventListener("click", addActivity);
 $("addTask").addEventListener("click", addTask);
 $("saveOutcome").addEventListener("click", saveOutcome);
