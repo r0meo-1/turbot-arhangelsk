@@ -375,6 +375,13 @@ def _tour_search_health() -> Dict[str, Any]:
             "configured": bool(TRAVELATA_USERNAME and TRAVELATA_PASSWORD),
             "enabled": bool(TRAVELATA_ENABLED),
         },
+        "alean": {
+            "configured": bool(
+                getattr(providers.alean, "username", "")
+                and getattr(providers.alean, "password", "")
+            ),
+            "enabled": bool(getattr(providers.alean, "enabled", False)),
+        },
         "sletat": {
             "configured": bool(
                 getattr(providers.sletat, "login", "")
