@@ -37,6 +37,7 @@ from shared import travel_crm_store as _travel_crm_store
 from shared.telegram_webapp import MiniAppValidationError, validate_init_data
 from shared.vk_miniapp import validate_launch_params as validate_vk_launch_params
 from shared.vk_connector import create_blueprint as create_vk_connector_blueprint
+from shared.qui_quo_webhook import create_blueprint as create_qui_quo_webhook_blueprint
 from shared.runtime_metrics import lead_delivery_snapshot
 from shared.utc_time import utc_now_naive as _utc_now_naive
 from shared.travel_crm import (
@@ -63,6 +64,18 @@ if "vk_connector" not in app.blueprints:
         create_vk_connector_blueprint(
             _bot._db_cursor,
             token_getter=lambda: os.getenv("VK_CONNECTOR_TOKEN", ""),
+        )
+    )
+if "qui_quo_webhook" not in app.blueprints:
+    _qui_quo_worker_enabled = (
+        len(os.getenv("QUI_QUO_WEBHOOK_SECRET", "").strip()) >= 32
+        and os.getenv("QUI_QUO_WORKER_ENABLED", "true").strip().lower()
+        not in {"0", "false", "no", "off"}
+    )
+    app.register_blueprint(
+        create_qui_quo_webhook_blueprint(
+            _bot._db_cursor,
+            start_worker=_qui_quo_worker_enabled,
         )
     )
 logger = logging.getLogger("turbot.website")
