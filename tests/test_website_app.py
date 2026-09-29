@@ -100,6 +100,8 @@ def clean_website_state(monkeypatch, tmp_path):
         cur.execute("DELETE FROM crm_trip_requests")
         cur.execute("DELETE FROM website_leads")
         cur.execute("DELETE FROM acquisition_funnel_events")
+        cur.execute("DELETE FROM qui_quo_events")
+        cur.execute("DELETE FROM qui_quo_quote_links")
 
 
 @pytest.fixture
@@ -818,6 +820,70 @@ def _agent_headers():
         "Origin": "chrome-extension://abcdefghijklmnop",
         "Authorization": "Bearer agent-secret",
     }
+
+
+def test_agent_extension_links_qui_quo_quote_to_request(client, monkeypatch):
+    monkeypatch.setattr(website_app, "_AGENT_EXTENSION_TOKEN", "agent-secret")
+    monkeypatch.setattr(website_app, "_kick_delivery", lambda *args, **kwargs: None)
+
+    create = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-qq-link-0001"),
+    )
+    assert create.status_code == 202
+    request_id = f"web-lead-{create.get_json()['leadId']}"
+
+    first = client.post(
+        "/agent-extension/crm/qui-quo-link",
+        headers=_agent_headers(),
+        json={
+            "requestId": request_id,
+            "quiQuoQuoteId": "QQ-EXT-123",
+        },
+    )
+    assert first.status_code == 200
+    assert first.get_json()["created"] is True
+    assert first.get_json()["store"] == "main"
+
+    replay = client.post(
+        "/agent-extension/crm/qui-quo-link",
+        headers=_agent_headers(),
+        json={
+            "requestId": request_id,
+            "quiQuoQuoteId": "QQ-EXT-123",
+        },
+    )
+    assert replay.status_code == 200
+    assert replay.get_json()["created"] is False
+
+    other = client.post(
+        "/agent-extension/lead",
+        headers=_agent_headers(),
+        json=_payload("agent-qq-link-0002"),
+    )
+    assert other.status_code == 202
+    conflict = client.post(
+        "/agent-extension/crm/qui-quo-link",
+        headers=_agent_headers(),
+        json={
+            "requestId": f"web-lead-{other.get_json()['leadId']}",
+            "quiQuoQuoteId": "QQ-EXT-123",
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.get_json()["error"] == "quote_already_linked"
+
+    with bot._db_cursor() as cur:
+        row = cur.execute(
+            """
+            SELECT request_id, store
+            FROM qui_quo_quote_links
+            WHERE quote_id=?
+            """,
+            ("QQ-EXT-123",),
+        ).fetchone()
+    assert tuple(row) == (request_id, "main")
 
 
 def test_agent_extension_crm_today_quote_reaction_and_activity(client, monkeypatch):
