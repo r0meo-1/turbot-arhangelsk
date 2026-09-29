@@ -519,13 +519,15 @@ class QuiQuoInbox:
 
     def process_pending_once(self, *, now: int | None = None) -> int:
         stamp = int(time.time()) if now is None else int(now)
+        # Unmatched rows stay dormant until link_quote() reactivates them.
+        # Polling them forever can starve newer linked events in a bounded batch.
         with self._db_cursor() as cur:
             rows = cur.execute(
                 """
                 SELECT event_key, event_type, quote_id, item_pos, deposit_amount,
                        attempts, received_at
                 FROM qui_quo_events
-                WHERE status IN ('pending', 'retry', 'unmatched')
+                WHERE status IN ('pending', 'retry')
                   AND COALESCE(next_retry_at, 0) <= ?
                 ORDER BY received_at, event_key
                 LIMIT ?
