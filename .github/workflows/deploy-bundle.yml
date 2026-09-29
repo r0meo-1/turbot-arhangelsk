@@ -264,6 +264,7 @@ jobs:
             agent-extension/status \
             agent-extension/crm/task \
             agent-extension/crm/quote \
+            agent-extension/crm/qui-quo-link \
             agent-extension/crm/reaction \
             agent-extension/crm/activity \
             agent-extension/crm/outcome; do
