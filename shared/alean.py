@@ -116,11 +116,17 @@ def _bounded_xml(settings: AleanSettings, response: requests.Response) -> ET.Ele
         error.response = response
         raise error
 
-    raw = bytes(getattr(response, "content", b"") or b"")
-    if not raw and hasattr(response, "text"):
-        raw = str(response.text).encode("utf-8")
-    if len(raw) > settings.max_response_bytes:
-        raise ValueError("Alean SAPI response exceeds configured size limit")
+    parts: List[bytes] = []
+    size = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        size += len(chunk)
+        if size > settings.max_response_bytes:
+            response.close()
+            raise ValueError("Alean SAPI response exceeds configured size limit")
+        parts.append(bytes(chunk))
+    raw = b"".join(parts)
     if not raw:
         raise ValueError("Alean SAPI returned an empty response")
 
@@ -145,6 +151,7 @@ def _request_xml(
         headers={"Accept": "application/xml"},
         timeout=settings.timeout,
         allow_redirects=False,
+        stream=True,
     )
     return _bounded_xml(settings, response)
 
@@ -313,23 +320,27 @@ def _extract_offers(
         # Never infer live availability contrary to the provider flags.
         if _int(row.get("hotelisinstop"), 1) != 0:
             continue
-        if _int(row.get("ticketsincluded"), 0) == 1:
-            economy_ok = (
-                _int(row.get("haseconomticketsdpt"), 0) == 1
-                and _int(row.get("haseconomticketsrtn"), 0) == 1
-            )
-            business_ok = (
-                _int(row.get("hasbusinessticketsdpt"), 0) == 1
-                and _int(row.get("hasbusinessticketsrtn"), 0) == 1
-            )
-            if not (economy_ok or business_ok):
-                continue
+        if _int(row.get("ticketsincluded"), 0) != 1:
+            continue
+        economy_ok = (
+            _int(row.get("haseconomticketsdpt"), 0) == 1
+            and _int(row.get("haseconomticketsrtn"), 0) == 1
+        )
+        business_ok = (
+            _int(row.get("hasbusinessticketsdpt"), 0) == 1
+            and _int(row.get("hasbusinessticketsrtn"), 0) == 1
+        )
+        if not (economy_ok or business_ok):
+            continue
 
         hotel = catalog.hotels.get(row.get("hotelid", ""))
         resort = catalog.resorts.get(row.get("resortid", ""))
         category = catalog.categories.get(row.get("hotelcategoryid", ""))
 
         hotel_name = (hotel or {}).get("name") or f"Alean hotel {row.get('hotelid', '')}".strip()
+        hotel_query = str(info.get("hotel_query") or "").strip()
+        if hotel_query and not _tourvisor._hotel_matches(hotel_name, hotel_query):
+            continue
         resort_name = (resort or {}).get("name", "")
         offer = _tourvisor.TourOffer(
             hotel=hotel_name,
@@ -408,7 +419,14 @@ def search_tours(
                 error="Это направление пока не найдено в Alean SAPI"
             )
 
-        date_from, date_to = _bounded_dates(window.date_from, window.date_to)
+        window_start = datetime.strptime(window.date_from, "%Y-%m-%d")
+        window_end = datetime.strptime(window.date_to, "%Y-%m-%d")
+        if (window_end - window_start).days > 3:
+            return _tourvisor.SearchResult(
+                error="Alean SAPI не поддерживает такой широкий диапазон дат"
+            )
+        date_from = window_start.strftime("%d.%m.%Y")
+        date_to = window_end.strftime("%d.%m.%Y")
         nights_min = max(1, int(window.nights_from))
         nights_max = max(nights_min, min(int(window.nights_to), nights_min + 3))
 
