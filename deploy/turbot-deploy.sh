@@ -851,7 +851,6 @@ if marker in {"TURBOT_DEPLOY_CONFIG_V3", "TURBOT_DEPLOY_CONFIG_V4", "TURBOT_DEPL
             "TRAVELATA_USERNAME": quote_env(travelata_username),
             "TRAVELATA_PASSWORD": quote_env(travelata_password),
             "VK_TRAVELATA_ENABLED": "true",
-            "TOUR_PROVIDER_ORDER": quote_env("travelata,tourvisor"),
         }
     )
 
@@ -872,7 +871,6 @@ if marker == "TURBOT_DEPLOY_CONFIG_V5" and sletat_supplied:
             "SLETAT_LOGIN": quote_env(sletat_login),
             "SLETAT_PASSWORD": quote_env(sletat_password),
             "VK_SLETAT_ENABLED": "true",
-            "TOUR_PROVIDER_ORDER": quote_env("sletat,travelata,tourvisor"),
         }
     )
 
