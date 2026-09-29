@@ -19,6 +19,7 @@ from shared.travel_crm import (
     TaskType,
     TripRequest,
 )
+from shared.qui_quo_webhook import QuiQuoInbox, link_quote
 from shared.travel_crm_store import (
     append_activity,
     append_quote,
@@ -223,6 +224,60 @@ def test_due_tasks_returns_today_queue_by_priority(db):
     )
 
     assert [task.task_id for task in due_tasks(conn, now)] == ["send", "callback"]
+
+
+def test_delete_for_lead_ids_erases_unprocessed_qui_quo_identifiers(db):
+    conn = db
+    request = _request()
+    upsert_request(conn, request, lead_id=76)
+
+    def _db_cursor(commit=False):
+        class _Ctx:
+            def __enter__(self):
+                self.cur = conn.cursor()
+                return self.cur
+
+            def __exit__(self, exc_type, exc, tb):
+                if exc_type is None and commit:
+                    conn.commit()
+                self.cur.close()
+
+        return _Ctx()
+
+    inbox = QuiQuoInbox(_db_cursor)
+    inbox.init_schema()
+    event = {
+        "is_test": False,
+        "event_key": "d" * 64,
+        "event_type": "quote_open",
+        "quote_id": "QQ-DELETE-1",
+        "client_id": "10",
+        "manager_id": "20",
+        "item_pos": "",
+        "deposit_amount": "",
+        "item_count": 1,
+    }
+    assert inbox.enqueue(event) is True
+    link_quote(
+        conn,
+        "QQ-DELETE-1",
+        request.request_id,
+        "main",
+        now=100,
+    )
+
+    # Event has not been projected yet, so request_id is intentionally NULL.
+    assert conn.execute(
+        "SELECT request_id FROM qui_quo_events"
+    ).fetchone()[0] is None
+
+    assert delete_for_lead_ids(conn, [76]) == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM qui_quo_events"
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM qui_quo_quote_links"
+    ).fetchone()[0] == 0
 
 
 def test_delete_for_lead_ids_erases_whole_crm_timeline(db):

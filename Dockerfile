@@ -7,7 +7,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code (shared/ is required — both bots import it)
-COPY bot.py vk_bot.py ./
+COPY bot.py vk_bot.py website_app.py gunicorn.conf.py ./
 COPY shared/ ./shared/
 COPY deploy/ ./deploy/
 COPY docs/ ./docs/
@@ -32,4 +32,4 @@ VOLUME ["/app/data"]
 # memory, so a second worker would split them and corrupt in-flight dialogs.
 EXPOSE 5000 5100
 
-CMD ["gunicorn", "bot:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "60"]
+CMD ["gunicorn", "website_app:app", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "4", "--timeout", "60"]

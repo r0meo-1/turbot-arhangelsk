@@ -70,6 +70,7 @@ from shared import version as _version
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
+from shared import qui_quo_webhook as _qui_quo_webhook
 from shared import travel_crm_adapter as _travel_crm_adapter
 from shared import provider_status as _provider_status
 from shared import webhook_delivery as _webhook_delivery
@@ -131,7 +132,8 @@ REGCLOUD_BASE_URL = os.getenv("REGCLOUD_BASE_URL", "")
 REGCLOUD_MODEL    = os.getenv("REGCLOUD_MODEL", "")
 AI_MODE           = os.getenv("AI_MODE", "template").lower().strip()
 PORT              = _env_int("VK_PORT", _env_int("PORT", 5100))
-DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", os.getenv("DATABASE_PATH", "vk_bot_state.sqlite"))
+MAIN_DATABASE_PATH = os.getenv("DATABASE_PATH", "bot_state.sqlite")
+DATABASE_PATH     = os.getenv("VK_DATABASE_PATH", MAIN_DATABASE_PATH)
 ADMIN_ID          = _env_int("ADMIN_ID", 0)
 ADMIN_ERROR_ALERTS = os.getenv("ADMIN_ERROR_ALERTS", "true").lower().strip() in ("1", "true", "yes")
 ERROR_ALERT_COOLDOWN = max(0, _env_int("ERROR_ALERT_COOLDOWN", 300))
@@ -847,7 +849,31 @@ def _restore_session_from_db(chat_id: int) -> Optional[Dict[str, Any]]:
     return data
 
 
+def _erase_main_qui_quo_requests(request_ids: List[str]) -> None:
+    if not request_ids:
+        return
+    main_path = os.path.abspath(MAIN_DATABASE_PATH)
+    vk_path = os.path.abspath(DATABASE_PATH)
+    if main_path == vk_path or not os.path.isfile(main_path):
+        return
+
+    conn = None
+    try:
+        conn = sqlite3.connect(main_path, timeout=5)
+        with conn:
+            _qui_quo_webhook.erase_requests(conn, request_ids)
+    except sqlite3.Error as exc:
+        logger.warning(
+            "VK privacy cleanup could not erase Qui-Quo links: %s",
+            type(exc).__name__,
+        )
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def delete_session(chat_id: int) -> None:
+    request_ids: List[str] = []
     with _db_cursor(commit=True) as cur:
         lead_ids = [
             int(row[0])
@@ -856,12 +882,24 @@ def delete_session(chat_id: int) -> None:
                 (chat_id,),
             ).fetchall()
         ]
+        if lead_ids:
+            placeholders = ",".join("?" for _ in lead_ids)
+            request_ids = [
+                str(row[0])
+                for row in cur.execute(
+                    f"SELECT request_id FROM crm_trip_requests "
+                    f"WHERE channel='vk' AND lead_id IN ({placeholders})",
+                    lead_ids,
+                ).fetchall()
+            ]
         _travel_crm_store.delete_for_lead_ids(
             cur.connection,
             lead_ids,
             channel="vk",
         )
         cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
+
+    _erase_main_qui_quo_requests(request_ids)
 
 
 _MINIAPP_SNAPSHOT_FIELDS = (
@@ -1419,8 +1457,10 @@ def delete_user_data(chat_id: int) -> None:
         all_users.pop(chat_id, None)
         _dirty_sessions.discard(chat_id)
         _dirty_users.discard(chat_id)
+    # delete_session() also removes CRM mirrors and, for split VK/main
+    # databases, erases the central Qui-Quo quote mapping.
+    delete_session(chat_id)
     with _db_cursor(commit=True) as cur:
-        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))

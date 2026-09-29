@@ -5,7 +5,12 @@ from contextlib import contextmanager
 import pytest
 from flask import Flask
 
-from shared.qui_quo_webhook import QuiQuoInbox, create_blueprint
+from shared.qui_quo_webhook import (
+    QuiQuoInbox,
+    cleanup_before,
+    create_blueprint,
+    link_quote,
+)
 
 
 SECRET = "a" * 64
@@ -28,14 +33,6 @@ def qq(tmp_path):
             conn.close()
 
     with db_cursor(commit=True) as cur:
-        cur.execute(
-            """
-            CREATE TABLE crm_quotes (
-                quote_id TEXT PRIMARY KEY,
-                request_id TEXT NOT NULL
-            )
-            """
-        )
         cur.execute(
             """
             CREATE TABLE crm_activities (
@@ -197,34 +194,210 @@ def test_oversized_payload_fails_closed(tmp_path):
     assert response.status_code == 413
 
 
-def test_event_projects_once_to_existing_crm_quote(qq):
+def test_huge_decimal_exponent_is_validation_error_not_500(qq):
+    client, db_cursor, _ = qq
+    broken = payload("item_deposit")
+    broken["items"][0]["deposit_amount"] = "1e1000000"
+
+    response = client.post(f"/qq-webhook/{SECRET}", json=broken)
+
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "success": False,
+        "error": "deposit_amount_invalid",
+    }
+    with db_cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM qui_quo_events").fetchone()[0] == 0
+
+
+def test_unlinked_event_waits_until_explicit_quote_mapping(qq):
     client, db_cursor, inbox = qq
+    assert client.post(
+        f"/qq-webhook/{SECRET}",
+        json=payload("item_order"),
+    ).status_code == 200
+
+    assert inbox.process_pending_once(now=1000) == 0
+    with db_cursor() as cur:
+        event = cur.execute(
+            "SELECT status, request_id, next_retry_at FROM qui_quo_events"
+        ).fetchone()
+    assert event[0] == "unmatched"
+    assert event[1] is None
+    assert event[2] >= 1060
+
+    with db_cursor(commit=True) as cur:
+        assert link_quote(
+            cur.connection,
+            "QQ-1234",
+            "request-1",
+            "main",
+            now=1001,
+        ) is True
+
+    assert inbox.process_pending_once(now=1001) == 1
+    with db_cursor() as cur:
+        event = cur.execute(
+            "SELECT status, request_id FROM qui_quo_events"
+        ).fetchone()
+        activity = cur.execute(
+            "SELECT request_id, activity_type, summary FROM crm_activities"
+        ).fetchone()
+    assert tuple(event) == ("processed", "request-1")
+    assert activity[0] == "request-1"
+    assert activity[1] == "note"
+    assert "item_order" in activity[2]
+
+
+def test_unmatched_rows_do_not_starve_newly_linked_events(qq):
+    client, db_cursor, inbox = qq
+    inbox.batch_size = 1
+
+    old = payload("quote_open")
+    old["quote"]["id"] = "QQ-OLD"
+    assert client.post(f"/qq-webhook/{SECRET}", json=old).status_code == 200
+    assert inbox.process_pending_once(now=1000) == 0
+
     with db_cursor(commit=True) as cur:
         cur.execute(
-            "INSERT INTO crm_quotes(quote_id, request_id) VALUES (?, ?)",
-            ("QQ-1234", "request-1"),
+            "UPDATE qui_quo_events SET received_at=1, next_retry_at=0 "
+            "WHERE quote_id=?",
+            ("QQ-OLD",),
+        )
+        assert link_quote(
+            cur.connection,
+            "QQ-NEW",
+            "request-new",
+            "main",
+            now=1001,
+        ) is True
+
+    new = payload("quote_open")
+    new["quote"]["id"] = "QQ-NEW"
+    assert client.post(f"/qq-webhook/{SECRET}", json=new).status_code == 200
+    with db_cursor(commit=True) as cur:
+        cur.execute(
+            "UPDATE qui_quo_events SET received_at=2 WHERE quote_id=?",
+            ("QQ-NEW",),
         )
 
-    assert client.post(f"/qq-webhook/{SECRET}", json=payload("item_order")).status_code == 200
+    assert inbox.process_pending_once(now=2000) == 1
+    with db_cursor() as cur:
+        statuses = {
+            str(row[0]): str(row[1])
+            for row in cur.execute(
+                "SELECT quote_id, status FROM qui_quo_events"
+            ).fetchall()
+        }
+    assert statuses["QQ-OLD"] == "unmatched"
+    assert statuses["QQ-NEW"] == "processed"
+
+
+def test_event_projects_once_after_explicit_mapping(qq):
+    client, db_cursor, inbox = qq
+    with db_cursor(commit=True) as cur:
+        link_quote(
+            cur.connection,
+            "QQ-1234",
+            "request-1",
+            "main",
+            now=900,
+        )
+
+    assert client.post(
+        f"/qq-webhook/{SECRET}",
+        json=payload("item_order"),
+    ).status_code == 200
     assert inbox.process_pending_once(now=1000) == 1
 
-    # Same semantic user action is acknowledged but cannot duplicate activity.
-    assert client.post(f"/qq-webhook/{SECRET}", json=payload("item_order")).status_code == 200
+    assert client.post(
+        f"/qq-webhook/{SECRET}",
+        json=payload("item_order"),
+    ).status_code == 200
     assert inbox.process_pending_once(now=1001) == 0
 
     with db_cursor() as cur:
         activities = cur.execute(
             "SELECT request_id, activity_type, summary FROM crm_activities"
         ).fetchall()
-        event = cur.execute(
-            "SELECT status, request_id FROM qui_quo_events"
-        ).fetchone()
-
     assert len(activities) == 1
-    assert activities[0][0] == "request-1"
-    assert activities[0][1] == "note"
-    assert "item_order" in activities[0][2]
-    assert tuple(event) == ("processed", "request-1")
+
+
+def test_projection_uses_receipt_time_not_retry_time(qq):
+    client, db_cursor, inbox = qq
+    with db_cursor(commit=True) as cur:
+        link_quote(
+            cur.connection,
+            "QQ-1234",
+            "request-1",
+            "main",
+            now=800,
+        )
+
+    assert client.post(
+        f"/qq-webhook/{SECRET}",
+        json=payload("quote_open"),
+    ).status_code == 200
+    with db_cursor(commit=True) as cur:
+        cur.execute("UPDATE qui_quo_events SET received_at=777")
+
+    assert inbox.process_pending_once(now=5000) == 1
+    with db_cursor() as cur:
+        created_at = cur.execute(
+            "SELECT created_at FROM crm_activities"
+        ).fetchone()[0]
+    assert created_at == 777
+
+
+def test_cross_store_projection_uses_explicit_projector(tmp_path):
+    db_path = tmp_path / "cross.sqlite"
+
+    @contextmanager
+    def db_cursor(commit=False):
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cur = conn.cursor()
+            yield cur
+            if commit:
+                conn.commit()
+        finally:
+            conn.close()
+
+    projected = []
+
+    def projector(store, request_id, activity_id, summary, created_at):
+        projected.append(
+            (store, request_id, activity_id, summary, created_at)
+        )
+
+    inbox = QuiQuoInbox(db_cursor, projector=projector)
+    inbox.init_schema()
+    event = {
+        "is_test": False,
+        "event_key": "e" * 64,
+        "event_type": "quote_open",
+        "quote_id": "QQ-VK-1",
+        "client_id": "10",
+        "manager_id": "20",
+        "item_pos": "",
+        "deposit_amount": "",
+        "item_count": 1,
+    }
+    assert inbox.enqueue(event) is True
+    with db_cursor(commit=True) as cur:
+        cur.execute("UPDATE qui_quo_events SET received_at=333")
+        link_quote(
+            cur.connection,
+            "QQ-VK-1",
+            "vk-lead-42",
+            "vk",
+            now=300,
+        )
+
+    assert inbox.process_pending_once(now=400) == 1
+    assert projected[0][0:2] == ("vk", "vk-lead-42")
+    assert projected[0][4] == 333
 
 
 def test_deposit_amount_is_part_of_semantic_idempotency(qq):
@@ -249,9 +422,12 @@ def test_deposit_amount_is_part_of_semantic_idempotency(qq):
 def test_processing_failure_retries_without_raw_payload(qq):
     client, db_cursor, inbox = qq
     with db_cursor(commit=True) as cur:
-        cur.execute(
-            "INSERT INTO crm_quotes(quote_id, request_id) VALUES (?, ?)",
-            ("QQ-1234", "request-2"),
+        link_quote(
+            cur.connection,
+            "QQ-1234",
+            "request-2",
+            "main",
+            now=1900,
         )
         cur.execute("DROP TABLE crm_activities")
 
@@ -285,3 +461,29 @@ def test_processing_failure_retries_without_raw_payload(qq):
         assert cur.execute(
             "SELECT status FROM qui_quo_events"
         ).fetchone()[0] == "processed"
+
+
+def test_cleanup_removes_old_event_and_quote_link(qq):
+    client, db_cursor, _ = qq
+    assert client.post(
+        f"/qq-webhook/{SECRET}",
+        json=payload("quote_open"),
+    ).status_code == 200
+    with db_cursor(commit=True) as cur:
+        link_quote(
+            cur.connection,
+            "QQ-1234",
+            "request-3",
+            "main",
+            now=100,
+        )
+        cur.execute("UPDATE qui_quo_events SET received_at=100")
+        cleanup_before(cur.connection, 200)
+
+    with db_cursor() as cur:
+        assert cur.execute(
+            "SELECT COUNT(*) FROM qui_quo_events"
+        ).fetchone()[0] == 0
+        assert cur.execute(
+            "SELECT COUNT(*) FROM qui_quo_quote_links"
+        ).fetchone()[0] == 0

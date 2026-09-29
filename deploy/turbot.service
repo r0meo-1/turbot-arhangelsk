@@ -21,7 +21,6 @@ ExecStart=/opt/turbot/venv/bin/gunicorn website_app:app \
     --workers 1 \
     --threads 4 \
     --timeout 60 \
-    --access-logfile - \
     --error-logfile -
 Restart=always
 RestartSec=5
