@@ -19,6 +19,40 @@ TOUR_SEARCH_MAX_OFFERS=15
 
 Only providers with complete credentials are considered enabled. The first provider that returns real offers wins. An empty or unavailable provider falls through to the next configured source. Results from different providers are not mixed into a synthetic catalogue.
 
+## Alean SAPI
+
+Alean is implemented as a read-only Search API provider and is deliberately
+disabled by default while the remaining vendor rate/use/recheck terms are open.
+
+The adapter uses the provider-documented HTTPS SAPI endpoint with HTTP Basic
+Auth and the explicit XML resource. Credentials are sent only in the
+Authorization header, never in query strings or logs. Dictionary data is cached
+in-process because Alean recommends refreshing dictionaries about once per day.
+
+```env
+ALEAN_SAPI_USERNAME=
+ALEAN_SAPI_PASSWORD=
+# VK_ALEAN_ENABLED=false
+# ALEAN_SAPI_BASE_URL=https://sapi.alean.ru:3443/services/xml/
+# ALEAN_SAPI_TIMEOUT=20
+# ALEAN_SAPI_MAX_OFFERS=15
+# ALEAN_SAPI_DICTIONARY_CACHE_TTL=86400
+```
+
+The production provider order is unchanged. To opt in only after the production
+gate is cleared, include `alean` explicitly in `TOUR_PROVIDER_ORDER` and set
+`VK_ALEAN_ENABLED=true`.
+
+For a credentialed, non-PII acceptance smoke:
+
+```bash
+python tools/alean_sapi_smoke.py
+```
+
+The smoke checks `GetCountries`, `GetDepartCities`, then performs one
+synthetic `GetTours` request. It prints only aggregate counts/result status,
+never credentials, response bodies, hotel names, or prices.
+
 ## Sletat
 
 Sletat uses the official JSON gateway at `https://module.sletat.ru/Main.svc`.
