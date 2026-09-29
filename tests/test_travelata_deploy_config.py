@@ -37,12 +37,13 @@ def test_empty_travelata_pair_preserves_server_values():
     assert "Travelata deploy credentials not supplied; existing server values preserved" in source
 
 
-def test_supplied_travelata_pair_enables_provider_first():
+def test_supplied_travelata_pair_enables_provider_without_overwriting_order():
     source = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert '"TRAVELATA_USERNAME": quote_env(travelata_username)' in source
     assert '"TRAVELATA_PASSWORD": quote_env(travelata_password)' in source
     assert '"VK_TRAVELATA_ENABLED": "true"' in source
-    assert '"TOUR_PROVIDER_ORDER": quote_env("travelata,tourvisor")' in source
+    assert '"TOUR_PROVIDER_ORDER": quote_env("travelata,tourvisor")' not in source
+    assert '"TOUR_PROVIDER_ORDER": quote_env("sletat,travelata,tourvisor")' not in source
 
 
 def test_v4_v5_can_install_optional_travelpayouts_token_without_erasing_existing_value():
