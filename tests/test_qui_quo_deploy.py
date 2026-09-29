@@ -16,6 +16,7 @@ def test_qui_quo_secret_path_is_not_persisted_in_production_access_logs():
     nginx = (ROOT / "deploy" / "nginx-turbot.conf").read_text(encoding="utf-8")
     https_block = _location_block(nginx, "location ^~ /qq-webhook/")
     assert "access_log off;" in https_block
+    assert "error_log /dev/null crit;" in https_block
 
     # The config contains a second no-log block in the HTTP redirect server too.
     assert nginx.count("location ^~ /qq-webhook/") == 2
@@ -29,6 +30,7 @@ def test_compose_proxy_does_not_log_qui_quo_secret_path():
     nginx = (ROOT / "deploy" / "nginx-compose.conf").read_text(encoding="utf-8")
     block = _location_block(nginx, "location ^~ /qq-webhook/")
     assert "access_log off;" in block
+    assert "error_log /dev/null crit;" in block
     assert "proxy_pass http://telegram-bot:5000;" in block
 
 
