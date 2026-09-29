@@ -1,5 +1,7 @@
 import requests
 
+import pytest
+
 from shared import alean
 from shared import tour_providers
 
@@ -8,6 +10,14 @@ class FakeResponse:
     def __init__(self, xml: str, status_code: int = 200):
         self.content = xml.encode("utf-8")
         self.status_code = status_code
+        self.closed = False
+
+    def iter_content(self, chunk_size=65536):
+        for index in range(0, len(self.content), chunk_size):
+            yield self.content[index:index + chunk_size]
+
+    def close(self):
+        self.closed = True
 
 
 class FakeAleanSession:
@@ -107,6 +117,7 @@ def test_alean_readiness_probe_is_read_only_and_uses_basic_auth():
         assert url == "https://sapi.alean.ru:3443/services/xml/"
         assert kwargs["auth"] == ("agency", "private-value")
         assert kwargs["allow_redirects"] is False
+        assert kwargs["stream"] is True
         assert "agency" not in str(kwargs["params"])
         assert "private-value" not in str(kwargs["params"])
 
@@ -229,3 +240,61 @@ def test_alean_readiness_reports_http_status_without_leaking_payload():
     session = FakeAleanSession(fail_action="GetCountries", fail_status=503)
     result = alean.readiness_probe(_settings(), session)
     assert result == {"ok": False, "reason": "http_error", "status": 503}
+
+
+def test_alean_rejects_hotel_only_result():
+    alean.clear_catalog_cache()
+    session = FakeAleanSession()
+    original_get = session.get
+
+    def get(url, **kwargs):
+        response = original_get(url, **kwargs)
+        if (kwargs.get("params") or {}).get("action") == "GetTours":
+            response.content = response.content.replace(
+                b'ticketsIncluded="1"', b'ticketsIncluded="0"'
+            )
+        return response
+
+    session.get = get
+    result = alean.search_tours(_settings(), session, _info())
+    assert result.offers == []
+    assert "не найдено" in result.error.lower()
+
+
+def test_alean_respects_requested_hotel_filter():
+    alean.clear_catalog_cache()
+    session = FakeAleanSession()
+    info = _info()
+    info["hotel_query"] = "Different Hotel"
+
+    result = alean.search_tours(_settings(), session, info)
+
+    assert result.offers == []
+    assert "не найдено" in result.error.lower()
+
+
+def test_alean_declines_broad_departure_window_for_router_fallback():
+    alean.clear_catalog_cache()
+    session = FakeAleanSession()
+    info = _info()
+    info["dates"] = "следующий месяц"
+
+    result = alean.search_tours(_settings(), session, info)
+
+    assert result.offers == []
+    assert "широкий диапазон" in result.error.lower()
+    assert not any(
+        (kwargs.get("params") or {}).get("action") == "GetTours"
+        for _, kwargs in session.calls
+    )
+
+
+def test_alean_streaming_cap_stops_oversized_response():
+    settings = _settings()
+    settings.max_response_bytes = 1024
+    response = FakeResponse("<root>" + ("x" * 5000) + "</root>")
+
+    with pytest.raises(ValueError, match="size limit"):
+        alean._bounded_xml(settings, response)
+
+    assert response.closed is True
