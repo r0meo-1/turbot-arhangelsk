@@ -1420,8 +1420,10 @@ def delete_user_data(chat_id: int) -> None:
         all_users.pop(chat_id, None)
         _dirty_sessions.discard(chat_id)
         _dirty_users.discard(chat_id)
+    # Reuse the session cleanup path so CRM mirrors and linked provider
+    # identifiers are erased before the canonical lead rows disappear.
+    delete_session(chat_id)
     with _db_cursor(commit=True) as cur:
-        cur.execute("DELETE FROM sessions WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))
 
