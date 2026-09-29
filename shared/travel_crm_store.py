@@ -609,18 +609,41 @@ def delete_for_lead_ids(
     req_placeholders = ",".join("?" for _ in request_ids)
 
     # Optional provider inbox/link tables live in the main CRM database. Erase
-    # their external identifiers before removing the canonical request row.
-    for optional_table in ("qui_quo_events", "qui_quo_quote_links"):
-        exists = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (optional_table,),
-        ).fetchone()
-        if exists is not None:
+    # both processed events (which carry request_id) and not-yet-projected
+    # events (which are still linked only by external quote_id).
+    qq_links_exist = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='qui_quo_quote_links'"
+    ).fetchone()
+    qq_events_exist = conn.execute(
+        "SELECT 1 FROM sqlite_master "
+        "WHERE type='table' AND name='qui_quo_events'"
+    ).fetchone()
+    if qq_links_exist is not None:
+        quote_rows = conn.execute(
+            f"SELECT quote_id FROM qui_quo_quote_links "
+            f"WHERE request_id IN ({req_placeholders})",
+            request_ids,
+        ).fetchall()
+        quote_ids = [str(row[0]) for row in quote_rows]
+        if qq_events_exist is not None and quote_ids:
+            quote_placeholders = ",".join("?" for _ in quote_ids)
             conn.execute(
-                f"DELETE FROM {optional_table} "
-                f"WHERE request_id IN ({req_placeholders})",
-                request_ids,
+                f"DELETE FROM qui_quo_events "
+                f"WHERE quote_id IN ({quote_placeholders})",
+                quote_ids,
             )
+        conn.execute(
+            f"DELETE FROM qui_quo_quote_links "
+            f"WHERE request_id IN ({req_placeholders})",
+            request_ids,
+        )
+    if qq_events_exist is not None:
+        conn.execute(
+            f"DELETE FROM qui_quo_events "
+            f"WHERE request_id IN ({req_placeholders})",
+            request_ids,
+        )
 
     for table in (
         "crm_quote_reactions",
