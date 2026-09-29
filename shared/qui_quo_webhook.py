@@ -295,6 +295,43 @@ def cleanup_before(conn: sqlite3.Connection, cutoff: int) -> None:
         )
 
 
+def erase_requests(conn: sqlite3.Connection, request_ids: list[str]) -> None:
+    """Erase all provider identifiers linked to canonical TurBot requests."""
+
+    ids = [str(value).strip() for value in request_ids if str(value).strip()]
+    if not ids:
+        return
+    placeholders = ",".join("?" for _ in ids)
+
+    links_exist = _table_exists(conn, "qui_quo_quote_links")
+    events_exist = _table_exists(conn, "qui_quo_events")
+    if links_exist:
+        quote_rows = conn.execute(
+            f"SELECT quote_id FROM qui_quo_quote_links "
+            f"WHERE request_id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        quote_ids = [str(row[0]) for row in quote_rows]
+        if events_exist and quote_ids:
+            quote_placeholders = ",".join("?" for _ in quote_ids)
+            conn.execute(
+                f"DELETE FROM qui_quo_events "
+                f"WHERE quote_id IN ({quote_placeholders})",
+                quote_ids,
+            )
+        conn.execute(
+            f"DELETE FROM qui_quo_quote_links "
+            f"WHERE request_id IN ({placeholders})",
+            ids,
+        )
+    if events_exist:
+        conn.execute(
+            f"DELETE FROM qui_quo_events "
+            f"WHERE request_id IN ({placeholders})",
+            ids,
+        )
+
+
 def link_quote(
     conn: sqlite3.Connection,
     quote_id: str,
