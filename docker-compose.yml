@@ -21,7 +21,7 @@ services:
     volumes:
       - bot-data:/app/data
     command: >
-      gunicorn bot:app
+      gunicorn website_app:app
       --bind 0.0.0.0:5000
       --workers 1 --threads 4 --timeout 60
 
