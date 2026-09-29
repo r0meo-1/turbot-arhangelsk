@@ -4,6 +4,7 @@ import os
 import json
 import time
 import tempfile
+import sqlite3
 
 # Configure the VK bot before it is imported.
 os.environ.setdefault("VK_ACCESS_TOKEN", "dummy-token")
@@ -2334,3 +2335,56 @@ def test_manager_quick_reply_text_is_available_for_vk_leads():
     assert "основные параметры уже сохранены" in reply
     assert "Уточню только то, чего в заявке нет" in reply
     assert "≤5 мин" in bot.MANAGER_SLA_HINT
+
+def test_vk_privacy_cleanup_erases_main_qui_quo_links(tmp_path, monkeypatch):
+    main_db = tmp_path / "main.sqlite"
+    vk_db = tmp_path / "vk.sqlite"
+    conn = sqlite3.connect(main_db)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE qui_quo_quote_links (
+                quote_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                store TEXT NOT NULL,
+                linked_at INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE qui_quo_events (
+                event_key TEXT PRIMARY KEY,
+                quote_id TEXT NOT NULL,
+                request_id TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO qui_quo_quote_links VALUES (?, ?, ?, ?)",
+            ("QQ-VK-DELETE", "vk-lead-42", "vk", 100),
+        )
+        conn.execute(
+            "INSERT INTO qui_quo_events(event_key, quote_id, request_id) "
+            "VALUES (?, ?, NULL)",
+            ("event-vk-delete", "QQ-VK-DELETE"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(bot, "MAIN_DATABASE_PATH", str(main_db))
+    monkeypatch.setattr(bot, "DATABASE_PATH", str(vk_db))
+
+    bot._erase_main_qui_quo_requests(["vk-lead-42"])
+
+    conn = sqlite3.connect(main_db)
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM qui_quo_quote_links"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM qui_quo_events"
+        ).fetchone()[0] == 0
+    finally:
+        conn.close()
