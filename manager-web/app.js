@@ -34,8 +34,20 @@ function metric(label,value){const item=document.createElement('article');item.c
 function renderAnalytics(summary){$('analytics').replaceChildren();metric('Новые лиды',summary.newLeads??0);metric('Доставлено менеджеру',summary.delivery?.managerNotified??0);metric('Ожидают доставки',summary.delivery?.pending??0);metric('p95 доставки',summary.delivery?.p95Seconds==null?'—':summary.delivery.p95Seconds+' с');for(const item of summary.channels||[])metric('Канал: '+item.channel,item.count);}
 function renderAssignment(assignment){$('assignment').replaceChildren();if(assignment?.assigned){paragraph($('assignment'),'Ответственный: '+assignment.name);if(assignment.canRelease){const release=document.createElement('button');release.textContent='Освободить заявку';release.addEventListener('click',()=>releaseRequest(release));$('assignment').append(release);}return;}paragraph($('assignment'),'Ответственный ещё не назначен.');const button=document.createElement('button');button.textContent='Взять в работу';button.addEventListener('click',()=>claimRequest(button));$('assignment').append(button);}
 function renderReplyTemplate(text){const parent=$('replyTemplate');parent.replaceChildren();if(!text){paragraph(parent,'Шаблон не настроен.');return;}const area=document.createElement('textarea');area.readOnly=true;area.value=text;area.setAttribute('aria-label','Шаблон первого ответа');const button=document.createElement('button');button.textContent='Копировать ответ';button.addEventListener('click',async()=>{try{if(!navigator.clipboard?.writeText)throw Error('clipboard unavailable');await navigator.clipboard.writeText(area.value);say('Шаблон скопирован. Проверьте текст и отправьте его вручную в нужном канале.');}catch(_){area.focus();area.select();say('Автокопирование недоступно. Текст выделен — скопируйте его вручную.');}});parent.append(area,button);}
-async function claimRequest(button){if(!activeRequestId)return;button.disabled=true;say('Назначение…');try{const data=await api('assign',{requestId:activeRequestId});renderAssignment(data.assignment);say(data.duplicate?'Заявка уже была назначена вам.':'Заявка назначена вам.');}catch(e){say(e.message);}finally{button.disabled=false;}}
-async function releaseRequest(button){if(!activeRequestId)return;button.disabled=true;say('Освобождение…');try{const data=await api('unassign',{requestId:activeRequestId});renderAssignment(data.assignment);say(data.duplicate?'Заявка уже была свободна.':'Назначение снято. Другой менеджер сможет взять заявку.');}catch(e){say(e.message);}finally{button.disabled=false;}}
+async function claimRequest(button){
+ const id=activeRequestId,run=generation,detailRun=detailGeneration;
+ if(!id)return;button.disabled=true;say('Назначение…');
+ try{const data=await api('assign',{requestId:id});if(run!==generation||detailRun!==detailGeneration||id!==activeRequestId)return;
+  renderAssignment(data.assignment);say(data.duplicate?'Заявка уже была назначена вам.':'Заявка назначена вам.');
+ }catch(e){if(run===generation&&detailRun===detailGeneration&&id===activeRequestId)say(e.message);}finally{button.disabled=false;}
+}
+async function releaseRequest(button){
+ const id=activeRequestId,run=generation,detailRun=detailGeneration;
+ if(!id)return;button.disabled=true;say('Освобождение…');
+ try{const data=await api('unassign',{requestId:id});if(run!==generation||detailRun!==detailGeneration||id!==activeRequestId)return;
+  renderAssignment(data.assignment);say(data.duplicate?'Заявка уже была свободна.':'Назначение снято. Другой менеджер сможет взять заявку.');
+ }catch(e){if(run===generation&&detailRun===detailGeneration&&id===activeRequestId)say(e.message);}finally{button.disabled=false;}
+}
 function date(value){if(!value)return '';const raw=String(value);const d=new Date(typeof value==='number'?value*1000:(/(?:Z|[+-]\d{2}:\d{2})$/i.test(raw)?raw:raw+'Z'));return Number.isNaN(d.getTime())?'Дата не указана':d.toLocaleString('ru-RU');}
 async function openRequest(id){
  activeRequestId='';for(const field of ['note','due','taskNote','hotel','price','operator','meal','carrier'])$(field).value='';const run=generation,detailRun=++detailGeneration;$('detail').hidden=true;say('Загрузка карточки…');
