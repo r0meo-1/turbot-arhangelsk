@@ -1744,26 +1744,106 @@ def test_vk_hot_tours_button_shows_hot_deals(client, monkeypatch):
     assert len(bot.user_data[973]["_tour_offers"]) > 0
 
 
-def test_vk_direct_flights_button_shows_destinations(client, monkeypatch):
-    """Кнопка «Прямые вылеты» выдает список направлений из города вылета."""
+@pytest.mark.parametrize("demo", [False, True])
+def test_vk_direct_flights_keyboard_is_demo_only(monkeypatch, demo):
+    monkeypatch.setattr(bot, "DEMO_MODE", demo)
+    labels = [
+        button["action"]["label"]
+        for row in json.loads(bot._dest_keyboard())["buttons"]
+        for button in row
+    ]
+    assert (bot.DEST_DIRECT_FLIGHTS_LABEL in labels) is demo
+    assert "Турция" in labels and "🌍 Другие" in labels
+
+
+@pytest.mark.parametrize("command", [
+    bot.DEST_DIRECT_FLIGHTS_LABEL, "прямые вылеты", "прямые рейсы",
+    "куда летаем", "прямой рейс", "прямые", "🛫 прямые вылеты", "  ПРЯМЫЕ  ",
+])
+@pytest.mark.parametrize("origin", [None, "Москва"])
+def test_vk_production_direct_flights_cannot_reach_catalog(client, monkeypatch, command, origin):
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    monkeypatch.setattr(
+        bot._tourvisor, "get_direct_destinations",
+        lambda *a, **k: pytest.fail("production must not read the static catalogue"),
+    )
+    _vk_consent(client, 974)
+    if origin:
+        bot.user_data[974]["origin"] = origin
+    before = dict(bot.user_data[974])
+    captured = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append((text, kwargs)))
+    assert _post(client, 974, command).status_code == 200
+    assert bot.user_data[974] == before
+    assert len(captured) == 1
+    text, options = captured[0]
+    assert "Выберите направление" in text
+    assert "₽" not in text and "Вылеты:" not in text
+    assert "Прямые чартерные рейсы" not in text
+    assert options["keyboard"] == bot._dest_keyboard()
+
+
+def test_vk_demo_direct_flights_button_labels_fictional_catalog(client, monkeypatch):
+    monkeypatch.setattr(bot, "DEMO_MODE", True)
     captured = []
     monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
     _vk_consent(client, 974)
     _post(client, 974, bot.DEST_DIRECT_FLIGHTS_LABEL)
-    assert any("Прямые чартерные рейсы" in text for text in captured)
+    catalog = captured[-1]
+    assert "Прямые чартерные рейсы" in catalog
+    assert "Демо-каталог: цены и расписание вымышленные" in catalog
+    assert "не включает фильтр прямых рейсов" in catalog
+    assert "₽" in catalog and "Вылеты:" in catalog
+    assert bot.user_data[974]["state"] == bot.STATE_DESTINATION
 
 
-def test_vk_hotel_info_button_shows_tophotels_details(client, monkeypatch):
-    """Кнопка «Об отеле и пляже» присылает карточку с рейтингом и описанием пляжа."""
+@pytest.mark.parametrize("demo", [False, True])
+def test_vk_hotel_info_uses_selected_offer_without_fixture(monkeypatch, demo):
+    monkeypatch.setattr(bot, "DEMO_MODE", demo)
+    monkeypatch.setattr(
+        bot._tourvisor, "get_hotel_details",
+        lambda *a, **k: pytest.fail("a selected hotel must never use generic fixture details"),
+    )
+    captured = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
+    selected = {
+        "hotel": "Provider Test Hotel", "category": 4, "region": "Белек",
+        "provider": "Sletat", "rating": 4.2, "beach_line": "2-я линия",
+        "meal": "BB", "room": "Standard", "operator": "Test Operator",
+    }
+    bot.user_data[975] = {
+        "state": bot.STATE_REVIEW,
+        "selected_tour": dict(selected),
+    }
+    bot._step_review(975, bot.TOUR_HOTEL_INFO_TEXT, {}, bot.user_data[975])
+    assert len(captured) == 1
+    text = captured[0]
+    for expected in ("Provider Test Hotel 4★ (Белек)", "Рейтинг в предложении: 4.2",
+                     "Пляж / линия: 2-я линия", "Питание: BB", "Номер: Standard",
+                     "Туроператор: Test Operator", "уточнит менеджер"):
+        assert expected in text
+    for invented in ("TopHotels", "96%", "340", "Бассейны:", "Детям:", "Интернет:"):
+        assert invented not in text
+    assert bot.user_data[975]["selected_tour"] == selected
+
+
+@pytest.mark.parametrize("rating", [None, 0, "", "unknown", float("nan"), float("inf")])
+@pytest.mark.parametrize("beach_line", ["", "0", "нет данных"])
+def test_vk_hotel_info_omits_missing_provider_facts(monkeypatch, rating, beach_line):
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
     captured = []
     monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
     bot.user_data[975] = {
         "state": bot.STATE_REVIEW,
-        "selected_tour": {"hotel": "Rixos Premium", "category": 5, "region": "Белек"},
+        "selected_tour": {"hotel": "Provider Test Hotel", "rating": rating, "beach_line": beach_line},
     }
     bot._step_review(975, bot.TOUR_HOTEL_INFO_TEXT, {}, bot.user_data[975])
-    assert any("Рейтинг TopHotels" in text for text in captured)
-    assert any("Пляж:" in text for text in captured)
+    text = captured[0]
+    assert "🏨 Provider Test Hotel\n" in text
+    assert "уточнит менеджер" in text
+    for absent in ("Рейтинг", "Пляж / линия:", "Питание:", "Номер:", "Туроператор:",
+                   "TopHotels", "4.8", "96%", "340", "Бассейны:", "Детям:", "Интернет:"):
+        assert absent not in text
 
 
 

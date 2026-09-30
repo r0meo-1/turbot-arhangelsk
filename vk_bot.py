@@ -1841,9 +1841,13 @@ def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) 
 
 
 def _dest_keyboard() -> str:
+    shortcuts = [_btn(DEST_HOT_TOURS_LABEL, "positive")]
+    if DEMO_MODE:
+        shortcuts.append(_btn(DEST_DIRECT_FLIGHTS_LABEL, "primary"))
+    shortcuts.append(_btn("🌍 Другие", "secondary"))
     return _keyboard([
         [_btn("Турция", "primary"), _btn("Египет", "primary"), _btn("ОАЭ", "primary")],
-        [_btn(DEST_HOT_TOURS_LABEL, "positive"), _btn(DEST_DIRECT_FLIGHTS_LABEL, "primary"), _btn("🌍 Другие", "secondary")],
+        shortcuts,
         [_btn(DIRECTION_UNDECIDED_LABEL, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
 
@@ -2479,9 +2483,23 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         return
 
     if dest == DEST_DIRECT_FLIGHTS_LABEL or dest_lower in ("прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс", "прямые", "🛫 прямые вылеты", "🛫 прямые"):
+        # Also reject typed aliases and clicks on keyboards sent before the fix.
+        # VK does not yet persist/enforce direct_only (tracked in #302).
+        if not DEMO_MODE:
+            send_message(
+                user_id,
+                "🛫 Подбор только прямых рейсов пока недоступен в чате. "
+                "Выберите направление; наличие прямого перелёта уточнит менеджер.",
+                keyboard=_dest_keyboard(),
+            )
+            return
         origin = info.get("origin") or "Архангельск"
         directs = _tourvisor.get_direct_destinations(origin)
-        lines = [f"🛫 Прямые чартерные рейсы из {origin}:\n"]
+        lines = [
+            "⚠️ Демо-каталог: цены и расписание вымышленные. "
+            "Выбор направления не включает фильтр прямых рейсов.\n",
+            f"🛫 Прямые чартерные рейсы из {origin} (демо):\n",
+        ]
         for d in directs:
             price_str = f"{d['min_price']:,} ₽".replace(",", " ")
             lines.append(f"• {d['country']} (от {price_str}) — {d['resorts']}")
@@ -3367,17 +3385,29 @@ def _show_hotel_info(user_id: int) -> None:
     category = int(selected.get("category") or 0)
     stars = f" {category}★" if category else ""
     region = str(selected.get("region") or "")
-    details = _tourvisor.get_hotel_details(hotel_name, region=region)
-    lines = [
-        f"🏨 {hotel_name}{stars} ({region})",
-        f"⭐ Рейтинг TopHotels: {details['rating']}/5 · {details['recommend_pct']}% реком. (отзывов: {details['reviews_count']})\n",
-        f"🏖 Пляж: {details['beach']}",
-        f"🏊 Бассейны: {details['pools']}",
-        f"🍽 Питание: {details['meal_concept']}",
-        f"👶 Детям: {details['kids']}",
-        f"📶 Интернет: {details['wifi']}\n",
+    place = f" ({region})" if region else ""
+    # get_hotel_details is a generic fixture, unrelated to the selected hotel.
+    # Never merge it into provider offers, even when global demo mode is on.
+    lines = [f"🏨 {hotel_name}{stars}{place}", "Данные выбранного предложения:"]
+    try:
+        rating = float(selected.get("rating") or 0)
+    except (TypeError, ValueError):
+        rating = 0
+    if 0 < rating < float("inf"):
+        lines.append(f"⭐ Рейтинг в предложении: {rating:g}")
+    for field, label in (
+        ("beach_line", "🏖 Пляж / линия"),
+        ("meal", "🍽 Питание"),
+        ("room", "🛏 Номер"),
+        ("operator", "Туроператор"),
+    ):
+        value = str(selected.get(field) or "").strip()
+        if value and value.casefold() not in ("0", "-", "—", "неизвестно", "нет данных"):
+            lines.append(f"{label}: {value}")
+    lines.extend([
+        "\nПодробности о пляже, удобствах и отзывы уточнит менеджер по источнику.",
         "Зафиксировать этот отель в заявку менеджеру?",
-    ]
+    ])
     send_message(user_id, "\n".join(lines), keyboard=_selected_tour_keyboard())
 
 
