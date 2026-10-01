@@ -173,6 +173,42 @@ def _info():
     }
 
 
+def test_direct_only_skips_unsupported_provider_and_keeps_filter(monkeypatch):
+    settings = tour_providers.ProviderSettings()
+    monkeypatch.setattr(settings, "enabled_names", lambda: ["travelata", "tourvisor"])
+    seen = []
+
+    def unsupported(*args, **kwargs):
+        raise AssertionError("unsupported provider called")
+
+    def supported(settings, session, info, **kwargs):
+        seen.append(dict(info))
+        return tourvisor.SearchResult()
+
+    monkeypatch.setattr(travelata, "search_tours", unsupported)
+    monkeypatch.setattr(tourvisor, "search_tours", supported)
+    result, _ = tour_providers.search_tours(settings, object(), dict(_info(), direct_only=True))
+    assert not result.offers
+    assert seen[0]["direct_only"] is True
+
+
+def test_direct_only_with_only_unsupported_provider_returns_no_inventory(monkeypatch):
+    settings = tour_providers.ProviderSettings()
+    monkeypatch.setattr(settings, "enabled_names", lambda: ["travelata"])
+    result, name = tour_providers.search_tours(settings, object(), dict(_info(), direct_only=True))
+    assert not result.offers and not name
+    assert "фильтр прямого перелёта не поддерживается" in result.error
+
+
+def test_sletat_direct_only_reaches_gateway_filter():
+    session = FakeSletatSession()
+    settings = sletat.SletatSettings(enabled=True, login="test", password="test", max_wait=3)
+    sletat.search_tours(settings, session, dict(_info(), direct_only=True), sleep_fn=lambda _: None)
+    searches = [kwargs["params"] for url, kwargs in session.calls if url.endswith("/GetTours")]
+    assert searches
+    assert all(params["filterToursForType"] == 524288 for params in searches)
+
+
 def test_travelata_search_maps_current_partner_api_to_turbot_offer():
     session = FakeSession()
     settings = travelata.TravelataSettings(
