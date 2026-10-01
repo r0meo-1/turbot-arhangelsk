@@ -22,6 +22,9 @@ def downgrade():
         "outbox", "review_queue", "task_source", "task", "extraction_run",
         "email_event", "gmail_notification", "gmail_watch", "gmail_mailbox",
     ]
+    # Serialize the emptiness check with every writer until transactional DDL
+    # finishes; otherwise a concurrent insert could be dropped after the check.
+    op.execute("LOCK TABLE " + ", ".join(sorted(tables)) + " IN ACCESS EXCLUSIVE MODE")
     op.execute("DO $$ BEGIN " + " ".join(
         f"IF EXISTS (SELECT 1 FROM {table}) THEN "
         "RAISE EXCEPTION 'Refusing downgrade of populated canonical state'; "
