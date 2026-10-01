@@ -247,10 +247,13 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
 
             _fill_review_and_save(page)
             page.wait_for_function(
-                "() => document.querySelector('#status').textContent.includes('вводить команду не нужно')"
+                "() => document.querySelector('#status').textContent.includes('если подбор не появился')"
             )
 
             assert page.locator("#status").inner_text().startswith("Параметры сохранены.")
+            assert REVIEW_COMMAND in page.locator("#status").inner_text()
+            assert 'нажмите «Начать»' in page.locator("#status").inner_text()
+            assert 'Бот уже подготовил' not in page.locator("#status").inner_text()
             assert page.locator("#chat").get_attribute("href") == f"https://vk.ru/im?sel=-{GROUP_ID}"
             send_payload_calls = page.evaluate(
                 "() => window.__vkBridgeCalls.filter((call) => call.method === 'VKWebAppSendPayload')"

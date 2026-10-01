@@ -2082,7 +2082,8 @@ def test_vk_back_from_selected_tour_returns_to_results(client, monkeypatch):
     assert shown == [(user_id, 2)]
 
 
-def test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, monkeypatch):
+@pytest.mark.parametrize("command", ["Проверить заявку", "Начать", "Старт", bot.START_BUTTON_TEXT])
+def test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, monkeypatch, command):
     from datetime import date, timedelta
     from shared.vk_miniapp import validate_vk_trip
 
@@ -2101,10 +2102,11 @@ def test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, 
     corrupted["destination"] = bot.DEST_HOT_TOURS_LABEL
     bot.user_data[user_id] = corrupted
     bot.set_session(user_id, corrupted)
+    bot.user_data.clear()  # Returning to chat after a process restart.
 
     reviews = []
     monkeypatch.setattr(bot, "_ask_review", lambda uid: reviews.append(dict(bot.user_data[uid])))
-    response = _post(client, user_id, "Проверить заявку")
+    response = _post(client, user_id, command)
 
     assert response.status_code == 200
     restored = bot.user_data[user_id]
@@ -2115,6 +2117,18 @@ def test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, 
     assert restored["budget"] == 270000
     assert reviews and reviews[0]["destination"] == "Шри-Ланка"
     assert bot.get_session(user_id)["destination"] == "Шри-Ланка"
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT count(*) FROM leads").fetchone()[0] == 0
+
+
+def test_explicit_new_selection_discards_miniapp_snapshot(client, monkeypatch):
+    user_id = 9964
+    bot._save_miniapp_snapshot(user_id, {"destination": "Египет", "source": "vk_mini_app"})
+    starts = []
+    monkeypatch.setattr(bot, "handle_start", lambda *a, **k: starts.append(a[0]))
+    assert _post(client, user_id, bot.NEW_SELECTION_BUTTON_TEXT).status_code == 200
+    assert bot._load_miniapp_snapshot(user_id) is None
+    assert starts == [user_id]
 
 
 def test_miniapp_snapshot_is_removed_on_cancel():
