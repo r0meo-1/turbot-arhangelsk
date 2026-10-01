@@ -52,6 +52,17 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Keep every observation available for monthly SLO analysis, including
+      # outages and runs where the incident API step fails afterwards.
+      - name: Retain public probe observation
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: uptime-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/uptime-result.json
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Manage incident issue
         shell: bash
         env:
