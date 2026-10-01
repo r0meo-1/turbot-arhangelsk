@@ -538,7 +538,12 @@ class Repository:
             )
 
         else:
-            task_id = str(uuid.uuid4())
+            # Replaying the same canonical source key into a fresh database
+            # must preserve identity. Existing rows keep their original IDs.
+            task_id = str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"workflow-engine:task:{candidate.dedupe_key}",
+            ))
             version = 1
 
             await self.db.execute(
