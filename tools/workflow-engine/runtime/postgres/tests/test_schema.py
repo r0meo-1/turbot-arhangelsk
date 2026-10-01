@@ -1,5 +1,7 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import time
 
 from alembic import command
 from alembic.config import Config
@@ -71,6 +73,38 @@ def test_populated_downgrade_fails_without_losing_rows_or_revision(engine):
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT count(*) FROM task")) == 1
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261001_01"
+
+
+def test_downgrade_waits_for_concurrent_writer_then_preserves_committed_row(engine):
+    with engine.connect() as writer, ThreadPoolExecutor(max_workers=1) as pool:
+        transaction = writer.begin()
+        task(writer)
+        future = pool.submit(command.downgrade, Config(str(ROOT / "alembic.ini")), "base")
+        try:
+            deadline = time.monotonic() + 10
+            waiting = False
+            while time.monotonic() < deadline:
+                with engine.connect() as observer:
+                    waiting = observer.scalar(text("""
+                        SELECT EXISTS (
+                            SELECT 1 FROM pg_locks
+                            WHERE relation = 'task'::regclass
+                              AND mode = 'AccessExclusiveLock' AND NOT granted
+                        )
+                    """))
+                if waiting or future.done():
+                    break
+                time.sleep(0.02)
+            assert waiting, "Downgrade must wait for the in-flight canonical writer"
+            transaction.commit()
+            with pytest.raises(DBAPIError, match="Refusing downgrade"):
+                future.result(timeout=10)
+        finally:
+            if transaction.is_active:
+                transaction.rollback()
+        with engine.connect() as observer:
+            assert observer.scalar(text("SELECT count(*) FROM task")) == 1
+            assert observer.scalar(text("SELECT version_num FROM alembic_version")) == "20261001_01"
 
 
 def test_email_source_deduplication_and_immutability(engine):

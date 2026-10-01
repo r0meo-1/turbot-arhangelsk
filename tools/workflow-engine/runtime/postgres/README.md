@@ -24,7 +24,9 @@ a loopback database name ending in `_test`. CI provides an ephemeral PostgreSQL
 17 service. Upgrade twice, empty downgrade/re-upgrade, populated-downgrade
 rejection, immutable email events, uniqueness, exact large history IDs,
 transaction rollback, and real `SKIP LOCKED` concurrency are tested.
-Downgrade refuses populated state. Data rollback must use the later verified
+Downgrade locks all canonical tables before checking emptiness, waits for
+in-flight writers and refuses populated state. The concurrent-writer test
+verifies committed data and revision survive the refusal. Data rollback must use the later verified
 SQLite migration/cutover procedure; it is not dropping a populated schema.
 
 ## Preservation mapping for the future importer
