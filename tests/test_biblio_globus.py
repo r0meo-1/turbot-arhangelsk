@@ -156,3 +156,13 @@ def test_auth_without_cookies_stops_before_replay():
     with pytest.raises(ExportError, match="cookies missing"):
         ExportClient(enabled(), session=session).countries()
     assert len(session.calls) == 1
+
+
+def test_slow_stream_is_bounded_and_closed(monkeypatch):
+    from shared import biblio_globus
+    ticks = iter([0, 16])
+    monkeypatch.setattr(biblio_globus.time, "monotonic", lambda: next(ticks))
+    response = Response([])
+    with pytest.raises(ExportError, match="timeout"):
+        ExportClient(enabled(), session=Session([response])).countries()
+    assert response.closed

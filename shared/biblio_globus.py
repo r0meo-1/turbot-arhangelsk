@@ -12,6 +12,7 @@ import json
 import os
 import re
 import threading
+import time
 from typing import Any
 
 import requests
@@ -75,7 +76,7 @@ class ExportClient:
             "https://login.bgoperator.ru/auth",
             data={"login": self.settings.login, "pwd": self.settings.password},
             headers={"Accept-Encoding": "gzip"},
-            timeout=self.settings.timeout, allow_redirects=False,
+            timeout=self.settings.timeout, allow_redirects=False, stream=True,
         )
         try:
             if response.status_code not in (200, 302):
@@ -94,6 +95,7 @@ class ExportClient:
         with self._lock:
             try:
                 for attempt in range(2):
+                    started = time.monotonic()
                     response = self._session.get(
                         "https://export.bgoperator.ru" + path,
                         params=params, headers={"Accept-Encoding": "gzip"},
@@ -108,6 +110,8 @@ class ExportClient:
                             raise ExportError(f"export HTTP {response.status_code}")
                         data = bytearray()
                         for chunk in response.iter_content(chunk_size=65536):
+                            if time.monotonic() - started > 15:
+                                raise ExportError("export timeout")
                             data.extend(chunk)
                             if len(data) > self.settings.max_response_bytes:
                                 raise ExportError("export response exceeds size limit")
