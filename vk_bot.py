@@ -4433,6 +4433,18 @@ def _process_message(message: Dict[str, Any]) -> None:
             return
 
     if command == "start":
+        if text == NEW_SELECTION_BUTTON_TEXT:
+            _delete_miniapp_snapshot(user_id)
+        else:
+            # VK can open the chat without delivering app_payload. The normal
+            # Start button must resume an explicitly saved Mini App draft.
+            snapshot = _load_miniapp_snapshot(user_id)
+            if snapshot is not None:
+                with _lock:
+                    user_data[user_id] = snapshot
+                set_session(user_id, snapshot)
+                _ask_review(user_id)
+                return
         handle_start(user_id, name, source_tag=incoming_source_tag)
         return
     if command == "help":
