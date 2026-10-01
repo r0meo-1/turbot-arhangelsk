@@ -1,7 +1,8 @@
 # Canonical state migration contract
 
 This is the current SQLite pipeline and the required PostgreSQL cutover contract
-for issue #262. PostgreSQL is not yet implemented or enabled.
+for issue #262. The initial PostgreSQL schema and Alembic revision are defined
+in `postgres/`; the PostgreSQL runtime repository is not yet implemented or enabled.
 
 ## Current path
 
@@ -34,10 +35,9 @@ execution region.
 
 ## PostgreSQL implementation and cutover still required
 
-- Versioned schema/Alembic for mailbox, watch, notifications, immutable email
-  events, extraction runs, task/source, outbox, destination state, intents,
-  reviews and explicit dead letters. Preserve current IDs, versions, source
-  keys and destination mappings; do not silently discard unmatched rows.
+- Integrate the initial versioned schema in `postgres/` with the runtime and
+  importer. Preserve current IDs, versions, source keys and destination mappings;
+  validate new constraints and do not silently discard unmatched rows.
 - One transaction for canonical mutation and outbox insertion. Consumers claim
   work with PostgreSQL row locking and `SKIP LOCKED`, with recoverable leases.
 - Resumable migration from a consistent SQLite snapshot, repeated imports
