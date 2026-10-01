@@ -53,6 +53,19 @@ class PriorityEngine:
             if keyword in text:
                 score += weight
 
+        for pattern, weight in (
+            (r"\bсрочно\b", 30),
+            (r"\bинцидент\b", 25),
+            (r"\b(?:дедлайн|срок)\b", 15),
+            (r"\bсегодня\b", 20),
+        ):
+            if re.search(pattern, text):
+                score += weight
+        if TaskExtractor.RU_ACTION_RE.search(
+            f"{message.subject}. {message.body}"
+        ):
+            score += 15
+
         if re.search(
             r"\b(please|need|must|send|review|prepare|fix|deploy|update)\b",
             text,
@@ -70,7 +83,9 @@ class TaskExtractor:
         r"sign[- ]in code|"
         r"login code|"
         r"one[- ]time (?:password|code)|"
-        r"otp code"
+        r"otp code|"
+        r"код (?:для )?(?:входа|подтверждения|авторизации)|"
+        r"одноразовый (?:пароль|код)"
         r")\b",
         re.I,
     )
@@ -87,12 +102,32 @@ class TaskExtractor:
         re.I,
     )
 
+    RU_ACTION_RE = re.compile(
+        r"(?:\b(?:пожалуйста[,\s]+|просим\s+(?:вас\s+)?|"
+        r"(?<!не )(?<!нет )(?:(?:вам\s+)?(?:нужно|необходимо)|требуется)\s+)"
+        r"(?:проверить|отправить|подготовить|исправить|обновить|"
+        r"подтвердить|ответить|продлить|настроить|завершить|согласовать|"
+        r"проверьте|отправьте|подготовьте|исправьте|обновите|"
+        r"подтвердите|ответьте|продлите|настройте|завершите|согласуйте)\b|"
+        r"(?:^|[.!?\n])\s*(?:проверьте|отправьте|подготовьте|исправьте|"
+        r"обновите|подтвердите|ответьте|продлите|настройте|завершите|"
+        r"согласуйте)\b)",
+        re.I,
+    )
+
     DEADLINE_RE = re.compile(
         r"\b(?:"
         r"deadline|"
         r"due(?:\s+date)?|"
         r"by\s+(?:today|tomorrow|20\d\d-\d\d-\d\d|"
         r"\d{1,2}[./-]\d{1,2}(?:[./-]\d{2,4})?)"
+        r"|срок|дедлайн|до\s+(?:сегодня|завтра|20\d\d-\d\d-\d\d|"
+        r"\d{1,2}[./]\d{1,2}(?:[./]\d{4})?)|"
+        r"(?:проверить|отправить|подготовить|исправить|обновить|"
+        r"подтвердить|ответить|продлить|настроить|завершить|согласовать|"
+        r"проверьте|отправьте|подготовьте|исправьте|обновите|"
+        r"подтвердите|ответьте|продлите|настройте|завершите|согласуйте)"
+        r"\b[^.!?\n,;]{0,240}\b(?:сегодня|завтра)"
         r")\b",
         re.I,
     )
@@ -111,10 +146,10 @@ class TaskExtractor:
             return []
 
         # Require explicit request/obligation language.
-        if not self.ACTION_RE.search(text):
+        if not (self.ACTION_RE.search(text) or self.RU_ACTION_RE.search(text)):
             return []
 
-        due_date = self._extract_date(text)
+        due_date = self._extract_date(text, message.received_at)
 
         title = (
             subject
@@ -160,7 +195,9 @@ class TaskExtractor:
         )
 
     @staticmethod
-    def _extract_date(text: str) -> Optional[str]:
+    def _extract_date(
+        text: str, received_at: Optional[datetime] = None
+    ) -> Optional[str]:
         iso = re.search(
             r"\b20\d\d-\d\d-\d\d\b",
             text,
@@ -195,15 +232,29 @@ class TaskExtractor:
                 return None
 
         lowered = text.casefold()
+        # Replayed mail keeps the date of the original request, not processing.
+        reference_date = (received_at or utcnow()).date()
 
         if "tomorrow" in lowered:
             return (
-                utcnow().date()
+                reference_date
                 + timedelta(days=1)
             ).isoformat()
 
         if "today" in lowered:
-            return utcnow().date().isoformat()
+            return reference_date.isoformat()
+
+        russian_deadline = re.search(
+            r"\b(?:до|срок\s*[:—-]?|дедлайн\s*[:—-]?|"
+            r"проверить|отправить|подготовить|исправить|обновить|"
+            r"подтвердить|ответить|продлить|настроить|завершить|согласовать|"
+            r"проверьте|отправьте|подготовьте|исправьте|обновите|"
+            r"подтвердите|ответьте|продлите|настройте|завершите|согласуйте)"
+            r"\b[^.!?\n,;]{0,240}\b(сегодня|завтра)\b", lowered,
+        )
+        if russian_deadline:
+            offset = 1 if russian_deadline.group(1) == "завтра" else 0
+            return (reference_date + timedelta(days=offset)).isoformat()
 
         return None
 

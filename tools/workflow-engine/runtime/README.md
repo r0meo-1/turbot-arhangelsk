@@ -36,6 +36,23 @@ The runtime now keeps a durable Gmail History checkpoint in SQLite:
 
 The checkpoint is monotonic, so an older or duplicate cycle cannot move it backwards.
 
+## Task extraction languages and deadlines
+
+The deterministic extractor recognizes explicit English and Russian requests.
+Russian forms include `Пожалуйста, проверьте`, `Просим отправить`,
+`Вам необходимо подготовить` and sentence-start imperatives such as `Отправьте`.
+Login/confirmation-code subjects are excluded. Announcements and status notices
+without an explicit request do not create tasks; this is a bounded rule set,
+not general natural-language understanding.
+
+Russian `срок`, `дедлайн` and `до <date>` language with an unresolved date goes
+to review. Full numeric dates with a year are supported; abbreviated dates or
+phrases such as `конец месяца` are left unresolved. Relative deadlines are
+anchored to `EmailMessage.received_at`, so delayed processing/replay does not
+move them. Gmail supplies UTC timestamps; calendar-day interpretation therefore
+uses UTC until a business-timezone policy is implemented. Russian relative dates
+must appear in deadline/request language, rather than an unrelated announcement.
+
 ## Gmail watch / Pub/Sub mode
 
 The runtime now has an opt-in authenticated push path in addition to the
