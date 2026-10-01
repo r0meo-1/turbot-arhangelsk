@@ -554,117 +554,120 @@ async def selftest():
         repo = Repository(db)
         await repo.connect()
 
-        engine = Engine(repo)
+        try:
+            engine = Engine(repo)
 
-        worker = OutboxWorker(
-            repo,
-            MarkdownProjection(board),
-        )
-
-        first = EmailMessage(
-            source="test",
-            external_id="msg-1",
-            thread_id="thread-1",
-            sender="manager@example.test",
-            subject="Deploy API",
-            body=(
-                "Please deploy API "
-                "by 2026-09-27"
-            ),
-            received_at=datetime.now(
-                timezone.utc
-            ),
-        )
-
-        conflict = EmailMessage(
-            source="test",
-            external_id="msg-2",
-            thread_id="thread-1",
-            sender="manager@example.test",
-            subject="Deploy API",
-            body=(
-                "Please deploy API "
-                "by 2026-09-29"
-            ),
-            received_at=datetime.now(
-                timezone.utc
-            ),
-        )
-
-        assert await engine.process(first)
-        assert not await engine.process(first)
-        assert await engine.process(conflict)
-
-        assert (
-            await repo.advance_gmail_history_id(
-                "100"
+            worker = OutboxWorker(
+                repo,
+                MarkdownProjection(board),
             )
-        )
-        assert not (
-            await repo.advance_gmail_history_id(
-                "99"
+
+            first = EmailMessage(
+                source="test",
+                external_id="msg-1",
+                thread_id="thread-1",
+                sender="manager@example.test",
+                subject="Deploy API",
+                body=(
+                    "Please deploy API "
+                    "by 2026-09-27"
+                ),
+                received_at=datetime.now(
+                    timezone.utc
+                ),
             )
-        )
 
-        await repo.record_gmail_watch(
-            topic_name=(
-                "projects/test/topics/gmail"
-            ),
-            history_id="100",
-            expiration_ms=(
-                9999999999999
-            ),
-        )
+            conflict = EmailMessage(
+                source="test",
+                external_id="msg-2",
+                thread_id="thread-1",
+                sender="manager@example.test",
+                subject="Deploy API",
+                body=(
+                    "Please deploy API "
+                    "by 2026-09-29"
+                ),
+                received_at=datetime.now(
+                    timezone.utc
+                ),
+            )
 
-        assert (
-            await repo.record_gmail_notification(
-                pubsub_message_id="pubsub-1",
+            assert await engine.process(first)
+            assert not await engine.process(first)
+            assert await engine.process(conflict)
+
+            assert (
+                await repo.advance_gmail_history_id(
+                    "100"
+                )
+            )
+            assert not (
+                await repo.advance_gmail_history_id(
+                    "99"
+                )
+            )
+
+            await repo.record_gmail_watch(
+                topic_name=(
+                    "projects/test/topics/gmail"
+                ),
                 history_id="100",
+                expiration_ms=(
+                    9999999999999
+                ),
             )
-        )
-        assert not (
-            await repo.record_gmail_notification(
-                pubsub_message_id="pubsub-2",
-                history_id="100",
+
+            assert (
+                await repo.record_gmail_notification(
+                    pubsub_message_id="pubsub-1",
+                    history_id="100",
+                )
             )
-        )
-        assert (
-            await repo.mark_gmail_notifications_through(
-                "100"
+            assert not (
+                await repo.record_gmail_notification(
+                    pubsub_message_id="pubsub-2",
+                    history_id="100",
+                )
             )
-            == 1
-        )
-
-        await worker.drain()
-
-        counts = await repo.counts()
-
-        assert counts["messages"] == 2
-        assert counts["gmail_mailbox"] == 1
-        assert counts["gmail_watch"] == 1
-        assert counts[
-            "gmail_notification"
-        ] == 1
-        assert counts[
-            "gmail_notification_pending"
-        ] == 0
-        assert counts["tasks"] == 1
-        assert counts["review_queue"] == 1
-
-        text = Path(board).read_text(
-            encoding="utf-8"
-        )
-
-        assert "Deploy API" in text
-        assert "deadline conflict" in text
-
-        print("SELFTEST PASS")
-        print(
-            json.dumps(
-                counts,
-                indent=2,
+            assert (
+                await repo.mark_gmail_notifications_through(
+                    "100"
+                )
+                == 1
             )
-        )
+
+            await worker.drain()
+
+            counts = await repo.counts()
+
+            assert counts["messages"] == 2
+            assert counts["gmail_mailbox"] == 1
+            assert counts["gmail_watch"] == 1
+            assert counts[
+                "gmail_notification"
+            ] == 1
+            assert counts[
+                "gmail_notification_pending"
+            ] == 0
+            assert counts["tasks"] == 1
+            assert counts["review_queue"] == 1
+
+            text = Path(board).read_text(
+                encoding="utf-8"
+            )
+
+            assert "Deploy API" in text
+            assert "deadline conflict" in text
+
+            print("SELFTEST PASS")
+            print(
+                json.dumps(
+                    counts,
+                    indent=2,
+                )
+            )
+        finally:
+            await repo.close()
 
 
 def main():
