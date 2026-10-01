@@ -49,6 +49,8 @@ def test_notifications_negated_requests_and_login_codes_are_not_tasks(subject, b
     ("Пожалуйста, отправьте отчёт до 02.10.2026.", "2026-10-02"),
     ("Отправьте завтра отчёт.", "2026-10-02"),
     ("Просим отправить сегодня отчёт.", "2026-10-01"),
+    ("Пожалуйста, отправьте отчёт сегодня.", "2026-10-01"),
+    ("Просим подготовить отчёт завтра.", "2026-10-02"),
     ("Проверьте договор. Срок: завтра.", "2026-10-02"),
     ("Please send the report tomorrow.", "2026-10-02"),
 ])
@@ -74,6 +76,14 @@ def test_unresolved_russian_deadlines_require_review(body):
 def test_unrelated_tomorrow_is_not_russian_due_date():
     candidate = TaskExtractor().extract(message(body=(
         "Просим проверить договор. Завтра офис закрыт."
+    )), 50)[0]
+    assert candidate.due_date is None
+    assert not candidate.explicit_deadline_language
+
+
+def test_tomorrow_in_separate_clause_is_not_deadline():
+    candidate = TaskExtractor().extract(message(body=(
+        "Просим проверить договор; завтра офис закрыт."
     )), 50)[0]
     assert candidate.due_date is None
     assert not candidate.explicit_deadline_language
