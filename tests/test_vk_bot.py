@@ -1745,14 +1745,14 @@ def test_vk_hot_tours_button_shows_hot_deals(client, monkeypatch):
 
 
 @pytest.mark.parametrize("demo", [False, True])
-def test_vk_direct_flights_keyboard_is_demo_only(monkeypatch, demo):
+def test_vk_direct_flights_keyboard_offers_intent(monkeypatch, demo):
     monkeypatch.setattr(bot, "DEMO_MODE", demo)
     labels = [
         button["action"]["label"]
         for row in json.loads(bot._dest_keyboard())["buttons"]
         for button in row
     ]
-    assert (bot.DEST_DIRECT_FLIGHTS_LABEL in labels) is demo
+    assert bot.DEST_DIRECT_FLIGHTS_LABEL in labels
     assert "Турция" in labels and "🌍 Другие" in labels
 
 
@@ -1774,26 +1774,108 @@ def test_vk_production_direct_flights_cannot_reach_catalog(client, monkeypatch, 
     captured = []
     monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append((text, kwargs)))
     assert _post(client, 974, command).status_code == 200
-    assert bot.user_data[974] == before
+    assert bot.user_data[974]["direct_only"] is True
+    assert bot.user_data[974]["state"] == bot.STATE_DESTINATION
+    assert bot.user_data[974].get("origin") == before.get("origin")
     assert len(captured) == 1
     text, options = captured[0]
     assert "Выберите направление" in text
     assert "₽" not in text and "Вылеты:" not in text
     assert "Прямые чартерные рейсы" not in text
-    assert options["keyboard"] == bot._dest_keyboard()
+    assert options["keyboard"] == bot._dest_more_keyboard()
 
 
-def test_vk_demo_direct_flights_button_labels_fictional_catalog(client, monkeypatch):
+def test_vk_direct_intent_survives_restart_and_reaches_lead_crm(client):
+    _vk_consent(client, 975)
+    _post(client, 975, bot.DEST_DIRECT_FLIGHTS_LABEL)
+    _post(client, 975, "Турция")
+    assert bot.user_data[975]["state"] == bot.STATE_ORIGIN
+    assert not bot.user_data[975].get("origin")
+    _post(client, 975, "Москва")
+    bot.set_session(975, bot.user_data[975])
+    bot.user_data.clear()
+    bot.load_state()
+    info = bot.user_data[975]
+    assert info["direct_only"] is True
+    assert info["origin"] == "Москва"
+    lead_id = bot.save_lead(975, info, "vk:975")
+    with bot._db_cursor() as cur:
+        row = dict(cur.execute("SELECT * FROM leads WHERE id=?", (lead_id,)).fetchone())
+        crm = cur.execute("SELECT payload_json FROM crm_trip_requests WHERE lead_id=?", (lead_id,)).fetchone()
+    assert bot._lead_row_to_info(row)["direct_only"] is True
+    assert json.loads(crm[0])["direct_only"] is True
+
+
+def test_vk_direct_intent_back_and_ordinary_request_do_not_inherit(client):
+    _vk_consent(client, 976)
+    _post(client, 976, bot.DEST_DIRECT_FLIGHTS_LABEL)
+    _post(client, 976, "Турция")
+    _post(client, 976, "Москва")
+    bot._go_back(976)  # editing origin retains the condition
+    assert bot.user_data[976]["direct_only"] is True
+    bot._go_back(976)  # return to destination resets it
+    assert bot.user_data[976]["direct_only"] is False
+    _post(client, 976, "Египет")
+    bot.set_session(976, bot.user_data[976])
+    bot.user_data.clear()
+    info = bot._restore_session_from_db(976)
+    assert info["direct_only"] is False
+    lead_id = bot.save_lead(976, info, "vk:976")
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT direct_only FROM leads WHERE id=?", (lead_id,)).fetchone()[0] == 0
+
+
+def test_vk_direct_intent_migration_defaults_legacy_rows_to_false(tmp_path, monkeypatch):
+    monkeypatch.setattr(bot, "DATABASE_PATH", str(tmp_path / "legacy.sqlite"))
+    bot.init_db()
+    with bot._db_cursor(commit=True) as cur:
+        for table in ("sessions", "leads"):
+            cur.execute(f"ALTER TABLE {table} DROP COLUMN direct_only")
+        cur.execute("INSERT INTO sessions(chat_id,state,updated_at) VALUES(977,?,0)", (bot.STATE_ORIGIN,))
+        cur.execute("INSERT INTO leads(chat_id,phone,created_at) VALUES(977,'vk:977',0)")
+    bot.init_db()
+    bot.init_db()  # additive migration is safe to repeat
+    assert bot._restore_session_from_db(977)["direct_only"] is False
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT direct_only FROM leads WHERE chat_id=977").fetchone()[0] == 0
+
+
+def test_vk_direct_intent_reaches_each_origin_search(monkeypatch):
+    seen = []
+    def search(settings, session, info, **kwargs):
+        seen.append(dict(info))
+        return bot._tourvisor.SearchResult(), ""
+
+    monkeypatch.setattr(bot._tour_providers, "search_tours", search)
+    monkeypatch.setattr(bot, "DEMO_MODE", True)
+    monkeypatch.setattr(bot._tourvisor, "get_hot_tours", lambda *a, **kw: pytest.fail("no demo fallback for direct intent"))
+    bot._tour_search_worker(978, "stale", {"origin": "Москва / Казань", "direct_only": True})
+    assert [info["origin"] for info in seen] == ["Москва", "Казань"]
+    assert all(info["direct_only"] is True for info in seen)
+
+
+def test_vk_direct_intent_snapshot_and_review_copy(monkeypatch):
+    info = {"state": bot.STATE_REVIEW, "direct_only": True, "destination": "Турция", "origin": "Москва"}
+    bot._save_miniapp_snapshot(979, info)
+    assert bot._load_miniapp_snapshot(979)["direct_only"] is True
+    bot.user_data[979] = info
+    messages = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: messages.append(text))
+    bot._ask_review(979)
+    bot._confirm_to_user(979, info, "vk:979")
+    assert all("Только прямой перелёт" in text for text in messages)
+
+
+def test_vk_demo_direct_flights_button_also_records_intent(client, monkeypatch):
     monkeypatch.setattr(bot, "DEMO_MODE", True)
     captured = []
     monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: captured.append(text))
     _vk_consent(client, 974)
     _post(client, 974, bot.DEST_DIRECT_FLIGHTS_LABEL)
     catalog = captured[-1]
-    assert "Прямые чартерные рейсы" in catalog
-    assert "Демо-каталог: цены и расписание вымышленные" in catalog
-    assert "не включает фильтр прямых рейсов" in catalog
-    assert "₽" in catalog and "Вылеты:" in catalog
+    assert "только прямой перелёт" in catalog
+    assert "₽" not in catalog and "Вылеты:" not in catalog
+    assert bot.user_data[974]["direct_only"] is True
     assert bot.user_data[974]["state"] == bot.STATE_DESTINATION
 
 

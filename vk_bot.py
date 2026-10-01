@@ -655,6 +655,8 @@ def init_db() -> None:
             _cols = {r[1] for r in cur.fetchall()}
             if "origin" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN origin TEXT")
+            if "direct_only" not in _cols:
+                cur.execute(f"ALTER TABLE {_t} ADD COLUMN direct_only INTEGER NOT NULL DEFAULT 0")
             if "nights" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN nights TEXT")
             if "dates_are_trip" not in _cols:
@@ -788,8 +790,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                                   hotel_query,
                                   kids, kids_ages, infants, budget, budget_scope,
                                   source, source_tag, vk_ref, vk_platform, phone,
-                                  needs_consultation, selected_tour, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  needs_consultation, selected_tour, updated_at, direct_only)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
@@ -804,6 +806,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 phone=excluded.phone,
                 needs_consultation=excluded.needs_consultation,
                 selected_tour=excluded.selected_tour,
+                direct_only=excluded.direct_only,
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
               data.get("origin"),
@@ -816,7 +819,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
               data.get("vk_ref"), data.get("vk_platform"), data.get("phone"),
               int(bool(data.get("needs_consultation"))),
               _tour_to_db(data.get("selected_tour")),
-              data.get("updated_at", now)))
+              data.get("updated_at", now), int(bool(data.get("direct_only")))))
 
 
 def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
@@ -832,6 +835,7 @@ def _decode_session_state(raw: Dict[str, Any]) -> Dict[str, Any]:
     data.pop("chat_id", None)
     data["kids_ages"] = _ages_from_db(data.get("kids_ages"))
     data["needs_consultation"] = bool(data.get("needs_consultation"))
+    data["direct_only"] = bool(data.get("direct_only"))
     if data.get("dates_are_trip") is not None:
         data["dates_are_trip"] = bool(data["dates_are_trip"])
     data["selected_tour"] = _tour_from_db(data.get("selected_tour"))
@@ -906,7 +910,7 @@ _MINIAPP_SNAPSHOT_FIELDS = (
     "destination", "origin", "dates", "nights", "dates_are_trip",
     "hotel_query", "people", "kids", "kids_ages", "infants",
     "budget", "budget_scope", "source", "source_tag", "vk_ref", "vk_platform",
-    "needs_consultation",
+    "needs_consultation", "direct_only",
 )
 
 
@@ -988,8 +992,8 @@ def save_lead(
                 people, hotel_query, kids, kids_ages, infants, budget, budget_scope,
                 source, source_tag, vk_ref, vk_platform, phone,
                 needs_consultation, selected_tour,
-                mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                mdt_status, mdt_attempts, mdt_next_retry_at, mdt_synced_at, created_at, direct_only
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -1013,7 +1017,7 @@ def save_lead(
                 phone,
                 int(bool(info.get("needs_consultation"))),
                 _tour_to_db(info.get("selected_tour")),
-                mdt_status, 0, mdt_next_retry_at, None, now,
+                mdt_status, 0, mdt_next_retry_at, None, now, int(bool(info.get("direct_only"))),
             ),
         )
         lead_id = int(cur.lastrowid)
@@ -1048,6 +1052,7 @@ def _lead_row_to_info(row: Dict[str, Any]) -> Dict[str, Any]:
     info = dict(row)
     info["kids_ages"] = _ages_from_db(info.get("kids_ages"))
     info["needs_consultation"] = bool(info.get("needs_consultation"))
+    info["direct_only"] = bool(info.get("direct_only"))
     if info.get("dates_are_trip") is not None:
         info["dates_are_trip"] = bool(info["dates_are_trip"])
     info["selected_tour"] = _tour_from_db(info.get("selected_tour"))
@@ -1842,8 +1847,7 @@ def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) 
 
 def _dest_keyboard() -> str:
     shortcuts = [_btn(DEST_HOT_TOURS_LABEL, "positive")]
-    if DEMO_MODE:
-        shortcuts.append(_btn(DEST_DIRECT_FLIGHTS_LABEL, "primary"))
+    shortcuts.append(_btn(DEST_DIRECT_FLIGHTS_LABEL, "primary"))
     shortcuts.append(_btn("🌍 Другие", "secondary"))
     return _keyboard([
         [_btn("Турция", "primary"), _btn("Египет", "primary"), _btn("ОАЭ", "primary")],
@@ -1856,14 +1860,6 @@ def _dest_more_keyboard() -> str:
     return _keyboard([
         [_btn("Таиланд", "primary"), _btn("Мальдивы", "primary"), _btn("Сочи", "primary")],
         [_btn("Калининград", "primary"), _btn("Абхазия", "primary"), _btn("✍️ Свой вариант", "secondary")],
-        [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
-    ])
-
-
-def _dest_direct_keyboard() -> str:
-    return _keyboard([
-        [_btn("Турция", "primary"), _btn("Египет", "primary"), _btn("Сочи", "primary")],
-        [_btn("Калининград", "primary"), _btn("Минск", "primary"), _btn("✍️ Свой вариант", "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
     ])
 
@@ -2460,6 +2456,7 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
     dest_lower = dest.lower()
 
     if dest == DEST_HOT_TOURS_LABEL or dest_lower in ("горящие туры", "горящие", "горящий тур", "горящие туры из архангельска", "🔥 горящие туры", "🔥 горящие"):
+        info["direct_only"] = False
         origin = info.get("origin") or "Архангельск"
         if not DEMO_MODE:
             send_message(
@@ -2482,30 +2479,16 @@ def _step_destination(user_id: int, text: str, message: Dict[str, Any], info: Di
         _send_tour_results_page(user_id, 0)
         return
 
-    if dest == DEST_DIRECT_FLIGHTS_LABEL or dest_lower in ("прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс", "прямые", "🛫 прямые вылеты", "🛫 прямые"):
-        # Also reject typed aliases and clicks on keyboards sent before the fix.
-        # VK does not yet persist/enforce direct_only (tracked in #302).
-        if not DEMO_MODE:
-            send_message(
-                user_id,
-                "🛫 Подбор только прямых рейсов пока недоступен в чате. "
-                "Выберите направление; наличие прямого перелёта уточнит менеджер.",
-                keyboard=_dest_keyboard(),
-            )
-            return
-        origin = info.get("origin") or "Архангельск"
-        directs = _tourvisor.get_direct_destinations(origin)
-        lines = [
-            "⚠️ Демо-каталог: цены и расписание вымышленные. "
-            "Выбор направления не включает фильтр прямых рейсов.\n",
-            f"🛫 Прямые чартерные рейсы из {origin} (демо):\n",
-        ]
-        for d in directs:
-            price_str = f"{d['min_price']:,} ₽".replace(",", " ")
-            lines.append(f"• {d['country']} (от {price_str}) — {d['resorts']}")
-            lines.append(f"   🗓 Вылеты: {d['days']}\n")
-        lines.append("Выберите направление кнопкой ниже или напишите своё:")
-        send_message(user_id, "\n".join(lines), keyboard=_dest_direct_keyboard())
+    if dest == DEST_DIRECT_FLIGHTS_LABEL or dest_lower in ("прямые вылеты", "прямые рейсы", "куда летаем", "прямой рейс", "прямые", "🛫 прямые вылеты", "🛫 прямые", "только прямые рейсы", "только прямой перелёт"):
+        info["direct_only"] = True
+        info.pop("selected_tour", None)
+        send_message(
+            user_id,
+            "🛫 Учту условие: только прямой перелёт. "
+            "Наличие рейса зависит от города вылета и дат.\n\n"
+            "Выберите направление или напишите своё; затем укажите город вылета.",
+            keyboard=_dest_more_keyboard(),
+        )
         return
 
     if dest_lower in ("🌍 другие", "другие", "другое", "ещё", "другие направления", "ещё направления", "популярные", "еще"):
@@ -2843,7 +2826,8 @@ def _ask_review(user_id: int) -> None:
         "Проверьте заявку:\n\n"
         f"📍 Направление: {info.get('destination', '—')}\n"
         f"🛫 Вылет: {info.get('origin', '—')}\n"
-        f"📅 Даты: {info.get('dates', '—')}"
+        + ("✈️ Только прямой перелёт\n" if info.get("direct_only") else "")
+        + f"📅 Даты: {info.get('dates', '—')}"
         f"{nights_line}{hotel_line}\n"
         f"👥 Состав: {_party_text(info)}\n"
         f"{budget_line}"
@@ -2926,7 +2910,7 @@ def _tour_search_worker(
     combined = [offer for result in results for offer in result.offers]
     # Curated offers are demo fixtures, never a substitute for an empty or
     # failed upstream search in the live agency funnel.
-    if not combined and DEMO_MODE:
+    if not combined and DEMO_MODE and not snapshot.get("direct_only"):
         dest_val = snapshot.get("destination") or ""
         combined = _tourvisor.get_hot_tours(
             snapshot.get("origin") or "Архангельск",
@@ -3786,9 +3770,14 @@ def _go_back(user_id: int) -> None:
     state = info.get("state")
     previous = _get_previous_state(info)
     if previous is None or state == STATE_DESTINATION:
+        info["direct_only"] = False
+        _mark_dirty(user_id, user=False)
         send_message(user_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отмена».", keyboard=_dest_keyboard())
         return
     info["state"] = previous
+    if previous == STATE_DESTINATION:
+        info["direct_only"] = False
+        info.pop("selected_tour", None)
     _mark_dirty(user_id, user=False)
     _prompt_for_state(user_id, previous)
 
@@ -3818,6 +3807,7 @@ def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
         f"☎️ Контакт: {LEAD_OWNER_PHONE}\n\n"
         f"📍 Направление: {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+        + ("✈️ Только прямой перелёт\n" if info.get("direct_only") else "")
         + f"📅 Даты: {info.get('dates', '?')}\n"
         + (f"🌙 Длительность: {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
         + (f"🏨 Отель: {info['hotel_query']}\n" if info.get("hotel_query") else "")
@@ -3852,6 +3842,7 @@ def _notify_admin_telegram(
         + (f"📊 Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
         + f"📍 Направление: {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+        + ("✈️ Только прямой перелёт\n" if info.get("direct_only") else "")
         + f"📅 Даты: {info.get('dates', '?')}\n"
         + (f"🌙 Ночи: {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
         + (f"🏨 Отель: {info['hotel_query']}\n" if info.get("hotel_query") else "")
@@ -3893,6 +3884,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
         + (f"📊 Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
         + f"📍 {info.get('destination', '?')}\n"
         + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+        + ("✈️ Только прямой перелёт\n" if info.get("direct_only") else "")
         + f"📅 {info.get('dates', '?')}\n"
         + (f"🌙 {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
         + (f"🏨 {info['hotel_query']}\n" if info.get("hotel_query") else "")
@@ -3919,6 +3911,7 @@ def _notify_admin(user_id: int, info: Dict[str, Any], phone: str, client_name: O
             + (f"📊 Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
             + f"📍 {info.get('destination', '?')}\n"
             + (f"🛫 Откуда: {info['origin']}\n" if info.get("origin") else "")
+            + ("✈️ Только прямой перелёт\n" if info.get("direct_only") else "")
             + f"📅 {info.get('dates', '?')}\n"
             + (f"🌙 {_tourvisor.nights_label(info['nights'])}\n" if info.get("nights") else "")
             + (f"🏨 {info['hotel_query']}\n" if info.get("hotel_query") else "")
@@ -4591,13 +4584,8 @@ def load_state() -> None:
     with _db_cursor() as cur:
         cur.execute("SELECT * FROM sessions")
         for row in cur.fetchall():
-            d = dict(row)
-            chat_id = d.pop("chat_id")
-            d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
-            d["needs_consultation"] = bool(d.get("needs_consultation"))
-            if d.get("dates_are_trip") is not None:
-                d["dates_are_trip"] = bool(d["dates_are_trip"])
-            d["selected_tour"] = _tour_from_db(d.get("selected_tour"))
+            chat_id = row["chat_id"]
+            d = _decode_session_state(dict(row))
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():

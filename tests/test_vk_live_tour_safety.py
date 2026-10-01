@@ -10,7 +10,7 @@ from shared import tourvisor
 # leak into live search, and expired Tourvisor credentials must hide live UI.
 def test_live_tour_search_cannot_fall_back_to_curated_demo_offers():
     source = Path("vk_bot.py").read_text(encoding="utf-8")
-    assert "if not combined and DEMO_MODE:" in source
+    assert 'if not combined and DEMO_MODE and not snapshot.get("direct_only"):' in source
     assert "if not combined:\n        dest_val = snapshot.get(\"destination\")" not in source
 
 

@@ -107,6 +107,11 @@ def search_tours(
 
     failed_before_success = False
     for name in settings.enabled_names():
+        # Travelata's current adapter has no verified direct-flight filter.
+        # Falling back to it would silently drop an explicit customer condition.
+        if info.get("direct_only") and name == "travelata":
+            errors.append("travelata: фильтр прямого перелёта не поддерживается")
+            continue
         attempted = True
         if name == "sletat":
             result = _sletat.search_tours(
@@ -155,7 +160,7 @@ def search_tours(
 
     if not attempted:
         return _tourvisor.SearchResult(
-            error="Автоматический поиск туров сейчас не настроен"
+            error="; ".join(errors) or "Автоматический поиск туров сейчас не настроен"
         ), ""
 
     return _tourvisor.SearchResult(
