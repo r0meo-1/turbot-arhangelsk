@@ -13,6 +13,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 import requests
 
+from shared import alean as _alean
 from shared import sletat as _sletat
 from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
@@ -37,6 +38,9 @@ def _emit_outcome(
 @dataclass
 class ProviderSettings:
     order: Sequence[str] = ("travelata", "tourvisor")
+    alean: _alean.AleanSettings = field(
+        default_factory=_alean.AleanSettings.from_env
+    )
     sletat: _sletat.SletatSettings = field(
         default_factory=_sletat.SletatSettings.from_env
     )
@@ -62,7 +66,14 @@ class ProviderSettings:
 
         enabled: List[str] = []
         for name in ordered:
-            if name == "sletat":
+            if name == "alean":
+                if (
+                    self.alean.enabled
+                    and self.alean.username
+                    and self.alean.password
+                ):
+                    enabled.append(name)
+            elif name == "sletat":
                 if self.sletat.enabled and self.sletat.login and self.sletat.password:
                     enabled.append(name)
             elif name == "travelata":
@@ -113,7 +124,11 @@ def search_tours(
             errors.append("travelata: фильтр прямого перелёта не поддерживается")
             continue
         attempted = True
-        if name == "sletat":
+        if name == "alean":
+            result = _alean.search_tours(
+                settings.alean, session, info, log=log
+            )
+        elif name == "sletat":
             result = _sletat.search_tours(
                 settings.sletat,
                 session,
