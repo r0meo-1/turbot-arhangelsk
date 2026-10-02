@@ -107,6 +107,33 @@ private arguments or chained exception internals.
 Real PostgreSQL tests cover concurrent duplicate and distinct emails, reversed
 candidate order, task/version/source/event consistency, review decisions, a late
 outbox failure rolling back both new and existing state, and ingestion after
-legacy import. Gmail checkpoint/notification methods, the asynchronous service
-adapter, outbox leases, delivery workers, reconciliation and DLQ are not yet
-implemented by this class. Those must be complete before production cutover.
+legacy import. The asynchronous service adapter, outbox leases, delivery workers,
+reconciliation and DLQ are not yet implemented. Those must be complete before
+production cutover.
+
+## Gmail durable state boundary
+
+`gmail.GmailStore(engine)` provides synchronous counterparts of the seven SQLite
+Gmail state methods. History IDs use exact NUMERIC values (up to the schema's 20
+digits) and return canonical decimal strings. Concurrent checkpoint upserts only
+advance; stale and repeated checkpoints leave both the value and update time
+unchanged. This store does not own or dispose the caller's engine.
+
+Notifications deduplicate by Pub/Sub message ID and mailbox/history ID. Reads
+select the numerically highest pending history. Acknowledgement changes only
+pending notifications at or below the requested history within one mailbox;
+later notifications remain pending. Receiving or acknowledging a notification
+does not advance the ingestion checkpoint or create an email/task. The caller
+must acknowledge only after successfully ingesting the corresponding history.
+
+Watch upserts retain the response with the greatest expiration time, preventing
+an older concurrent response from replacing a later renewal. Equal expirations
+are no-ops, including differing topic/history values; this API is for renewal,
+not forcing subscription reconfiguration. Watch history is independent of the
+ingestion checkpoint. Tests cover precision, new store instances, concurrent
+writes, replay, bounded acknowledgement, invalid inputs and rollback.
+
+The service and authenticated Pub/Sub receiver still use SQLite. A future async
+adapter must compose these methods with canonical ingestion and delivery before
+any writer cutover; passing the synchronous store to the existing async service
+is not supported. These tests do not prove a live Gmail subscription or delivery.
