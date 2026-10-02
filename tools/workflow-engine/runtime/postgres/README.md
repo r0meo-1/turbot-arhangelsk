@@ -78,8 +78,10 @@ conversion must validate inputs and fail on incompatible rows. In particular,
 new status/foreign-key/uniqueness constraints must not cause silent filtering
 of legacy state. Synthetic integration tests cover consistent snapshot import,
 row/key/version comparison, resumability, conflict refusal and full rollback.
-PostgreSQL repository/lease worker, adapter crash recovery, DLQ retry and
-production snapshot/cutover acceptance remain to implement and verify.
+Complete service integration, external adapter crash recovery/reconciliation,
+destination-specific DLQ handling and production snapshot/cutover acceptance
+remain to implement and verify. The persistence boundaries below are isolated
+from production service selection.
 
 ## Canonical ingestion boundary
 
@@ -107,9 +109,9 @@ private arguments or chained exception internals.
 Real PostgreSQL tests cover concurrent duplicate and distinct emails, reversed
 candidate order, task/version/source/event consistency, review decisions, a late
 outbox failure rolling back both new and existing state, and ingestion after
-legacy import. The asynchronous service adapter, outbox leases, delivery workers,
-reconciliation and DLQ are not yet implemented. Those must be complete before
-production cutover.
+legacy import. The asynchronous service adapter, delivery-worker integration and
+external destination reconciliation are not yet implemented. Those must be
+complete before production cutover. Queue leases/retries are described below.
 
 ## Gmail durable state boundary
 
