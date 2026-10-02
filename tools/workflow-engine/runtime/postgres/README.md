@@ -174,3 +174,17 @@ destination idempotency and reconciliation remain required. The existing async
 worker is not wired to this store. Its adapter must renew leases during long work,
 handle rejected stale acknowledgements, provide retry pacing, and preserve
 destination idempotency before production cutover.
+# Projection snapshot adapter
+
+`ProjectionStore.snapshot()` reads tasks and unresolved reviews in a single
+read-only REPEATABLE READ transaction. Dates become ISO strings and JSONB review
+candidates become JSON strings for the existing Markdown renderer. Stable IDs
+break ordering ties. `snapshot_async()` moves this bounded transaction to a
+thread; cancellation does not terminate the database read. The caller owns the
+engine and must keep it alive until background operations finish.
+
+This adapter does not claim or acknowledge outbox events, write projection files,
+or select PostgreSQL in production. Service wiring and lease-aware destination
+delivery remain separate work. Integration tests verify read-only isolation and
+exclude a concurrent review committed between the two snapshot queries.
+
