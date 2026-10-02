@@ -17,8 +17,8 @@ def seed(engine, event_id='event'):
     with engine.begin() as db:
         db.execute(text('''
             INSERT INTO outbox (id,event_key,event_type,payload_json,created_at)
-            VALUES (:id,:id,'TASK_CHANGED','{"task_id":"synthetic","version":1}',now())
-        '''), {'id': event_id})
+            VALUES (:id,:id,'TASK_CHANGED',CAST(:payload AS JSONB),now())
+        '''), {'id': event_id, 'payload': '{"task_id":"synthetic","version":1}'})
 
 
 def row(engine):
