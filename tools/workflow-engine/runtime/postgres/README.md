@@ -29,7 +29,36 @@ in-flight writers and refuses populated state. The concurrent-writer test
 verifies committed data and revision survive the refusal. Data rollback must use the later verified
 SQLite migration/cutover procedure; it is not dropping a populated schema.
 
-## Preservation mapping for the future importer
+## Offline snapshot import and comparison
+
+`import_sqlite.py` accepts a consistent SQLite backup made with the SQLite backup
+API (not a copy of a live database file without its WAL). It opens the snapshot
+read-only and checks the supported table/column set and value conversions.
+Use synthetic data in tests; never commit a production snapshot or database URL.
+
+```sh
+python tools/workflow-engine/runtime/postgres/import_sqlite.py --sqlite-snapshot /secure/workflow-snapshot.db --mode validate
+python tools/workflow-engine/runtime/postgres/import_sqlite.py --sqlite-snapshot /secure/workflow-snapshot.db --mode import
+python tools/workflow-engine/runtime/postgres/import_sqlite.py --sqlite-snapshot /secure/workflow-snapshot.db --mode compare
+```
+
+`validate` checks source schema and conversions only; PostgreSQL constraints are
+verified during import. `compare` is the default and uses a read-only repeatable
+read transaction. `import` requires an already upgraded, offline target via
+`WORKFLOW_POSTGRES_MIGRATION_URL`. It locks canonical tables, inserts missing
+rows, verifies every mapped field and total count, and commits everything in one
+transaction. A matching partial import can resume. Repeated import is idempotent;
+conflicting/extra rows, active leases and unmatched new processing history abort
+the entire transaction. Existing rows are never overwritten. Legacy identity
+sequences restart transactionally beyond imported IDs. Reports contain counts
+only; errors suppress source values and credentials.
+
+Stop target workers before import. The importer is not an online synchronization
+tool: continued SQLite writes require a new final snapshot and a separate approved
+cutover plan. Preserve SQLite for rollback. No runtime writer or deployment is
+switched by these commands.
+
+## Preservation mapping
 
 | SQLite source | PostgreSQL target | Required preservation |
 | --- | --- | --- |
@@ -47,9 +76,10 @@ SQLite migration/cutover procedure; it is not dropping a populated schema.
 retry state, not fabricated history for old rows. Timestamp/date/JSON/boolean
 conversion must validate inputs and fail on incompatible rows. In particular,
 new status/foreign-key/uniqueness constraints must not cause silent filtering
-of legacy state. Consistent snapshot import, row/key/version comparison,
-resumability, PostgreSQL repository/lease worker, adapter crash recovery, DLQ
-retry and production cutover remain to implement and verify.
+of legacy state. Synthetic integration tests cover consistent snapshot import,
+row/key/version comparison, resumability, conflict refusal and full rollback.
+PostgreSQL repository/lease worker, adapter crash recovery, DLQ retry and
+production snapshot/cutover acceptance remain to implement and verify.
 
 Schema tests prove PostgreSQL constraints and transaction/locking primitives;
 they do not prove the production repository or delivery-worker implementation.
