@@ -81,5 +81,32 @@ row/key/version comparison, resumability, conflict refusal and full rollback.
 PostgreSQL repository/lease worker, adapter crash recovery, DLQ retry and
 production snapshot/cutover acceptance remain to implement and verify.
 
-Schema tests prove PostgreSQL constraints and transaction/locking primitives;
-they do not prove the production repository or delivery-worker implementation.
+## Canonical ingestion boundary
+
+`canonical.CanonicalStore(engine).ingest(message, candidates, validator)` provides
+the synchronous PostgreSQL transaction for the existing runtime models and
+validator. The caller supplies and disposes a PostgreSQL SQLAlchemy engine using
+READ COMMITTED isolation. Run with `runtime` on `PYTHONPATH`. The service still
+constructs the SQLite repository; no environment switch enables this new class.
+
+One transaction records the immutable email, validates candidates, updates tasks,
+links sources, and inserts versioned outbox events. A repeated source/external ID
+returns false without changing canonical state. The whole transaction rolls back
+if any candidate or database write fails. Transaction-scoped advisory locks cover
+new and existing dedupe keys; locks are ordered to support concurrent multi-task
+ingestion. Existing task rows are also locked before validation and merging.
+Duplicate candidate keys within one extraction are rejected before writing.
+
+New IDs use the SQLite runtime's deterministic UUID rule; imported IDs remain
+unchanged. Date values are converted to the validator's ISO-string contract,
+preserving compatible deadline merges and conflict review. This boundary does
+not store email bodies or fabricate extraction history. Database failures expose
+a generic error rather than driver SQL or source values; callers should not log
+private arguments or chained exception internals.
+
+Real PostgreSQL tests cover concurrent duplicate and distinct emails, reversed
+candidate order, task/version/source/event consistency, review decisions, a late
+outbox failure rolling back both new and existing state, and ingestion after
+legacy import. Gmail checkpoint/notification methods, the asynchronous service
+adapter, outbox leases, delivery workers, reconciliation and DLQ are not yet
+implemented by this class. Those must be complete before production cutover.

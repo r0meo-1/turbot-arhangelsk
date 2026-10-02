@@ -144,3 +144,26 @@ def test_compare_never_populates_empty_target(engine, snapshot_path):
         migration.transfer(engine, migration.read_snapshot(snapshot_path))
     with engine.connect() as db:
         assert all(db.scalar(text(f'SELECT count(*) FROM {table}')) == 0 for table in TABLES)
+
+
+@pytest.mark.usefixtures('empty_database')
+def test_ingestion_after_import_preserves_legacy_identity_and_advances_version(engine, snapshot_path):
+    from datetime import datetime, timezone
+    from postgres.canonical import CanonicalStore
+    from workflow_engine.logic import Validator
+    from workflow_engine.models import EmailMessage, TaskCandidate
+
+    migration.transfer(engine, migration.read_snapshot(snapshot_path), apply=True)
+    store = CanonicalStore(engine)
+    message = EmailMessage('gmail', 'followup', 'thread', 'qa@example.invalid',
+                           'Synthetic', '', datetime(2026, 10, 2, tzinfo=timezone.utc))
+    candidate = TaskCandidate('Synthetic task', 'QA', 90, 'critical', None,
+                              '2026-10-05', 0.9, True, 'synthetic-key')
+    assert store.ingest(message, [candidate], Validator()) is True
+    assert store.ingest(message, [candidate], Validator()) is False
+    with engine.connect() as db:
+        task = db.execute(text('SELECT id,version FROM task')).one()
+        assert tuple(task) == ('legacy-task', 4)
+        assert db.scalar(text("SELECT count(*) FROM outbox WHERE event_key='task:legacy-task:v:4'")) == 1
+        assert db.scalar(text('SELECT last_synced_version FROM destination_state')) == 3
+        assert db.scalar(text('SELECT count(*) FROM task_source')) == 2

@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sys
 
 from alembic import command
 from alembic.config import Config
@@ -9,6 +10,7 @@ from sqlalchemy.engine import make_url
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT.parent))
 TABLES = {
     "gmail_mailbox", "gmail_watch", "gmail_notification", "email_event",
     "extraction_run", "task", "task_source", "review_queue", "outbox",
