@@ -234,6 +234,7 @@ def test_initialize_and_tool_list_are_read_only():
         listed = _rpc(client, "tools/list")
         names = {item["name"] for item in listed.json["result"]["tools"]}
         assert names == {
+            "vk.get_comments",
             "vk.get_group",
             "vk.list_posts",
             "vk.get_post_stats",
@@ -437,6 +438,7 @@ def test_modern_discover_and_tools_work_without_initialize():
         assert listed_result["resultType"] == "complete"
         assert listed_result["_meta"][SERVER_INFO_META_KEY]["name"] == "turbot-vk"
         assert {tool["name"] for tool in listed_result["tools"]} == {
+            "vk.get_comments",
             "vk.get_group",
             "vk.list_posts",
             "vk.get_post_stats",
