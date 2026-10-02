@@ -188,3 +188,25 @@ or select PostgreSQL in production. Service wiring and lease-aware destination
 delivery remain separate work. Integration tests verify read-only isolation and
 exclude a concurrent review committed between the two snapshot queries.
 
+
+## Experimental leased Markdown worker
+
+`MarkdownWorker.deliver_one()` combines a claim, consistent snapshot, render,
+lease renewal, atomic Markdown replacement and token-checked acknowledgement.
+It returns `idle`, `busy`, `lease_lost` or `delivered`; failures use sanitized
+codes. A database-wide advisory transaction lock serializes cooperating Markdown
+writers before snapshot reads. The async wrapper waits for its background call
+when cancelled, including repeated cancellation, before releasing the caller.
+
+Provision at least two pool connections per active worker. Keep database/file
+operations bounded by deployment timeouts. This worker is not wired to startup
+and must only run in an isolated projection acceptance environment for now:
+marking an event done is not fan-out delivery to every destination. Do not run it
+against the production queue alongside the SQLite/Linear workers.
+
+A file replacement followed by failed/expired acknowledgement is replayable by
+regenerating current state, without appending a duplicate generated block.
+This is not an exactly-once guarantee. All writers must honor the same database
+lock; manual/external file writers and loss of the guard connection during a
+file write are not fenced by the filesystem. Destination fencing, fan-out state,
+reconciliation, Linear crash recovery and production cutover remain open.
