@@ -137,3 +137,38 @@ The service and authenticated Pub/Sub receiver still use SQLite. A future async
 adapter must compose these methods with canonical ingestion and delivery before
 any writer cutover; passing the synchronous store to the existing async service
 is not supported. These tests do not prove a live Gmail subscription or delivery.
+
+## Leased outbox boundary
+
+`outbox.OutboxStore(engine)` implements synchronous `claim`, `renew`, `complete`,
+`fail` and explicit `retry_dead` operations. Claim uses `FOR UPDATE SKIP LOCKED`
+to take one pending or expired event without waiting for other workers' rows.
+Each claim increments the attempt count and returns a fresh `lease_owner` UUID
+token. Pass that exact token with the event ID when renewing, completing or
+failing. A token identifies one attempt, not a reusable worker ID.
+
+Leases use the database clock and last 1–3600 seconds (default 60). Renewal never
+shortens an existing lease. Expired tokens cannot update state even before a
+replacement claim, and a reclaimed event cannot be acknowledged by its previous
+token. Mutations lock the event before checking wall-clock expiry, so a lock wait
+does not grant extra time based on an old transaction timestamp.
+
+The eighth failed attempt moves the event to `dead` and records a dead-letter
+summary atomically. Crashes count as attempts too: claim sweeps up to 100
+exhausted pending/expired events into dead letters before taking runnable work.
+An unexpired final attempt is left alone. Failure reasons are allowlisted codes;
+raw exception/source text is rejected. Queue failures use destination
+`canonical-outbox`, separate from external destination delivery failures.
+
+`retry_dead` explicitly resets a dead event's attempt budget and marks its queue
+dead-letter summary retried in one transaction. It requires the corresponding
+unretried queue failure and does not reset pending/processing/done events. A later
+dead-letter cycle updates the same summary and clears the retry marker; this is
+the latest failure summary, not a complete immutable retry audit log.
+
+These operations provide recoverable queue ownership, not exactly-once external
+delivery or per-task version ordering. A worker may crash after external success;
+destination idempotency and reconciliation remain required. The existing async
+worker is not wired to this store. Its adapter must renew leases during long work,
+handle rejected stale acknowledgements, provide retry pacing, and preserve
+destination idempotency before production cutover.
