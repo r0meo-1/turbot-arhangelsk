@@ -12,22 +12,48 @@ export function searchArgs(data) {
     price_max:data.budget * (data.people + data.kids.length),
   };
 }
+const clip = (value, limit) => typeof value === 'string' ? value.length > limit ? value.slice(0,limit - 1) + '…' : value : '';
+function itinerary(leg, label) {
+  const segments = Array.isArray(leg?.segments) ? leg.segments : [];
+  const places = [];
+  for (let i = 0; i < segments.length; i++) {
+    if (!i || segments[i].from !== segments[i - 1].to) places.push(segments[i].from);
+    places.push(segments[i].to);
+  }
+  const route = places.filter(p => typeof p === 'string' && p).join(' → ') || [leg?.from,leg?.to].filter(p => typeof p === 'string' && p).join(' → ');
+  const time = [clip(leg?.departure_at,40),clip(leg?.arrival_at,40)].filter(Boolean).join(' → ');
+  return `${label}: ${clip(route,220)}${route.length > 220 ? ' (маршрут сокращён)' : ''}${time ? '\n' + time : ''}`;
+}
 export function formatOffers(payload, args) {
-  const seen = new Set(), lines = [];
+  const seen = new Set(), cards = [];
   for (const raw of Array.isArray(payload?.offers) ? payload.offers : []) {
-    const amount = raw.price?.amount;
+    const amount = raw?.price?.amount;
     if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) continue;
-    const carriers = (Array.isArray(raw.carriers) ? raw.carriers : []).filter(c => typeof c === 'string').join(', ').slice(0,100);
-    const departure = String(raw.departure_at || '').slice(0,40);
-    const signature = JSON.stringify([amount,carriers,departure,raw.duration_min]);
+    const carriers = clip((Array.isArray(raw.carriers) ? raw.carriers : []).filter(c => typeof c === 'string').join(', '),100);
+    const departure = clip(raw.departure_at,40);
+    const legs = Array.isArray(raw.legs) ? raw.legs : [];
+    // Equal outbound prices can still represent different return itineraries.
+    const signature = raw.offer_id || JSON.stringify([amount,raw.price.currency,carriers,departure,raw.return_departure_at,raw.return_arrival_at,raw.duration_min,legs]);
     if (seen.has(signature)) continue;
     seen.add(signature);
-    const currency = String(raw.price.currency || 'RUB').slice(0,8);
-    lines.push(`${amount} ${currency === 'RUB' ? '₽' : currency} · ${carriers || 'перевозчик не указан'} · ${departure}`);
-    if (lines.length === 3) break;
+    const currency = clip(raw.price.currency,8) || 'RUB';
+    const [whole,fraction] = String(amount).split('.');
+    const price = whole.replace(/\B(?=(\d{3})+(?!\d))/g,' ') + (fraction ? '.' + fraction : '');
+    const basis = payload.meta?.pricing?.basis === 'party_total' ? ' за всех пассажиров' : '';
+    const lines = [`${cards.length + 1}. ${price} ${currency === 'RUB' ? '₽' : currency}${basis} · ${carriers || 'перевозчик не указан'}`];
+    if (legs.length) {
+      for (let i = 0; i < Math.min(legs.length,2); i++) lines.push(itinerary(legs[i],legs[i]?.label === 'return' || i === 1 ? 'Обратно' : 'Туда'));
+    } else {
+      lines.push('Туда: ' + (departure || 'время не указано'));
+      if (raw.return_departure_at) lines.push('Обратно: ' + [clip(raw.return_departure_at,40),clip(raw.return_arrival_at,40)].filter(Boolean).join(' → '));
+    }
+    if (raw.is_multi_pnr) lines.push('⚠️ Самостоятельная пересадка: отдельные билеты, стыковка не защищена.');
+    else if (raw.has_self_transfer) lines.push('⚠️ Самостоятельная пересадка: проверьте условия стыковки.');
+    cards.push(lines.join('\n'));
+    if (cards.length === 3) break;
   }
-  if (!lines.length) return 'Подходящих рейсов в ответе Tutu не найдено. Попробуйте другие даты или бюджет. Демо-анкета завершена; заявка не отправлялась.';
-  return `✈️ Рейсы Tutu: ${args.origin} → ${args.destination}\nТуда ${args.departure_date}, обратно ${args.return_date}\nПассажиры: ${args.adults} взр. по тарифу, ${args.children} детей, ${args.infants} младенцев.\n\n${lines.join('\n')}\n\nСуммы приведены как в ответе Tutu для выбранного состава. Это перелёт, без отеля и трансфера. Цены и наличие могут измениться. Покупка не выполнялась.`;
+  if (!cards.length) return 'Подходящих рейсов в ответе Tutu не найдено. Попробуйте другие даты или бюджет. Демо-анкета завершена; заявка не отправлялась.';
+  return `✈️ Рейсы Tutu: ${args.origin} → ${args.destination}\nТуда ${args.departure_date}, обратно ${args.return_date}\nПассажиры: ${args.adults} взр. по тарифу, ${args.children} детей, ${args.infants} младенцев.\n\n${cards.join('\n\n')}\n\nСуммы и время приведены как в ответе Tutu. Это перелёт, без отеля и трансфера. Цены и наличие могут измениться. Покупка не выполнялась.`;
 }
 // Streamable HTTP can return notifications before the matching RPC response.
 export async function readRpcResponse(response, id) {

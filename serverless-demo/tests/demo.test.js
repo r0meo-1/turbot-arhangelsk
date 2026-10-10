@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
 import { budget, maskedPhone, kids, dates, moscowToday, flightParty, place } from '../tgcloud/lib/validation.js';
 import { empty, reduce, render, STEPS } from '../tgcloud/lib/dialog.js';
 import { handle } from '../tgcloud/lib/service.js';
-import { searchArgs, findFlights, readRpcResponse } from '../tgcloud/lib/flights.js';
+import { searchArgs, findFlights, readRpcResponse, formatOffers } from '../tgcloud/lib/flights.js';
 
 test('place requires a letter while accepting international names', () => {
   for (const value of ['--','()','..','\u0301\u0300']) assert.equal(place(value),null);
@@ -24,7 +25,7 @@ test('SSE decodes split UTF-8, CRLF, multiline data and skips notifications', as
 test('SSE flight results and structured content preserve returned prices', async () => {
   const result = {structuredContent:{offers:[{price:{amount:12345.67,currency:'RUB'},carriers:['Test Air']}]}};
   const text = await findFlights(async()=>sse('data: '+JSON.stringify({id:1,result})+'\n\n'),flow().data);
-  assert.match(text,/12345.67/);
+  assert.match(text,/12 345.67/);
 });
 test('truncated SSE, RPC errors and unknown payloads report unavailable, not no flights', async () => {
   const responses = [sse('data: {"id":1'), sse('data: {"id":1,"error":{"code":-1}}\n\n'),
@@ -370,10 +371,39 @@ test('flight search excludes contacts, respects age bands and uses return date',
   assert.deepEqual([args.adults,args.children,args.infants],[2,1,1]);
   let captured;
   const text=await findFlights(async(url,opts)=>{captured=opts.body;return {ok:true,json:async()=>({result:{content:[{type:'text',text:JSON.stringify({offers:[{price:{amount:12345.67,currency:'RUB'},carriers:['Test Air'],departure_at:'2026-11-10T12:00:00'}]})}]}})};},data);
-  assert.ok(!captured.includes('contact')); assert.ok(!captured.includes('7900')); assert.match(text,/12345.67/);
+  assert.ok(!captured.includes('contact')); assert.ok(!captured.includes('7900')); assert.match(text,/12 345.67/);
 });
 test('upstream failure and oversized party do not fabricate prices',async()=>{
   const data=flow().data;
   assert.match(await findFlights(async()=>{throw new Error('network');},data),/не вернул/);
   assert.match(await findFlights(async()=>{throw new Error('must not call');},{...data,people:50}),/до 9/);
+});
+test('real Tutu round-trip response shows party prices, both itineraries and self-transfer warning',()=>{
+  const fixture=JSON.parse(readFileSync(new URL('./fixtures/tutu-avia.json',import.meta.url),'utf8'));
+  const text=formatOffers(fixture.payload,fixture.args);
+  assert.match(text,/89 452 ₽ за всех пассажиров/);
+  assert.ok(!text.includes('357808'));
+  assert.match(text,/Москва — Внуково \(VKO\)/);
+  assert.match(text,/Стамбул — Стамбул-Новый \(IST\)/);
+  assert.match(text,/2026-11-17T21:35/);
+  assert.match(text,/2026-11-18T06:25/);
+  assert.match(text,/Самостоятельная пересадка/);
+  assert.match(text,/отдельные билеты/);
+  assert.match(text,/без отеля и трансфера/);
+  assert.ok(text.length<=4096);
+});
+test('offers sharing outbound time and price keep different return itineraries',()=>{
+  const base={price:{amount:10000,currency:'RUB'},carriers:['Test Air'],departure_at:'2026-11-10T07:00:00',duration_min:300};
+  const args=searchArgs(flow().data);
+  const offers=[{...base,return_departure_at:'2026-11-17T10:00:00'}, {...base,return_departure_at:'2026-11-17T20:00:00'}];
+  const text=formatOffers({offers},args);
+  assert.match(text,/2026-11-17T10:00/);
+  assert.match(text,/2026-11-17T20:00/);
+});
+test('flight cards stay within Telegram message limit with long upstream itinerary fields',()=>{
+  const leg={from:'А'.repeat(500),to:'Б'.repeat(500),departure_at:'2026-11-10T07:00:00',arrival_at:'2026-11-10T20:00:00',segments:Array.from({length:10},()=>({from:'В'.repeat(500),to:'Г'.repeat(500)}))};
+  const offers=Array.from({length:3},(_,i)=>({offer_id:String(i),price:{amount:10000+i,currency:'RUB'},carriers:['Д'.repeat(1000)],departure_at:leg.departure_at,legs:[leg,leg],is_multi_pnr:true}));
+  const text=formatOffers({offers,meta:{pricing:{basis:'party_total'}}},searchArgs(flow().data));
+  assert.ok(text.length<=4096);
+  assert.match(text,/Самостоятельная пересадка/);
 });

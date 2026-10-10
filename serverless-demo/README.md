@@ -19,6 +19,9 @@ local JavaScript modules.
 - An explicit button after completion searches Tutu for real round-trip fares.
   Only route/date/passenger-band/count/budget parameters leave the bot. Tutu
   errors produce a visible unavailable response, never invented prices.
+- Flight cards show both itineraries with the returned airport names and times,
+  identify party-total prices when Tutu confirms that basis, and warn about
+  self-transfer/separate tickets. Different return itineraries remain distinct.
 - Supported date text: `YYYY-MM-DD`, `DD.MM.YYYY`, `15 июня`, `15–22 июня` and
   the displayed presets. Cross-month natural-language ranges are not supported.
 - Country presets resolve to the same resorts as the source bot (Turkey →
@@ -121,3 +124,18 @@ covered by this chat-demo port.
   explicitly confirms no submission; `/delete` clears the synthetic draft.
 - Live Tutu button returned the explicit unavailable response. Successful fare
   retrieval remains unverified.
+
+## Live Tutu verification (2026-10-10)
+
+- From Codex, the real Moscow–Antalya round-trip search for 10–17 November 2026
+  returned 12 offers in 42.42 seconds, starting at RUB 89,452 for the whole party
+  (two adults, one child, one infant). These are observed prices, not a quote or
+  cached production response. No checkout, booking or payment was requested.
+- The actual response exposed airport/return-route and self-transfer information
+  that the earlier cards omitted. A reduced real-response test fixture verifies
+  the updated display, party-total basis and distinct return itineraries.
+- In Telegram Serverless, Tutu `tools/list`, `search_avia` and a GET to its host
+  timed out after about five seconds. A control HTTPS request to example.com
+  succeeded in 36 ms. The SDK's published HTTP reference does not document a
+  timeout override. Working Tutu access from Serverless remains unverified;
+  the bot continues to show its explicit unavailable message on failure.
