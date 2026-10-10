@@ -107,14 +107,17 @@ def search_tours(settings, session, info, *, log=None):
         return tv.SearchResult(error="Для этих условий Alean требуется подбор менеджером")
     try:
         raw_dates = str(info.get("dates") or "").strip()
-        raw_nights = str(info.get("nights") or "7").strip()
+        raw_nights = str(info["nights"] if info.get("nights") is not None else "7").strip()
+        night_match = re.fullmatch(r"(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?(?:\s*(?:ночь|ночи|ночей))?", raw_nights)
+        if info.get("dates_are_trip") is False or re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_dates):
+            if not night_match or not 1 <= int(night_match[1]) <= int(night_match[2] or night_match[1]) <= 28:
+                return tv.SearchResult(error="Для Alean укажите от 1 до 28 ночей")
         window = tv.resolve_search_window(
             raw_dates,
             nights_raw=info.get("nights") if info.get("dates_are_trip") is False else None,
         )
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_dates):
             exact = date.fromisoformat(raw_dates)
-            night_match = re.fullmatch(r"(\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?", raw_nights)
             if night_match and exact >= date.today():
                 low, high = int(night_match[1]), int(night_match[2] or night_match[1])
                 if 1 <= low <= high <= 28:
@@ -134,6 +137,8 @@ def search_tours(settings, session, info, *, log=None):
             return tv.SearchResult(error="Для Alean уточните возраст каждого ребёнка")
         budget = int(info.get("budget") or 0)
         cap = budget if info.get("budget_scope") == "total" else budget * (adults + len(ages))
+        if budget < 0 or cap > 2147483647:
+            return tv.SearchResult(error="Для Alean уточните бюджет")
         if info.get("budget_open_ended"):
             cap = 0
 

@@ -98,7 +98,8 @@ def test_resort_and_hotel_search_do_not_broaden_the_request():
 
 
 @pytest.mark.parametrize("updates", [dict(direct_only=True),dict(people=0),dict(kids_ages=[18]),
-    dict(kids_ages=[True]),dict(nights="5-10"),dict(dates="Даты гибкие")])
+    dict(kids_ages=[True]),dict(nights="5-10"),dict(nights="50"),dict(nights=0),dict(nights="10-7"),
+    dict(budget=-1),dict(budget=2147483648),dict(dates="Даты гибкие")])
 def test_unsupported_or_invalid_request_never_calls_supplier(updates):
     session = Session()
     assert alean.search_tours(settings(),session,info(**updates)).error
