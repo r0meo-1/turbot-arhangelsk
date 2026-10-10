@@ -1,10 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { budget, maskedPhone, kids, dates, moscowToday, flightParty } from '../tgcloud/lib/validation.js';
+import { budget, maskedPhone, kids, dates, moscowToday, flightParty, place } from '../tgcloud/lib/validation.js';
 import { empty, reduce, render } from '../tgcloud/lib/dialog.js';
 import { handle } from '../tgcloud/lib/service.js';
-import { searchArgs, findFlights } from '../tgcloud/lib/flights.js';
+import { searchArgs, findFlights, readRpcResponse } from '../tgcloud/lib/flights.js';
+
+test('place requires a letter while accepting international names', () => {
+  for (const value of ['--','()','..','\u0301\u0300']) assert.equal(place(value),null);
+  for (const value of ['Москва','Ростов-на-Дону','Xi’an','São Paulo']) assert.equal(place(value),value);
+});
+
+function sse(text) {
+  const bytes = new TextEncoder().encode(text);
+  return {ok:true,headers:{get:()=> 'text/event-stream; charset=utf-8'},
+    body:(async function*() { for (const byte of bytes) yield new Uint8Array([byte]); })()};
+}
+test('SSE decodes split UTF-8, CRLF, multiline data and skips notifications', async () => {
+  const response = sse(': keepalive\r\n\r\ndata: {"method":"notifications/progress"}\r\n\r\n' +
+    'event: message\r\ndata: {"jsonrpc":"2.0","id":1,\r\ndata: "result":{"text":"Москва"}}\r\n\r\n');
+  assert.equal((await readRpcResponse(response,1)).result.text,'Москва');
+});
+test('SSE flight results and structured content preserve returned prices', async () => {
+  const result = {structuredContent:{offers:[{price:{amount:12345.67,currency:'RUB'},carriers:['Test Air']}]}};
+  const text = await findFlights(async()=>sse('data: '+JSON.stringify({id:1,result})+'\n\n'),flow().data);
+  assert.match(text,/12345.67/);
+});
+test('truncated SSE, RPC errors and unknown payloads report unavailable, not no flights', async () => {
+  const responses = [sse('data: {"id":1'), sse('data: {"id":1,"error":{"code":-1}}\n\n'),
+    {ok:true,json:async()=>({result:{structuredContent:{unexpected:[]}}})}];
+  for (const response of responses) assert.match(await findFlights(async()=>response,flow().data),/не вернул/);
+});
 
 const today = new Date('2026-10-10T00:00:00Z');
 function flow() {

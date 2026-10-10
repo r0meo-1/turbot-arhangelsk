@@ -37,7 +37,7 @@ export function kids(raw) {
 export function place(raw) {
   if (typeof raw !== 'string') return null;
   const value = raw.trim().replace(/\s+/g, ' ');
-  return value.length >= 2 && value.length <= 80 && /^[\p{L}\p{M} ,.'’()-]+$/u.test(value) ? value : null;
+  return value.length >= 2 && value.length <= 80 && /\p{L}/u.test(value) && /^[\p{L}\p{M} ,.'’()-]+$/u.test(value) ? value : null;
 }
 export const iso = d => d.toISOString().slice(0, 10);
 export const addDays = (d, n) => new Date(d.getTime() + n * 86400000);
