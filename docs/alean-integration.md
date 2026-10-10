@@ -1,6 +1,11 @@
 # Alean search integration
 
 The VK tour funnel can search Alean through `shared/tour_providers.py`.
+The main Python Telegram bot (`bot.py`) also searches Alean after saving and
+notifying the manager about a completed request. It sends up to three indicative
+offers to the customer and a linked follow-up to the manager. Empty or failed
+searches continue through the existing Tutu/AI fallback. Supplier text is sent
+as plain text; the transfer exclusion and manager-check notice are always retained.
 `shared/alean.py` implements the read-only SAPI 2.3 contract supplied by Alean
 on 7 August 2026 in `AleanSearchAPI.DOCX`. It uses HTTPS Basic authentication
 and the documented XML response format at
@@ -18,7 +23,7 @@ ALEAN_PASSWORD=<secret>
 TOUR_PROVIDER_ORDER=alean,travelata,tourvisor
 ```
 
-Restart the VK service after configuration. Its tour-search health section
+Restart the Telegram and/or VK service after configuration. VK's tour-search health section
 reports configured/enabled flags without exposing credentials. Sletat retains
 its existing automatic priority when enabled.
 
@@ -45,7 +50,9 @@ implementation on 10 October; authenticated search has not been verified.
 - Filters malformed, stopped, hotel-only, out-of-range and over-budget rows.
   Alean outages fall through to the next configured provider.
 - Uses the existing VK selection and manager handoff. Alean cards explicitly
-  say that transfers are excluded. This does not add Alean to the standalone
+  say that transfers are excluded. The Python Telegram bot uses the same adapter,
+  preserving trip-date versus departure-date semantics and original child ages.
+  This does not add Alean to the standalone
   Telegram Serverless demo or create a new Mini App search endpoint.
 
 ## Price and availability confirmation
@@ -66,6 +73,7 @@ No booking, invoice, payment or customer-data API is called.
 ```sh
 python -m pytest tests/test_alean.py tests/test_tour_providers.py tests/test_tourvisor.py
 python -m pytest tests/test_vk_provider_router_wiring.py tests/test_vk_live_tour_safety.py tests/test_vk_bot.py
+python -m pytest tests/test_telegram_alean.py tests/test_bot.py
 ```
 
 Fixtures follow the supplier's XML field names and use synthetic catalog IDs.
