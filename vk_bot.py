@@ -367,6 +367,11 @@ def _tour_search_health() -> Dict[str, Any]:
         "enabled": providers.enabled,
         "enabled_providers": providers.enabled_names(),
         "provider_order": list(TOUR_PROVIDER_ORDER),
+        "alean": {
+            "configured": bool(providers.alean.username and providers.alean.password),
+            "enabled": "alean" in providers.enabled_names(),
+            "actualization": "manager_required",
+        },
         "tourvisor": {
             "configured": bool(TOURVISOR_TOKEN),
             "enabled": bool(TOURVISOR_ENABLED),
@@ -3056,9 +3061,12 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
         "sletat": "Слетать.ру",
         "tourvisor": "Tourvisor",
         "travelata": "Travelata",
+        "alean": "Алеан",
     }.get(provider)
     if provider_label:
         parts.append(f"Провайдер: {provider_label}")
+    if provider == "alean":
+        parts.append("Отель и авиабилеты; трансфер не включён. Цена и наличие требуют проверки менеджером.")
     if offer.get("tour_id"):
         parts.append(f"ID предложения: {offer['tour_id']}")
     actualization_status = str(offer.get("actualization_status") or "").strip().lower()

@@ -1,0 +1,75 @@
+# Alean search integration
+
+The VK tour funnel can search Alean through `shared/tour_providers.py`.
+`shared/alean.py` implements the read-only SAPI 2.3 contract supplied by Alean
+on 7 August 2026 in `AleanSearchAPI.DOCX`. It uses HTTPS Basic authentication
+and the documented XML response format at
+`https://sapi.alean.ru:3443/services`.
+
+## Activation
+
+Keep credentials in the server environment, never in this repository or a
+browser. Both explicit activation and routing are required:
+
+```dotenv
+ALEAN_ENABLED=true
+ALEAN_USERNAME=<dedicated SAPI user>
+ALEAN_PASSWORD=<secret>
+TOUR_PROVIDER_ORDER=alean,travelata,tourvisor
+```
+
+Restart the VK service after configuration. Its tour-search health section
+reports configured/enabled flags without exposing credentials. Sletat retains
+its existing automatic priority when enabled.
+
+Alean's 5 October 2026 account reply says that a new user can be added to the
+existing agency account. Provisioning requires an agency letterhead request
+signed by the responsible person, with agency tax ID and user details. This
+adapter does not provision or activate supplier accounts. Alean's 28 September
+reply says SAPI has no separate test endpoint; do not treat SOAP test credentials
+as verified SAPI access. The unauthenticated endpoint returned HTTP 401 during
+implementation on 10 October; authenticated search has not been verified.
+
+## Search behavior
+
+- Uses stable country, departure-city, resort and hotel CIDs from supplier
+  catalogs. Catalogs are cached for 24 hours per account and worker, up to 32
+  cache entries. Restarting a worker refreshes its cache.
+- Requests hotel-plus-flight offers with available tickets and guaranteed
+  hotel inventory. Country/resort/departure names must match uniquely.
+- Passes actual child ages, including ages 12–17, to hotel search.
+- Preserves total-budget versus per-person-budget semantics. No contact,
+  customer name, phone number or messenger ID is sent to Alean.
+- Rejects unsupported direct-flight conditions and date/night ranges wider
+  than four values. SAPI would otherwise silently narrow those ranges.
+- Filters malformed, stopped, hotel-only, out-of-range and over-budget rows.
+  Alean outages fall through to the next configured provider.
+- Uses the existing VK selection and manager handoff. Alean cards explicitly
+  say that transfers are excluded. This does not add Alean to the standalone
+  Telegram Serverless demo or create a new Mini App search endpoint.
+
+## Price and availability confirmation
+
+Search results are indicative, not a confirmed booking. Alean's 9 October
+reply requires SOAP `Specify` methods for price actualization. SAPI `GetTours`
+must not be substituted for that operation.
+
+This change leaves Alean actualization explicitly `unknown` and
+`confirmed=false`, with a manager-check instruction. Automated SOAP
+actualization remains pending verified account access and an authenticated
+contract test. The internal `alean:` card ID is not a supplier booking token;
+the manager must locate the offer in Alean and recheck it before confirmation.
+No booking, invoice, payment or customer-data API is called.
+
+## Verification
+
+```sh
+python -m pytest tests/test_alean.py tests/test_tour_providers.py tests/test_tourvisor.py
+python -m pytest tests/test_vk_provider_router_wiring.py tests/test_vk_live_tour_safety.py tests/test_vk_bot.py
+```
+
+Fixtures follow the supplier's XML field names and use synthetic catalog IDs.
+They are contract tests, not evidence that the agency account is activated.
+After provisioning, first check `GetCountries` with credentials supplied through
+the server environment, then run one synthetic search and verify manager handoff
+before enabling customer traffic.

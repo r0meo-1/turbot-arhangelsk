@@ -1401,5 +1401,7 @@ def format_client_message(
         lines.append(f"   💰 от {price} за тур")
         if offer.operator:
             lines.append(f"   Туроператор: {offer.operator}")
+        if offer.provider == "alean":
+            lines.append("   Отель и авиабилеты; трансфер не включён. Цена и наличие требуют проверки менеджером.")
         lines.append("")
     return "\n".join(lines).strip()[:max_len]
