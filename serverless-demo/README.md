@@ -23,7 +23,10 @@ local JavaScript modules.
   the displayed presets. Cross-month natural-language ranges are not supported.
 - Country presets resolve to the same resorts as the source bot (Turkey →
   Antalya, Egypt → Hurghada, etc.); the returned route is shown explicitly.
-- `/start`, `/help`, `/privacy`, `/cancel`, `/delete`. Private chats only.
+- `/resume` redisplays the saved step and fresh buttons without changing answers
+  or triggering a flight search. It also preserves edit mode and completed demos.
+  Deleted, cancelled or expired drafts cannot be restored; `/start` starts anew.
+- `/start`, `/resume`, `/help`, `/privacy`, `/cancel`, `/delete`. Private chats only.
 
 ## Data and concurrency
 

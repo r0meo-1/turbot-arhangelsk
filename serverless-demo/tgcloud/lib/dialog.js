@@ -22,7 +22,7 @@ const QUESTIONS = {
   phone:'📱 Введите тестовый номер +79001234567. Не используйте реальный номер. В базе демо остаётся только маска.',
   vk:'💙 Введите тестовую ссылку https://vk.com/demo_profile. Сам адрес в базе демо не сохраняется.',
 };
-export const INTRO = '🌴 АПРЕЛЬ тур · Подбор поездки\n\n8 коротких шагов — и ваша анкета готова.\n\nДемо: используйте вымышленные данные. Анкета не отправляется менеджеру или в CRM; бронирования и оплаты нет.\n\n/privacy — хранение данных · /delete — очистить';
+export const INTRO = '🌴 АПРЕЛЬ тур · Подбор поездки\n\n8 коротких шагов — и ваша анкета готова.\n\nДемо: используйте вымышленные данные. Анкета не отправляется менеджеру или в CRM; бронирования и оплаты нет.\n\n/resume — продолжить · /start — новая анкета\n/privacy — хранение данных · /delete — очистить';
 export const PRIVACY = 'Демо сохраняет ID чата и черновик анкеты для продолжения диалога. Имя, username, исходный телефон и ссылка VK не сохраняются: телефон маскируется, VK заменяется отметкой.\n\nЧерновик истекает через 24 часа бездействия; просроченные записи удаляются при следующем обращении к боту. /delete очищает анкету сразу; техническая запись ID/версии остаётся до истечения срока для защиты от повторов. Сообщения в истории Telegram команда не удаляет.\n\nТолько по кнопке «Проверить рейсы Tutu» отправляются города, даты и число пассажиров по возрастным группам в Tutu.ru. Контакты и ID чата туда не передаются. В CRM и менеджеру данные не отправляются.';
 export function empty() { return {step:'idle', data:{}, seen:[]}; }
 const clone = s => JSON.parse(JSON.stringify(s || empty()));
@@ -32,7 +32,8 @@ export function reduce(current, event, today = moscowToday()) {
   const cmd = text.split(/\s/)[0].split('@')[0].toLowerCase();
   const result = (notice = '', effect = null) => ({state, notice, effect});
   if (cmd === '/privacy') return result(PRIVACY);
-  if (cmd === '/help') return result('Команды: /start — демо, /cancel — отмена, /privacy — данные, /delete — очистить.');
+  if (cmd === '/help') return result('Команды: /start — новое демо, /resume — продолжить, /cancel — отмена, /privacy — данные, /delete — очистить.');
+  if (cmd === '/resume') return result(state.step === 'idle' ? 'Нет сохранённой анкеты. /start — начать новое демо.' : 'Продолжаем сохранённую демо-анкету. Ответы сохранены.');
   if (cmd === '/start') { state.step = 'destination'; state.data = {}; delete state.editing; return result(INTRO); }
   if (cmd === '/delete' || cmd === '/cancel' || event.action === 'cancel') {
     state.step = 'idle'; state.data = {}; delete state.editing;

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { budget, maskedPhone, kids, dates, moscowToday, flightParty, place } from '../tgcloud/lib/validation.js';
-import { empty, reduce, render } from '../tgcloud/lib/dialog.js';
+import { empty, reduce, render, STEPS } from '../tgcloud/lib/dialog.js';
 import { handle } from '../tgcloud/lib/service.js';
 import { searchArgs, findFlights, readRpcResponse } from '../tgcloud/lib/flights.js';
 
@@ -121,6 +121,25 @@ test('completed flexible-date demo can be edited into a flight-ready trip withou
   assert.equal(searchArgs(state.data).return_date,'2026-11-22');
   assert.equal(reduce(state,{action:'flights'},today).effect,'flights');
 });
+test('resume keeps every questionnaire phase and edit context without effects', () => {
+  const saved = flow();
+  for (const step of [...STEPS,'phone','vk','review','edit','done']) {
+    const state = {...saved,step};
+    for (const text of ['/resume','/resume@apreltour_bot']) {
+      const resumed = reduce(state,{text},today);
+      assert.deepEqual(resumed.state,state);
+      assert.equal(resumed.effect,null);
+      assert.match(resumed.notice,/Продолжаем сохранённую/);
+    }
+  }
+  const editing = reduce(reduce(saved,{action:'edit'},today).state,{action:'edit-nights'},today).state;
+  assert.deepEqual(reduce(editing,{text:'/resume'},today).state,editing);
+  const absent = reduce(empty(),{text:'/resume'},today);
+  assert.equal(absent.state.step,'idle');
+  assert.deepEqual(absent.state.data,{});
+  assert.match(absent.notice,/Нет сохранённой анкеты.*\/start/);
+  assert.match(reduce(empty(),{text:'/help'},today).notice,/\/resume/);
+});
 test('all generated callback payloads fit Telegram limit', () => {
   const s = flow();
   for (const step of ['destination','origin','dates','nights','people','kids','budget','contact','phone','vk','review','edit','done']) {
@@ -168,6 +187,43 @@ test('actual SQLite: editing completed demo preserves answers and invalidates ol
   assert.equal(h.flights(),0);
   await h.callback(h.button('flights'));
   assert.equal(h.flights(),1);
+});
+
+test('actual SQLite: resume restores current controls, rejects old buttons and never searches flights',async()=>{
+  const h=harness();
+  await h.message('/start'); await h.message('Турция');
+  const data=structuredClone(h.state().data);
+  const old=h.button('pick-1');
+  await h.message('/resume');
+  assert.equal(h.state().step,'origin');
+  assert.deepEqual(h.state().data,data);
+  assert.match(h.sent.at(-1).text,/Продолжаем сохранённую.*\n[\s\S]*Шаг 2 из 8/);
+  assert.ok(h.sent.at(-1).reply_markup.inline_keyboard.flat().every(b=>b.callback_data.startsWith('d:'+h.row().version+':')));
+  await h.callback(old);
+  assert.equal(h.state().step,'origin');
+  assert.match(h.sent.at(-1).text,/устарела/);
+  await h.callback(h.button('pick-1'));
+  assert.equal(h.state().step,'dates');
+  await complete(h); await h.callback(h.button('finish'));
+  const completed=structuredClone(h.state().data);
+  await h.message('/resume');
+  assert.equal(h.state().step,'done');
+  assert.deepEqual(h.state().data,completed);
+  assert.equal(h.flights(),0);
+});
+
+test('actual SQLite: resume cannot restore deleted, cancelled or expired drafts',async()=>{
+  for (const command of ['/delete','/cancel',null]) {
+    const h=harness(); await h.message('/start'); await h.message('Турция');
+    if (command) await h.message(command);
+    else h.deps.now=()=>new Date('2026-10-12T09:00:00Z');
+    await h.message('/resume');
+    assert.equal(h.state().step,'idle');
+    assert.deepEqual(h.state().data,{});
+    assert.match(h.sent.at(-1).text,/Нет сохранённой анкеты.*\/start/);
+    assert.deepEqual(h.sent.at(-1).reply_markup.inline_keyboard,[]);
+    assert.equal(h.flights(),0);
+  }
 });
 
 test('late text cannot overwrite a newer callback answer or move version backwards',async()=>{
