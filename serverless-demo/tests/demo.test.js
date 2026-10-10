@@ -124,6 +124,29 @@ async function complete(h) {
   for(const text of ['/start','Турция','Москва','Через месяц','7','2','нет','100 тыс']) await h.message(text);
   await h.callback(h.button('pick-0'));
 }
+
+test('late text cannot overwrite a newer callback answer or move version backwards',async()=>{
+  const h=harness();
+  await h.message('/start',1,1);
+  await h.callback(h.button('pick-1'),3);
+  const before=h.row(); const count=h.sent.length;
+  await h.message('Москва',2,2);
+  assert.deepEqual(h.row(),before);
+  assert.equal(h.sent.length,count);
+  await h.message('Москва',4,3);
+  assert.equal(h.state().step,'dates');
+});
+
+test('update watermark rejects old callbacks even after bounded seen history rolls over',async()=>{
+  const h=harness(); await h.message('/start',100,1);
+  const button=h.button('pick-1');
+  const state=h.state(); state.seen=[];
+  h.sqlite.prepare('UPDATE aprel_demo_sessions SET payload=?').run(JSON.stringify(state));
+  const before=h.row(); const count=h.sent.length;
+  await h.callback(button,99);
+  assert.deepEqual(h.row(),before);
+  assert.equal(h.sent.length,count);
+});
 test('actual SQLite: duplicate and simultaneous update processing is idempotent',async()=>{
   const h=harness();
   const concurrent = await Promise.allSettled([h.message('/start',1),h.message('/start',1)]);

@@ -26,7 +26,7 @@ export async function handle(deps, kind, input, ctx) {
     const current = row ? JSON.parse(row.payload) : empty();
     // Replaying a delivered update never advances the dialog or re-runs Tutu.
     // If Telegram delivery failed after the save, retry the current prompt.
-    if (current.seen.includes(updateId) || (kind === 'message' && message.message_id <= (current.lastMessage || 0))) {
+    if ((row && updateId <= row.version) || current.seen.includes(updateId) || (kind === 'message' && message.message_id <= (current.lastMessage || 0))) {
       if (current.pending && row.version === updateId) {
         if (current.deliveryUntil > ts) throw new Error('Prompt delivery in progress; retry later');
         const resumed = {...current,deliveryUntil:ts+60};
