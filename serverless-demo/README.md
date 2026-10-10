@@ -78,8 +78,10 @@ Official reference: https://core.telegram.org/bots/serverless
    If the remote schema already defines other tables, merge the additive demo
    table into it before this step. Run `npx tgcloud migrate --dry-run`; confirm
    that only the new demo table is added, then `npx tgcloud migrate --safe`.
-6. Test the pure validation and dialog modules through `npx tgcloud run` before
-   changing message delivery. Then deploy libraries and handlers together:
+6. Run the read-only hosted smoke test with
+   `npx tgcloud run endpoints/cloudCheck '{}'` before changing message delivery.
+   It checks the actual bot identity, SDK database access, and demo logic without
+   sending messages or writing data. Then deploy libraries and handlers together:
    `npx tgcloud push tgcloud/lib/ tgcloud/handlers/`.
 7. Inspect `npx tgcloud webhook`. The CLI refreshes the platform webhook on push;
    verify the URL and update types before calling `webhook sync` if necessary.
@@ -100,4 +102,12 @@ covered by this chat-demo port.
 - Tutu `tools/list` returned HTTP 200 and confirmed `search_avia` parameters.
 - A synthetic Moscow–Antalya search exercised the unavailable-response path
   under a 20-second local HTTP deadline; live fare success was not verified.
-- Cloud deployment and Telegram smoke test are required after CLI connection.
+- Hosted read-only smoke test passed against `@apreltour_bot` (ID 8886586430).
+- Deployed on 2026-10-10 with CLI 0.2.0: one additive table migration and
+  targeted library/handler push. Webhook sync enabled `message` and
+  `callback_query`; no prior Serverless modules or webhook were present.
+- Live Telegram flow passed: invalid nights rejected; calendar-month preset;
+  phone masking; edit 7 to 10 nights with return-date recalculation; completion
+  explicitly confirms no submission; `/delete` clears the synthetic draft.
+- Live Tutu button returned the explicit unavailable response. Successful fare
+  retrieval remains unverified.
