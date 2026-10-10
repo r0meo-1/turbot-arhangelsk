@@ -25,7 +25,11 @@ local JavaScript modules.
   Antalya, Egypt → Hurghada, etc.); the returned route is shown explicitly.
 - `/resume` redisplays the saved step and fresh buttons without changing answers
   or triggering a flight search. It also preserves edit mode and completed demos.
-  Deleted, cancelled or expired drafts cannot be restored; `/start` starts anew.
+  Deleted, cancelled or expired drafts cannot be restored.
+- `/start` opens a new questionnaire immediately when there are no saved answers.
+  Otherwise it offers **Continue** or **Start anew**. Answers and edit context stay
+  intact until the user explicitly confirms restarting; `/resume` dismisses the
+  confirmation. `/delete` and `/cancel` still clear the draft immediately.
 - `/start`, `/resume`, `/help`, `/privacy`, `/cancel`, `/delete`. Private chats only.
 
 ## Data and concurrency

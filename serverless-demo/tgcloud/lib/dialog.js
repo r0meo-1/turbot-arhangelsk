@@ -33,12 +33,20 @@ export function reduce(current, event, today = moscowToday()) {
   const result = (notice = '', effect = null) => ({state, notice, effect});
   if (cmd === '/privacy') return result(PRIVACY);
   if (cmd === '/help') return result('Команды: /start — новое демо, /resume — продолжить, /cancel — отмена, /privacy — данные, /delete — очистить.');
-  if (cmd === '/resume') return result(state.step === 'idle' ? 'Нет сохранённой анкеты. /start — начать новое демо.' : 'Продолжаем сохранённую демо-анкету. Ответы сохранены.');
-  if (cmd === '/start') { state.step = 'destination'; state.data = {}; delete state.editing; return result(INTRO); }
+  if (cmd === '/resume' || (state.restartPending && event.action === 'resume')) {
+    delete state.restartPending;
+    return result(state.step === 'idle' ? 'Нет сохранённой анкеты. /start — начать новое демо.' : 'Продолжаем сохранённую демо-анкету. Ответы сохранены.');
+  }
+  if (cmd === '/start' || (state.restartPending && event.action === 'restart')) {
+    if (cmd === '/start' && Object.keys(state.data).length) { state.restartPending = true; return result(); }
+    state.step = 'destination'; state.data = {}; delete state.editing; delete state.restartPending;
+    return result(INTRO);
+  }
   if (cmd === '/delete' || cmd === '/cancel' || event.action === 'cancel') {
-    state.step = 'idle'; state.data = {}; delete state.editing;
+    state.step = 'idle'; state.data = {}; delete state.editing; delete state.restartPending;
     return result(cmd === '/delete' ? 'Анкета очищена. /start — новое демо.' : '❌ Демо отменено. /start — начать заново.');
   }
+  if (state.restartPending) return result('Выберите: продолжить анкету или начать заново.');
   if (event.action === 'back') {
     if (state.editing) { state.step = 'review'; delete state.editing; }
     else if (['phone','vk'].includes(state.step)) state.step = 'contact';
@@ -131,6 +139,10 @@ export function summary(data) {
 
 export function render(state, version, notice = '') {
   const b = (text, action) => ({text, callback_data:`d:${version}:${action}`});
+  if (state.restartPending) {
+    return {text:[notice,'У вас уже есть демо-анкета.\n\nПродолжить с сохранённого шага или начать заново? При новом старте ответы будут удалены.'].filter(Boolean).join('\n\n'),
+      reply_markup:{inline_keyboard:[[b('▶️ Продолжить','resume')],[b('🆕 Начать заново','restart')]]}};
+  }
   let text = QUESTIONS[state.step] || '', rows = [];
   const stepIndex = STEPS.indexOf(['phone','vk'].includes(state.step) ? 'contact' : state.step);
   if (stepIndex >= 0) {

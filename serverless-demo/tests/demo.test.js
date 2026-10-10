@@ -85,7 +85,9 @@ test('complete demo, edit nights, cancel and reset', () => {
   assert.equal(edit.step,'review'); assert.equal(edit.data.nights,10); assert.equal(edit.data.budget,100000);
   assert.equal(reduce(edit,{action:'finish'},today).state.step,'done');
   assert.deepEqual(reduce(edit,{text:'/cancel'},today).state.data,{});
-  assert.equal(reduce(edit,{text:'/start'},today).state.step,'destination');
+  const restart = reduce(edit,{text:'/start'},today).state;
+  assert.deepEqual(restart.data,edit.data);
+  assert.equal(reduce(restart,{action:'restart'},today).state.step,'destination');
 });
 test('editing contact back does not lose previous answers, free text cannot finish', () => {
   const state = flow();
@@ -140,6 +142,33 @@ test('resume keeps every questionnaire phase and edit context without effects', 
   assert.match(absent.notice,/Нет сохранённой анкеты.*\/start/);
   assert.match(reduce(empty(),{text:'/help'},today).notice,/\/resume/);
 });
+test('start protects saved answers and edit context until restart is explicitly confirmed', () => {
+  const saved = flow();
+  const editing = reduce(reduce(saved,{action:'edit'},today).state,{action:'edit-nights'},today).state;
+  const done = reduce(saved,{action:'finish'},today).state;
+  for (const state of [{step:'origin',data:{destination:'Турция'},seen:[]},saved,editing,done]) {
+    const pending = reduce(state,{text:'/start'},today).state;
+    assert.equal(pending.restartPending,true);
+    assert.equal(pending.step,state.step);
+    assert.deepEqual(pending.data,state.data);
+    assert.deepEqual(reduce(pending,{text:'/start'},today).state,pending);
+    assert.deepEqual(reduce(pending,{text:'Москва'},today).state,pending);
+    assert.equal(reduce(pending,{action:'flights'},today).effect,null);
+    const view = render(pending,123);
+    assert.match(view.text,/ответы будут удалены/);
+    assert.deepEqual(view.reply_markup.inline_keyboard.flat().map(b=>b.callback_data),['d:123:resume','d:123:restart']);
+    assert.deepEqual(reduce(pending,{text:'/resume'},today).state,state);
+    assert.deepEqual(reduce(pending,{action:'resume'},today).state,state);
+    const restarted = reduce(pending,{action:'restart'},today).state;
+    assert.equal(restarted.step,'destination');
+    assert.deepEqual(restarted.data,{});
+    assert.equal(restarted.editing,undefined);
+    assert.equal(restarted.restartPending,undefined);
+  }
+  const first = reduce(empty(),{text:'/start'},today).state;
+  assert.equal(first.step,'destination');
+  assert.equal(reduce(first,{text:'/start'},today).state.restartPending,undefined);
+});
 test('all generated callback payloads fit Telegram limit', () => {
   const s = flow();
   for (const step of ['destination','origin','dates','nights','people','kids','budget','contact','phone','vk','review','edit','done']) {
@@ -164,7 +193,9 @@ function harness() {
   return {deps,sent,message,callback,row,state,button,fail:()=>{failSend=true;},flights:()=>flightCalls,sqlite};
 }
 async function complete(h) {
-  for(const text of ['/start','Турция','Москва','Через месяц','7','2','нет','100 тыс']) await h.message(text);
+  await h.message('/start');
+  if (h.state().restartPending) await h.callback(h.button('restart'));
+  for(const text of ['Турция','Москва','Через месяц','7','2','нет','100 тыс']) await h.message(text);
   await h.callback(h.button('pick-0'));
 }
 
@@ -225,6 +256,43 @@ test('actual SQLite: resume cannot restore deleted, cancelled or expired drafts'
     assert.equal(h.flights(),0);
   }
 });
+test('actual SQLite: stale restart cannot clear resumed answers; confirmed restart clears once',async()=>{
+  const h=harness(); await h.message('/start'); await h.message('Турция');
+  const saved=structuredClone(h.state().data);
+  await h.message('/start');
+  assert.equal(h.state().restartPending,true);
+  assert.deepEqual(h.state().data,saved);
+  const oldRestart=h.button('restart');
+  await h.callback(h.button('resume'));
+  assert.equal(h.state().step,'origin');
+  assert.equal(h.state().restartPending,undefined);
+  await h.callback(oldRestart);
+  assert.deepEqual(h.state().data,saved);
+  assert.match(h.sent.at(-1).text,/устарела/);
+  await h.message('/start');
+  const restart=h.button('restart');
+  await Promise.all([h.callback(restart,100),h.callback(restart,101)]);
+  assert.equal(h.state().step,'destination');
+  assert.deepEqual(h.state().data,{});
+  assert.equal(h.state().restartPending,undefined);
+  assert.equal(h.flights(),0);
+});
+test('actual SQLite: delete, cancel and expiry clear answers during restart confirmation',async()=>{
+  for (const command of ['/delete','/cancel',null]) {
+    const h=harness(); await h.message('/start'); await h.message('Турция'); await h.message('/start');
+    assert.equal(h.state().restartPending,true);
+    const restart=h.button('restart');
+    if (command) await h.message(command);
+    else h.deps.now=()=>new Date('2026-10-12T09:00:00Z');
+    await h.message('/resume');
+    assert.equal(h.state().step,'idle');
+    assert.deepEqual(h.state().data,{});
+    assert.equal(h.state().restartPending,undefined);
+    await h.callback(restart);
+    assert.equal(h.state().step,'idle');
+    assert.equal(h.flights(),0);
+  }
+});
 
 test('late text cannot overwrite a newer callback answer or move version backwards',async()=>{
   const h=harness();
@@ -263,7 +331,9 @@ test('actual SQLite: duplicate completion, old buttons after restart, and no CRM
   const finish=h.button('finish');
   await Promise.all([h.callback(finish,50),h.callback(finish,51)]);
   assert.equal(h.state().step,'done'); assert.equal(h.flights(),0);
-  await h.message('/start',60); await h.callback(finish,61);
+  await h.message('/start',60);
+  assert.equal(h.state().restartPending,true);
+  await h.callback(h.button('restart'),61); await h.callback(finish,62);
   assert.equal(h.state().step,'destination'); assert.deepEqual(h.state().data,{});
 });
 test('actual SQLite: save before send, recover failed prompt on retry without losing input',async()=>{
