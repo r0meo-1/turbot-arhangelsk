@@ -22,7 +22,7 @@ const QUESTIONS = {
   phone:'📱 Введите тестовый номер +79001234567. Не используйте реальный номер. В базе демо остаётся только маска.',
   vk:'💙 Введите тестовую ссылку https://vk.com/demo_profile. Сам адрес в базе демо не сохраняется.',
 };
-export const INTRO = '🌴 АПРЕЛЬ тур — демо подбора\n\nЭто демонстрация: заявка не отправляется в турагентство, CRM или менеджеру. Бронирования и оплаты нет. Используйте вымышленные данные.\n\nАнкета временно хранится для продолжения диалога. /privacy — данные, /delete — очистить, /cancel — отменить.';
+export const INTRO = '🌴 АПРЕЛЬ тур · Подбор поездки\n\n8 коротких шагов — и ваша анкета готова.\n\nДемо: используйте вымышленные данные. Анкета не отправляется менеджеру или в CRM; бронирования и оплаты нет.\n\n/privacy — хранение данных · /delete — очистить';
 export const PRIVACY = 'Демо сохраняет ID чата и черновик анкеты для продолжения диалога. Имя, username, исходный телефон и ссылка VK не сохраняются: телефон маскируется, VK заменяется отметкой.\n\nЧерновик истекает через 24 часа бездействия; просроченные записи удаляются при следующем обращении к боту. /delete очищает анкету сразу; техническая запись ID/версии остаётся до истечения срока для защиты от повторов. Сообщения в истории Telegram команда не удаляет.\n\nТолько по кнопке «Проверить рейсы Tutu» отправляются города, даты и число пассажиров по возрастным группам в Tutu.ru. Контакты и ID чата туда не передаются. В CRM и менеджеру данные не отправляются.';
 export function empty() { return {step:'idle', data:{}, seen:[]}; }
 const clone = s => JSON.parse(JSON.stringify(s || empty()));
@@ -130,17 +130,26 @@ export function summary(data) {
 export function render(state, version, notice = '') {
   const b = (text, action) => ({text, callback_data:`d:${version}:${action}`});
   let text = QUESTIONS[state.step] || '', rows = [];
+  const stepIndex = STEPS.indexOf(['phone','vk'].includes(state.step) ? 'contact' : state.step);
+  if (stepIndex >= 0) {
+    const progress = state.editing ? '✏️ Изменение анкеты' : `Шаг ${stepIndex + 1} из ${STEPS.length} · ${TITLES[STEPS[stepIndex]]}`;
+    text = progress + '\n\n' + text;
+    if (state.data.destination && state.step !== 'destination') {
+      text += '\n\n' + [state.data.origin, state.data.destination].filter(Boolean).join(' → ');
+    }
+  }
   if (CHOICES[state.step]) {
     const buttons = CHOICES[state.step].map((label, i) => b(label, `pick-${i}`));
-    for (let i = 0; i < buttons.length; i += 2) rows.push(buttons.slice(i, i + 2));
+    const columns = ['origin','contact'].includes(state.step) ? 1 : ['nights','people','budget'].includes(state.step) ? 3 : 2;
+    for (let i = 0; i < buttons.length; i += columns) rows.push(buttons.slice(i, i + columns));
   }
   if (state.step === 'nights' && state.data.dates?.nights) text += `\nВведённый диапазон: ${state.data.dates.nights} ночей. Можно подтвердить или изменить.`;
   if (state.step === 'review') {
     text = '📝 Проверьте демо-анкету\n\n' + summary(state.data) + '\n\nОна не будет отправлена менеджеру или в CRM.';
-    rows = [[b('✅ Завершить демо','finish')],[b('✏️ Изменить','edit')],[b('❌ Отмена','cancel')]];
+    rows = [[b('✅ Завершить демо','finish')],[b('✏️ Изменить','edit'),b('✕ Отменить','cancel')]];
   } else if (state.step === 'edit') {
     text = 'Что изменить? Остальные ответы сохранятся.';
-    rows = STEPS.map(field => [b(TITLES[field], 'edit-' + field)]);
+    for (let i = 0; i < STEPS.length; i += 2) rows.push(STEPS.slice(i, i + 2).map(field => b(TITLES[field], 'edit-' + field)));
     rows.push([b('◀️ К анкете','review')]);
   } else if (state.step === 'done') {
     text = 'Демо-анкета\n\n' + summary(state.data);
@@ -150,8 +159,10 @@ export function render(state, version, notice = '') {
     } else text += '\n\nДля поиска рейсов нужны точные даты. /start — новая анкета.';
     text += '\n/delete — очистить анкету, /start — новое демо.';
   } else if (!['idle','review'].includes(state.step)) {
-    if (state.step !== 'destination' || state.editing) rows.push([b('◀️ Назад','back')]);
-    rows.push([b('❌ Отмена','cancel')]);
+    const navigation = [];
+    if (state.step !== 'destination' || state.editing) navigation.push(b(state.editing ? '◀️ К анкете' : '◀️ Назад','back'));
+    navigation.push(b('✕ Отменить','cancel'));
+    rows.push(navigation);
   }
   return {text:[notice,text].filter(Boolean).join('\n\n'), reply_markup:{inline_keyboard:rows}};
 }
