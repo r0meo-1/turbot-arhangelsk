@@ -11,6 +11,9 @@ local JavaScript modules.
   → demo contact → review → **Complete demo**.
 - Every answer can be edited, including nights. Calendar-month arithmetic clamps
   month-end dates; the review displays the actual departure and return dates.
+- A completed demo can be reopened with **Edit**. Flexible dates can be replaced
+  with exact dates without restarting the questionnaire; other answers stay saved.
+  Review and complete the demo again before explicitly searching Tutu.
 - Completion does not create a production lead, contact a manager, call CRM,
   generate an AI recommendation, book travel, or charge anything.
 - An explicit button after completion searches Tutu for real round-trip fares.

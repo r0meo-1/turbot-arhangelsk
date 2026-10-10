@@ -97,6 +97,30 @@ test('editing contact back does not lose previous answers, free text cannot fini
   edit = reduce(edit,{text:'https://vk.com/demo_profile'},today).state;
   assert.equal(edit.step,'review'); assert.ok(!JSON.stringify(edit).includes('demo_profile'));
 });
+test('completed flexible-date demo can be edited into a flight-ready trip without losing answers', () => {
+  let state = reduce(flow(),{action:'edit'},today).state;
+  state = reduce(state,{action:'edit-dates'},today).state;
+  state = reduce(state,{text:'Даты гибкие'},today).state;
+  state = reduce(state,{action:'finish'},today).state;
+  const saved = structuredClone(state.data);
+  const buttons = render(state,1).reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.some(b => b.callback_data.endsWith(':edit')));
+  assert.ok(!buttons.some(b => b.callback_data.endsWith(':flights')));
+  assert.match(render(state,1).text,/Изменить/);
+  state = reduce(state,{action:'edit'},today).state;
+  assert.equal(state.step,'edit');
+  state = reduce(state,{action:'edit-dates'},today).state;
+  const invalid = reduce(state,{text:'2020-01-01'},today);
+  assert.equal(invalid.state.step,'dates');
+  state = reduce(invalid.state,{text:'15–22 ноября'},today).state;
+  assert.equal(state.step,'review');
+  assert.deepEqual({...state.data,dates:saved.dates},saved);
+  state = reduce(state,{action:'finish'},today).state;
+  assert.equal(state.step,'done');
+  assert.equal(searchArgs(state.data).departure_date,'2026-11-15');
+  assert.equal(searchArgs(state.data).return_date,'2026-11-22');
+  assert.equal(reduce(state,{action:'flights'},today).effect,'flights');
+});
 test('all generated callback payloads fit Telegram limit', () => {
   const s = flow();
   for (const step of ['destination','origin','dates','nights','people','kids','budget','contact','phone','vk','review','edit','done']) {
@@ -124,6 +148,27 @@ async function complete(h) {
   for(const text of ['/start','Турция','Москва','Через месяц','7','2','нет','100 тыс']) await h.message(text);
   await h.callback(h.button('pick-0'));
 }
+
+test('actual SQLite: editing completed demo preserves answers and invalidates old flight buttons',async()=>{
+  const h=harness(); await complete(h);
+  await h.callback(h.button('finish'));
+  const saved=structuredClone(h.state().data);
+  const oldFlight=h.button('flights');
+  await h.callback(h.button('edit'));
+  assert.equal(h.state().step,'edit');
+  await h.callback(h.button('edit-nights'));
+  await h.message('10');
+  assert.equal(h.state().step,'review');
+  assert.deepEqual(h.state().data,{...saved,nights:10,dates:{...saved.dates,end:'2026-11-20'}});
+  await h.callback(oldFlight);
+  assert.equal(h.state().step,'review');
+  assert.equal(h.flights(),0);
+  await h.callback(h.button('finish'));
+  assert.match(h.sent.at(-1).text,/2026-11-20/);
+  assert.equal(h.flights(),0);
+  await h.callback(h.button('flights'));
+  assert.equal(h.flights(),1);
+});
 
 test('late text cannot overwrite a newer callback answer or move version backwards',async()=>{
   const h=harness();

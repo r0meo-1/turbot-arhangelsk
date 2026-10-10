@@ -56,6 +56,7 @@ export function reduce(current, event, today = moscowToday()) {
     return result();
   }
   if (state.step === 'done') {
+    if (event.action === 'edit') { state.step = 'edit'; return result(); }
     if (event.action === 'flights' && state.data.dates?.start) return result('', 'flights');
     return result('Демо уже завершено. /start — новый подбор.');
   }
@@ -156,7 +157,8 @@ export function render(state, version, notice = '') {
     if (state.data.dates.start) {
       text += '\n\nПо кнопке ниже передадим в Tutu.ru города, даты и число пассажиров по возрастным группам для поиска реальных рейсов. Контакты не передаются. Цена перелёта — не цена тура.';
       rows = [[b('✈️ Проверить рейсы Tutu','flights')]];
-    } else text += '\n\nДля поиска рейсов нужны точные даты. /start — новая анкета.';
+    } else text += '\n\nДля поиска рейсов нужны точные даты. Нажмите «Изменить» → «Даты» — остальные ответы сохранятся.';
+    rows.push([b('✏️ Изменить','edit')]);
     text += '\n/delete — очистить анкету, /start — новое демо.';
   } else if (!['idle','review'].includes(state.step)) {
     const navigation = [];
