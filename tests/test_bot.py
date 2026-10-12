@@ -2227,6 +2227,7 @@ def test_tutu_search_preserves_total_budget_scope(monkeypatch):
         "destination": "Таиланд",
         "origin": "Москва",
         "dates": "2030-01-10",
+        "nights": 9,
         "people": "2",
         "kids_ages": [],
         "budget": 270000,
@@ -2235,6 +2236,7 @@ def test_tutu_search_preserves_total_budget_scope(monkeypatch):
 
     assert seen["budget"] == 270000
     assert seen["budget_is_total"] is True
+    assert seen["nights"] == 9
 
 
 # ---------------------------------------------------------------------------

@@ -81,3 +81,22 @@ They are contract tests, not evidence that the agency account is activated.
 After provisioning, first check `GetCountries` with credentials supplied through
 the server environment, then run one synthetic search and verify manager handoff
 before enabling customer traffic.
+
+From the repository root, run the isolated read-only check with dedicated
+credentials set securely as `ALEAN_USERNAME` and `ALEAN_PASSWORD`:
+
+```sh
+python -m scripts.alean_live_smoke
+```
+
+It checks authenticated `GetCountries` and one Moscow–Sochi query 30 days ahead,
+seven nights, two adults and a seven-year-old child. Only its local adapter is
+enabled; it does not start a bot, modify activation flags, send messages, create
+leads or book anything. The JSON report includes operation/status counts and
+sanitized errors, never credentials or upstream bodies. Exit 2 means missing
+credentials; exit 1 means the authenticated catalog or search failed. Zero offers
+with a successful `GetTours` response verifies access, not available inventory.
+
+The Telegram Tutu fallback now uses separately selected nights to derive the
+return date when the customer supplies a departure date or preset. Explicit trip
+ranges keep their stated return date.

@@ -288,6 +288,26 @@ def test_search_offers_disabled_returns_none():
                               dates_raw="через месяц") is None
 
 
+@pytest.mark.parametrize("dates,nights,expected", [
+    ("15 июня 2027", 9, "2027-06-24"),
+    ("28 декабря 2027", "7", "2028-01-04"),
+    ("15-22 июня 2027", 9, "2027-06-22"),
+])
+def test_return_date_respects_separate_nights_and_explicit_trip_range(settings, dates, nights, expected):
+    fn = _stub([SAMPLE_SEARCH])
+    assert tutu.search_offers(settings, FakeSession(), destination="Египет",
+                             dates_raw=dates, nights=nights, request_fn=fn)
+    assert fn.seen[0][1]["return_date"] == expected
+
+
+@pytest.mark.parametrize("nights", [0, 29, True, "7-10", "не знаю"])
+def test_invalid_separate_nights_never_make_one_way_search(settings, nights):
+    fn = _stub([SAMPLE_SEARCH])
+    assert tutu.search_offers(settings, FakeSession(), destination="Египет",
+                             dates_raw="15 июня 2027", nights=nights, request_fn=fn) is None
+    assert not fn.seen
+
+
 def test_search_offers_skips_when_dates_unresolvable(settings):
     fn = _stub([SAMPLE_SEARCH])
     result = tutu.search_offers(settings, FakeSession(), destination="Египет",

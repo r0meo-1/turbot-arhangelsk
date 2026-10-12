@@ -4394,6 +4394,7 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
             telegram_session,
             destination=info.get("destination", ""),
             dates_raw=info.get("dates", ""),
+            nights=info.get("nights"),
             origin=info.get("origin", ""),
             people=_adults,
             kids=_children,

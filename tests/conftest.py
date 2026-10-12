@@ -17,6 +17,9 @@ for setting in ("DIALOG_TIMEOUT_HOURS", "FOLLOWUP_DELAY_HOURS", "DATA_RETENTION_
 for setting in ("ADMIN_ERROR_ALERTS", "MDT_ENABLED", "VK_MDT_RETRY_ENABLED", "TUTU_ENABLED"):
     os.environ[setting] = "false"
 os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"turbot_suite_{os.getpid()}.sqlite")
+# Let each VK suite use its test DATABASE_PATH instead of an injected production
+# override, which may point outside the workspace or at a customer database.
+os.environ.pop("VK_DATABASE_PATH", None)
 for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
     os.environ[setting] = ""
 
@@ -25,6 +28,9 @@ for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
 os.environ["ADMIN_ID"] = "999"
 os.environ["VK_GROUP_ID"] = "999"
 os.environ["VK_SECRET_KEY"] = "vk-test-secret"
+os.environ["VK_CONFIRMATION"] = "confirm123"
+os.environ["BOT_TOKEN"] = "dummy-token"
+os.environ["VK_ACCESS_TOKEN"] = "dummy-token"
 os.environ["TELEGRAM_SECRET_TOKEN"] = "secret123"
 os.environ["AI_MODE"] = "template"
 os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"

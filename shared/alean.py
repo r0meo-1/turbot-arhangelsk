@@ -9,6 +9,7 @@ import hashlib
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -27,6 +28,7 @@ _CATALOGS = {
 }
 _cache = OrderedDict()
 _lock = threading.Lock()
+_cache_salt = secrets.token_bytes(32)
 
 
 @dataclass
@@ -76,9 +78,17 @@ def _request(settings, session, action, params=None):
     return root
 
 
-def _catalog(settings, session, action):
-    account = hashlib.sha256((settings.username + "\0" + settings.password).encode()).digest()
-    key = (account, action)
+def _account_key(settings):
+    # Cache keys retain no raw credentials. A process-local salt and a slow KDF
+    # prevent these account fingerprints from becoming reusable password hashes.
+    return hashlib.pbkdf2_hmac(
+        "sha256", (settings.username + "\0" + settings.password).encode(),
+        _cache_salt, 600_000,
+    )
+
+
+def _catalog(settings, session, action, *, account=None):
+    key = (account if account is not None else _account_key(settings), action)
     with _lock:
         cached = _cache.get(key)
         if cached and time.monotonic() - cached[0] < 86400:
@@ -142,13 +152,15 @@ def search_tours(settings, session, info, *, log=None):
         if info.get("budget_open_ended"):
             cap = 0
 
-        countries = _catalog(settings, session, "GetCountries")
-        resorts = _catalog(settings, session, "GetResorts")
+        # Derive once per search, rather than repeating the KDF for every catalog.
+        account = _account_key(settings)
+        countries = _catalog(settings, session, "GetCountries", account=account)
+        resorts = _catalog(settings, session, "GetResorts", account=account)
         country = _named(countries, info.get("destination"))
         resort = None if country else _named(resorts, info.get("destination"))
         if resort:
             country = next((r for r in countries if r.get("id") == resort.get("countryId")), None)
-        departure = _named(_catalog(settings, session, "GetDepartCities"), info.get("origin"))
+        departure = _named(_catalog(settings, session, "GetDepartCities", account=account), info.get("origin"))
         if not country or not country.get("cid") or not departure or not departure.get("cid"):
             return tv.SearchResult(error="Направление или город вылета не найден в Alean")
         params = {
@@ -167,13 +179,13 @@ def search_tours(settings, session, info, *, log=None):
             params["kidsAges"] = ",".join(map(str, ages))
         if cap > 0:
             params["priceMax"] = cap
-        hotels = _catalog(settings, session, "GetHotels")
+        hotels = _catalog(settings, session, "GetHotels", account=account)
         if info.get("hotel_query"):
             selected = [h for h in hotels if tv._hotel_matches(h.get("name", ""), str(info["hotel_query"])) and h.get("cid")]
             if not selected:
                 return tv.SearchResult(error="Отель не найден в Alean")
             params["hotelCIDs"] = ",".join(h["cid"] for h in selected)
-        categories = {r.get("id"): r.get("name", "") for r in _catalog(settings, session, "GetHotelCategories")}
+        categories = {r.get("id"): r.get("name", "") for r in _catalog(settings, session, "GetHotelCategories", account=account)}
         hotel_map = {r.get("id"): r for r in hotels}
         resort_map = {r.get("id"): r for r in resorts}
         root = _request(settings, session, "GetTours", params)
