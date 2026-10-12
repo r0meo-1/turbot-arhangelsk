@@ -111,6 +111,12 @@ to Telegram/VK users.
   preserving trip-date versus departure-date semantics and original child ages.
   This does not add Alean to the standalone
   Telegram Serverless demo or create a new Mini App search endpoint.
+- MDT lead fields, preorder comments and manager notifications retain the
+  selected price plus fuel charge in the original currency, without conversion
+  or loss of fractional amounts. They include Alean's transfer exclusion and
+  manager-verification notice; they do not infer SOAP confirmation from search
+  inventory or copied actualization metadata. Room and departure details remain
+  attached to the selected offer.
 - VK retains the search generation through completion and checks it after
   waiting-message edits and before result publication. An old worker cannot
   replace a newer selection or send its empty-search hint after those checks
