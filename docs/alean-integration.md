@@ -41,6 +41,20 @@ attempt exceeded the default ten-second timeout; a diagnostic repeat with a
 valid search response, not available inventory or SOAP actualization. Customer
 traffic remains disabled.
 
+Further authenticated diagnostics on 12 October found that the response contained
+15 tour rows with fractional RUB prices, which the original integer parser rejected.
+The adapter now retains kopecks, compares the original decimal against the budget,
+and preserves fractional prices through JSON, Telegram/VK cards and the unconfirmed
+actualization fallback. A separate country-level Russia search for the same dates,
+nights and party returned 15 accepted offers, starting at RUB 76,228.11. These are
+observed supplier search prices, not confirmed prices or bookings. Local rendering
+checks used the captured offers without sending any messages.
+
+The Sochi request returned district-level resort IDs (Adler, Lazarevskoye, central
+Sochi and Mamayka) instead of the requested Sochi ID. The catalog supplies no parent
+link. Exact resort filtering remains strict pending a verified supplier group mapping;
+country-level search does not silently replace a customer's specific resort request.
+
 ## Search behavior
 
 - Uses stable country, departure-city, resort and hotel CIDs from supplier

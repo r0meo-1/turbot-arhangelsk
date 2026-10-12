@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 
 import requests
 
@@ -195,13 +197,21 @@ def search_tours(settings, session, info, *, log=None):
         for node in root.findall("tour"):
             row = node.attrib
             try:
-                price, nights = int(row["price"]), int(row["nights"])
+                supplier_price, nights = Decimal(row["price"]), int(row["nights"])
                 day = datetime.strptime(row["tourDate"], "%d.%m.%Y").date()
-            except (KeyError, ValueError):
+            except (KeyError, ValueError, InvalidOperation):
                 continue
             hotel = hotel_map.get(row.get("hotelId"))
-            if not hotel or not hotel.get("name") or price <= 0 or (cap > 0 and price > cap):
+            if not supplier_price.is_finite() or not hotel or not hotel.get("name"):
                 continue
+            if supplier_price <= 0 or (cap > 0 and supplier_price > cap):
+                continue
+            numeric_price = float(supplier_price)
+            if not math.isfinite(numeric_price) or numeric_price <= 0:
+                continue
+            # Retain kopecks while keeping the card JSON serializable. Budget
+            # comparisons above use the original decimal, before float conversion.
+            price = int(supplier_price) if supplier_price == supplier_price.to_integral_value() else numeric_price
             if not start <= day <= end or not window.nights_from <= nights <= window.nights_to:
                 continue
             if row.get("ticketsIncluded") != "1" or row.get("hotelIsInStop") != "0":
@@ -243,5 +253,7 @@ def search_tours(settings, session, info, *, log=None):
 
 def actualize_tour(offer):
     result = tv.actualize_tour(offer)
+    total = Decimal(str(offer.get("price") or 0)) + Decimal(str(offer.get("fuel_charge") or 0))
+    result["total_price"] = int(total) if total == total.to_integral_value() else float(total)
     result["hotel_status"] = "🟡 Менеджеру нужно проверить цену и наличие через Alean SOAP Specify"
     return result

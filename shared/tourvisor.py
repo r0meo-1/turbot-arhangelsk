@@ -85,7 +85,7 @@ class TourOffer:
     meal: str
     room: str
     operator: str
-    price: int
+    price: int | float
     currency: str = "RUB"
     fuel_charge: int = 0
     tour_id: str = ""
@@ -420,7 +420,7 @@ def search_tours(
         return SearchResult(error="Tourvisor временно не ответил")
 
 
-def _format_price(value: int, currency: str) -> str:
+def _format_price(value: int | float, currency: str) -> str:
     suffix = "₽" if currency.upper() in {"RUB", "RUR", ""} else currency.upper()
     return f"{value:,}".replace(",", " ") + f" {suffix}"
 

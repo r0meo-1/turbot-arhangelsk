@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 import xml.etree.ElementTree as ET
+import json
 
 import pytest
 import requests
@@ -97,6 +98,42 @@ def test_resort_and_hotel_search_do_not_broaden_the_request():
     params = session.calls[-1][1]["params"]
     assert params["resortCIDs"] == "SOCHI-CID" and params["hotelCIDs"] == "HOTEL-CID"
     assert not alean.search_tours(settings(),session,info(destination="Соч")).offers
+
+
+def test_live_sapi_fractional_price_survives_search_json_and_cards():
+    # Price format observed in the authenticated SAPI response on 2026-10-12.
+    import vk_bot
+    result = alean.search_tours(settings(), Session(change={"price": "24830.72"}),
+                                info(kids_ages=[7], budget=24831))
+    assert len(result.offers) == 1
+    selected = json.loads(json.dumps(asdict(result.offers[0]), ensure_ascii=False))
+    assert selected["price"] == 24830.72
+    assert "24 830.72 ₽" in tv.format_client_message(result)
+    assert "24 830.72 ₽" in vk_bot._selected_tour_summary({"selected_tour": selected})
+    actual = alean.actualize_tour(selected)
+    assert actual["confirmed"] is False and actual["total_price"] == 24830.72
+    assert json.loads(json.dumps(actual))["total_price"] == 24830.72
+
+
+def test_fractional_price_above_integer_cap_is_not_rounded_into_budget():
+    result = alean.search_tours(settings(), Session(change={"price": "24830.72"}), info(budget=24830))
+    assert not result.offers
+
+
+@pytest.mark.parametrize("price", ["NaN", "Infinity", "-Infinity", "1e10000"])
+def test_nonfinite_or_unrepresentable_supplier_price_is_rejected(price):
+    result = alean.search_tours(settings(), Session(change={"price": price}), info(budget_open_ended=True))
+    assert not result.offers
+
+
+def test_vk_price_sorting_and_fuel_charge_preserve_kopecks():
+    import vk_bot
+    lower = {"price": 24830.72, "fuel_charge": 100.15}
+    higher = {"price": 24830.99, "fuel_charge": 100.15}
+    assert vk_bot._offer_total_price(lower) == 24930.87
+    assert vk_bot._offer_total_price(lower) < vk_bot._offer_total_price(higher)
+    assert vk_bot._compact_tour_price(lower) == "24 930.87 ₽"
+    assert sorted([higher, lower], key=vk_bot._offer_total_price) == [lower, higher]
 
 
 @pytest.mark.parametrize("updates", [dict(direct_only=True),dict(people=0),dict(kids_ages=[18]),

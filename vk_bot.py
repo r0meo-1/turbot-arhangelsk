@@ -20,6 +20,7 @@ import logging
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -1729,10 +1730,18 @@ def _upload_vk_message_photo(user_id: int, url: str) -> str:
         return ""
 
 
+def _tour_price_amount(offer: Dict[str, Any]) -> Decimal:
+    amount = Decimal(str(offer.get("price") or 0)) + Decimal(str(offer.get("fuel_charge") or 0))
+    if not amount.is_finite():
+        raise ValueError("Non-finite tour price")
+    return amount
+
+
 def _compact_tour_price(offer: Dict[str, Any]) -> str:
     try:
-        amount = int(offer.get("price") or 0) + int(offer.get("fuel_charge") or 0)
-    except (TypeError, ValueError):
+        amount = _tour_price_amount(offer)
+        amount = int(amount) if amount == amount.to_integral_value() else amount
+    except (TypeError, ValueError, InvalidOperation):
         amount = 0
     currency = str(offer.get("currency") or "RUB").upper()
     suffix = "₽" if currency in ("RUB", "RUR") else currency
@@ -3222,10 +3231,11 @@ def _select_tour(user_id: int, number: int) -> None:
     )
 
 
-def _offer_total_price(offer: Dict[str, Any]) -> int:
+def _offer_total_price(offer: Dict[str, Any]) -> int | float:
     try:
-        return int(offer.get("price") or 0) + int(offer.get("fuel_charge") or 0)
-    except (TypeError, ValueError):
+        amount = _tour_price_amount(offer)
+        return int(amount) if amount == amount.to_integral_value() else float(amount)
+    except (TypeError, ValueError, InvalidOperation):
         return 10**15
 
 
