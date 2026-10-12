@@ -159,6 +159,14 @@ def resolve_dates(raw: str, today: Optional[date] = None) -> Tuple[Optional[str]
     if not text:
         return None, None
 
+    # Mini App drafts store an ISO departure date, unlike the chat's free text.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            exact = date.fromisoformat(text)
+        except ValueError:
+            return None, None
+        return (exact.isoformat(), None) if exact >= today else (None, None)
+
     # 1. Exact free-text range — reuse the parser already trusted by MDT.
     start, end = parse_russian_dates(raw)
     if start:

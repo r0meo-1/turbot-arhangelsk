@@ -34,6 +34,8 @@ os.environ["VK_ACCESS_TOKEN"] = "dummy-token"
 os.environ["TELEGRAM_SECRET_TOKEN"] = "secret123"
 os.environ["AI_MODE"] = "template"
 os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"
+# Legal-page fixtures must use the repository default, not runtime branding.
+os.environ.pop("DATA_OPERATOR_NAME", None)
 
 
 _connect = socket.socket.connect
