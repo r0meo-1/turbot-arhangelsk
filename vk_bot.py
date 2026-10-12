@@ -12,6 +12,7 @@ import os
 import re
 import json
 import base64
+import hashlib
 import hmac
 import time
 import random
@@ -1748,6 +1749,28 @@ def _compact_tour_price(offer: Dict[str, Any]) -> str:
     return f"{amount:,}".replace(",", " ") + f" {suffix}"
 
 
+def _tour_offer_key(offer: Dict[str, Any]) -> str:
+    # Bind a displayed choice, including its price, without exposing supplier IDs.
+    fields = ("provider", "provider_search_id", "tour_id", "hotel", "category", "region",
+              "date", "nights", "meal", "room", "operator", "departure", "price", "currency", "fuel_charge")
+    data = json.dumps({key: offer.get(key) for key in fields}, sort_keys=True,
+                      ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()[:24]
+
+
+def _ensure_tour_marker(info: Dict[str, Any]) -> str:
+    marker = info.get("_tour_search_marker")
+    if not isinstance(marker, str) or not marker:
+        marker = f"{time.time_ns()}-{random.randint(1000, 9999)}"
+        info["_tour_search_marker"] = marker
+    return marker
+
+
+def _tour_select_payload(number: int, offer: Dict[str, Any], marker: Optional[str]) -> Dict[str, Any]:
+    return {"command": "tour_select", "number": number,
+            "search_marker": marker, "offer_key": _tour_offer_key(offer)}
+
+
 def send_tour_carousel(
     user_id: int,
     offers: List[Dict[str, Any]],
@@ -1755,6 +1778,9 @@ def send_tour_carousel(
     active_check: Optional[Callable[[], bool]] = None,
 ) -> bool:
     """Send a native VK carousel. False lets the caller use a text fallback."""
+    with _lock:
+        live = user_data.get(user_id)
+        marker = _ensure_tour_marker(live) if live and live.get("state") == STATE_REVIEW else None
     elements = []
     for local_index, offer in enumerate(offers):
         number = offset + local_index + 1
@@ -1777,8 +1803,7 @@ def send_tour_carousel(
                 _btn(
                     f"Выбрать №{number}",
                     "primary",
-                    {"command": "tour_select", "number": number,
-                     "tour_id": offer.get("tour_id") or ""},
+                    _tour_select_payload(number, offer, marker),
                 )
             ],
         }
@@ -1945,12 +1970,16 @@ def _tour_search_wait_keyboard() -> str:
 def _tour_results_keyboard(
     select_numbers: Optional[List[int]] = None,
     selected: bool = False,
+    *,
+    offers: Optional[List[Dict[str, Any]]] = None,
+    search_marker: Optional[str] = None,
 ) -> str:
     rows: List[List[Dict[str, Any]]] = []
     if select_numbers:
         rows.append([
-            _btn(f"№{number}", "primary", {"command": "tour_select", "number": number})
-            for number in select_numbers
+            _btn(f"№{number}", "primary", _tour_select_payload(
+                number, offers[index], search_marker) if offers else {"command": "tour_select", "number": number})
+            for index, number in enumerate(select_numbers)
         ])
     rows.append([
         _btn(TOUR_CHEAPER_TEXT, "secondary"),
@@ -3041,9 +3070,10 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         offers = pool[offset:offset + 3]
         live["_tour_page"] = page
         selected = bool(live.get("selected_tour"))
+        marker = _ensure_tour_marker(live)
 
     numbers = list(range(offset + 1, offset + len(offers) + 1))
-    keyboard = _tour_results_keyboard(numbers, selected=selected)
+    keyboard = _tour_results_keyboard(numbers, selected=selected, offers=offers, search_marker=marker)
     result = _tourvisor.SearchResult(
         offers=[_tourvisor.TourOffer(**offer) for offer in offers]
     )
@@ -3198,11 +3228,21 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
     )
 
 
-def _select_tour(user_id: int, number: int) -> None:
+def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any]] = None) -> None:
     with _lock:
         live = user_data.get(user_id)
         pool = list((live or {}).get("_tour_offers") or [])
-        if live is None or live.get("state") != STATE_REVIEW or not (1 <= number <= len(pool)):
+        valid = bool(live and live.get("state") == STATE_REVIEW
+                     and type(number) is int and 1 <= number <= len(pool))
+        if valid and selection is not None:
+            valid = bool(
+                isinstance(selection, dict) and selection.get("command") == "tour_select"
+                and type(selection.get("number")) is int and selection["number"] == number
+                and isinstance(selection.get("search_marker"), str) and selection["search_marker"]
+                and selection["search_marker"] == live.get("_tour_search_marker")
+                and selection.get("offer_key") == _tour_offer_key(pool[number - 1])
+            )
+        if not valid:
             offer = None
         else:
             offer = dict(pool[number - 1])
@@ -3513,7 +3553,7 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         re.I,
     )
     if selected_match:
-        _select_tour(user_id, int(selected_match.group(1)))
+        _select_tour(user_id, int(selected_match.group(1)), selection=message.get("_tour_select_payload"))
         return
     if text == TOUR_MORE_BUTTON_TEXT:
         _send_tour_results_page(user_id, int(info.get("_tour_page") or 0) + 1)
@@ -4344,6 +4384,11 @@ def _process_message(message: Dict[str, Any]) -> None:
         button_payload = {}
     if not isinstance(button_payload, dict):
         button_payload = {}
+    msg.pop("_tour_select_payload", None)
+    if msg.get("payload"):
+        # Even malformed/legacy button payloads must not fall back to selecting
+        # the same ordinal from a different result. Bare numeric replies remain valid.
+        msg["_tour_select_payload"] = button_payload
     if button_payload.get("command") == "tour_select" and button_payload.get("number"):
         text = f"Выбрать №{button_payload['number']}"
     _remember_client_capabilities(user_id, message)

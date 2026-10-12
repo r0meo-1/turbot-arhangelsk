@@ -117,18 +117,29 @@ to Telegram/VK users.
   detect a new search or parameter edit. Editing the hotel or navigating back
   from review also clears the previous search and selection. The wait animation stops when search ends and
   restores final text only for its own current review.
+- VK selection buttons bind both the search generation and the displayed offer,
+  including its price. A stale button cannot select a different hotel after a
+  new search, filtering or sorting, even when supplier IDs are absent or shared.
+  Pagination keeps the global offer numbers; a manually typed number selects
+  from the current list.
 
 ## Price and availability confirmation
 
-Search results are indicative, not a confirmed booking. Alean's 9 October
-reply requires SOAP `Specify` methods for price actualization. SAPI `GetTours`
+Search results are indicative, not a confirmed booking. Alean requires SOAP
+`Specify` methods for price actualization. SAPI `GetTours`
 must not be substituted for that operation.
 
 The [official API comparison](https://www.alean.ru/page/ta-api/?label=diff)
 distinguishes the full SOAP service from SAPI and says its documentation is
-provided on application. This environment currently has neither a verified SOAP
-service address/WSDL nor the Specify request schema. Successful SAPI access is
-not evidence of SOAP authorization. No guessed SOAP operation is called.
+provided on application. The documentation, public HTTPS WSDLs and request/result
+schemas have been read. The contract uses SOAP 1.1 RPC/encoded;
+`SpecifyTourPackageReservation` takes `SessionID`, `ReservationDataXML` and
+`OverrideBaggagePlaces`. Supplier package/transport lines are required, and
+`Confirm=true` means confirmation is required, not that inventory is confirmed.
+One HTTPS test Login returned `lrAccessDenied`, so authenticated SOAP package
+search and Specify remain unperformed. Matching public WSDLs do not establish
+that the HTTPS route uses the test database. Successful SAPI access is not
+evidence of SOAP authorization; credentials are never sent over HTTP.
 
 This change leaves Alean actualization explicitly `unknown` and
 `confirmed=false`, with a manager-check instruction. Automated SOAP
