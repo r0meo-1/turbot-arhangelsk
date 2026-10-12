@@ -122,6 +122,11 @@ to Telegram/VK users.
   new search, filtering or sorting, even when supplier IDs are absent or shared.
   Pagination keeps the global offer numbers; a manually typed number selects
   from the current list.
+- VK live price checks belong to the specific selection and search generation,
+  even when the same supplier ID appears again. Ownership is checked before and
+  after provider I/O and before sending the confirmation message. A confirmed
+  price updates only matching displayed offers and queues the session for
+  persistence. A request or message already dispatched can still finish.
 
 ## Price and availability confirmation
 

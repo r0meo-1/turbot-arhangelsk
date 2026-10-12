@@ -3152,16 +3152,32 @@ def _budget_summary(info: Dict[str, Any]) -> str:
     return f"{prefix}{amount} ₽{suffix}"
 
 
-def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
+def _owns_tour_selection(
+    info: Optional[Dict[str, Any]],
+    selected: Dict[str, Any],
+    search_marker: Optional[str],
+    offer_key: str,
+) -> bool:
+    # Object identity also distinguishes selecting the same offer again.
+    return bool(
+        info and info.get("state") == STATE_REVIEW
+        and info.get("selected_tour") is selected
+        and info.get("_tour_search_marker") == search_marker
+        and _tour_offer_key(selected) == offer_key
+    )
+
+
+def _actualize_selected_tour_worker(
+    user_id: int,
+    expected_selection: Dict[str, Any],
+    search_marker: Optional[str],
+    offer_key: str,
+) -> None:
     with _lock:
         live = user_data.get(user_id)
-        selected = dict((live or {}).get("selected_tour") or {})
-        if (
-            live is None
-            or live.get("state") != STATE_REVIEW
-            or str(selected.get("tour_id") or "") != str(tour_id or "")
-        ):
+        if not _owns_tour_selection(live, expected_selection, search_marker, offer_key):
             return
+        selected = dict(expected_selection)
 
     actual = _tour_providers.actualize_offer(
         _tour_provider_settings(), http_session, selected, log=logger,
@@ -3169,13 +3185,9 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
 
     with _lock:
         live = user_data.get(user_id)
-        current = dict((live or {}).get("selected_tour") or {})
-        if (
-            live is None
-            or live.get("state") != STATE_REVIEW
-            or str(current.get("tour_id") or "") != str(tour_id or "")
-        ):
+        if not _owns_tour_selection(live, expected_selection, search_marker, offer_key):
             return
+        current = dict(expected_selection)
 
         confirmed = bool(actual.get("confirmed"))
         total_price = int(actual.get("total_price") or 0)
@@ -3192,7 +3204,7 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
             for key in ("_tour_offers", "_tour_offers_base"):
                 pool = list(live.get(key) or [])
                 for item in pool:
-                    if str(item.get("tour_id") or "") == str(tour_id or ""):
+                    if _tour_offer_key(item) == offer_key:
                         item["price"] = current["price"]
                         item["fuel_charge"] = 0
                         item["currency"] = current["currency"]
@@ -3200,6 +3212,8 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
                         item["actualization_confirmed"] = True
                         item["actualized_at"] = current["actualized_at"]
                 live[key] = pool
+        current_key = _tour_offer_key(current)
+        _mark_dirty(user_id, user=False)
 
     provider = str(current.get("provider") or "").strip().lower()
     provider_label = {
@@ -3217,13 +3231,19 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
         intro = "ℹ️ Автоматически подтвердить наличие сейчас не удалось."
         price_line = "\nЦена и наличие остаются предварительными до проверки менеджером."
 
-    send_message(
-        user_id,
+    message_text = (
         f"{intro}\n\n{_selected_tour_summary({'selected_tour': current})}\n\n"
         f"{actual['flight_status']}\n"
         f"{actual['hotel_status']}"
         f"{price_line}\n\n"
-        "Можно передать этот вариант Наталье для финальной проверки 👇",
+        "Можно передать этот вариант Наталье для финальной проверки 👇"
+    )
+    with _lock:
+        if not _owns_tour_selection(user_data.get(user_id), current, search_marker, current_key):
+            return
+    send_message(
+        user_id,
+        message_text,
         keyboard=_selected_tour_keyboard(),
     )
 
@@ -3247,6 +3267,8 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
         else:
             offer = dict(pool[number - 1])
             live["selected_tour"] = offer
+            search_marker = live.get("_tour_search_marker")
+            offer_key = _tour_offer_key(offer)
     if offer is None:
         send_message(user_id, "Этот вариант уже недоступен. Запустите поиск ещё раз.", keyboard=_review_keyboard())
         return
@@ -3265,11 +3287,11 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
             keyboard=_hide_keyboard(),
         )
         if SYNC_COMPLETION:
-            _actualize_selected_tour_worker(user_id, str(offer.get("tour_id") or ""))
+            _actualize_selected_tour_worker(user_id, offer, search_marker, offer_key)
         else:
             threading.Thread(
                 target=_actualize_selected_tour_worker,
-                args=(user_id, str(offer.get("tour_id") or "")),
+                args=(user_id, offer, search_marker, offer_key),
                 daemon=True,
                 name=f"vk-tour-actualize-{user_id}",
             ).start()
