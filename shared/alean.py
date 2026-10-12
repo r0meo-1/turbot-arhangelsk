@@ -31,6 +31,10 @@ _CATALOGS = {
 _cache = OrderedDict()
 _lock = threading.Lock()
 _cache_salt = secrets.token_bytes(32)
+# Group membership verified against Alean's public Sochi hotel hierarchy and
+# the SAPI names on 2026-10-12. Other districts remain unaccepted until verified.
+# https://www.alean.ru/hotels/rossiya/krasnodarskiy_kray/sochi_gorod-kurort/
+_SOCHI_MEMBERS = ("Адлер", "Лазаревское", "Мамайка", "Сочи центр")
 
 
 @dataclass
@@ -113,6 +117,18 @@ def _named(rows, name):
     return matches[0] if len(matches) == 1 and normalized else None
 
 
+def _allowed_resort_ids(rows, resort, country):
+    allowed = {resort["id"]}
+    if resort.get("name") != "Сочи" or country.get("name") != "Россия":
+        return allowed
+    local = [row for row in rows if row.get("countryId") == country["id"]]
+    for name in _SOCHI_MEMBERS:
+        member = _named(local, name)
+        if member and member.get("id") and member.get("cid"):
+            allowed.add(member["id"])
+    return allowed
+
+
 def search_tours(settings, session, info, *, log=None):
     log = log or logging.getLogger(__name__)
     if not settings.enabled or not settings.username or not settings.password:
@@ -167,6 +183,7 @@ def search_tours(settings, session, info, *, log=None):
         departure = _named(_catalog(settings, session, "GetDepartCities", account=account), info.get("origin"))
         if not country or not country.get("cid") or not departure or not departure.get("cid"):
             return tv.SearchResult(error="Направление или город вылета не найден в Alean")
+        allowed_resorts = _allowed_resort_ids(resorts, resort, country) if resort else None
         params = {
             "countryCID": country["cid"], "departCityCID": departure["cid"],
             "dateFrom": start.strftime("%d.%m.%Y"), "dateTo": end.strftime("%d.%m.%Y"),
@@ -219,7 +236,7 @@ def search_tours(settings, session, info, *, log=None):
             if not any(row.get("has" + cls + "TicketsDpt") == "1" and row.get("has" + cls + "TicketsRtn") == "1" for cls in ("Econom", "Business")):
                 continue
             location = resort_map.get(row.get("resortId"), {})
-            if location.get("countryId") != country["id"] or (resort and location.get("id") != resort["id"]):
+            if location.get("countryId") != country["id"] or (allowed_resorts is not None and location.get("id") not in allowed_resorts):
                 continue
             if info.get("hotel_query") and not tv._hotel_matches(hotel["name"], str(info["hotel_query"])):
                 continue

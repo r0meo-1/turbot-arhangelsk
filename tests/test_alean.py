@@ -73,6 +73,53 @@ class Session:
         return Response(f'<{action[0].lower()+action[1:]}Result>{entries[action]}</{action[0].lower()+action[1:]}Result>')
 
 
+class SochiDistricts(Session):
+    def __init__(self, resort_id="6", extra=""):
+        super().__init__(change={"resortId": resort_id, "price": "24830.72"})
+        self.extra = extra
+
+    def get(self, url, **kwargs):
+        if kwargs["params"]["action"] == "GetResorts":
+            self.calls.append((url, kwargs))
+            return Response('<getResortsResult>'
+                '<resort id="3" cid="SOCHI-CID" countryId="1" name="Сочи"/>'
+                '<resort id="6" cid="ADLER-CID" countryId="1" name="Адлер"/>'
+                '<resort id="7" cid="LAZ-CID" countryId="1" name="Лазаревское"/>'
+                '<resort id="8" cid="MAM-CID" countryId="1" name="Мамайка"/>'
+                '<resort id="9" cid="CENTER-CID" countryId="1" name="Сочи центр"/>'
+                '<resort id="10" cid="OTHER-CID" countryId="1" name="Алушта"/>'
+                '<resort id="11" cid="FOREIGN-CID" countryId="2" name="Мамайка"/>'
+                + self.extra + '</getResortsResult>')
+        return super().get(url, **kwargs)
+
+
+@pytest.mark.parametrize("resort_id,region", [("3", "Сочи"), ("6", "Адлер"),
+    ("7", "Лазаревское"), ("8", "Мамайка"), ("9", "Сочи центр")])
+def test_sochi_accepts_only_verified_catalog_members(resort_id, region):
+    session = SochiDistricts(resort_id)
+    result = alean.search_tours(settings(), session, info(destination="Сочи"))
+    assert len(result.offers) == 1 and result.offers[0].region == region
+    assert result.offers[0].price == 24830.72
+    assert session.calls[-1][1]["params"]["resortCIDs"] == "SOCHI-CID"
+
+
+@pytest.mark.parametrize("resort_id", ["10", "11", "unknown"])
+def test_sochi_rejects_unrelated_foreign_and_unknown_resorts(resort_id):
+    assert not alean.search_tours(settings(), SochiDistricts(resort_id), info(destination="Сочи")).offers
+
+
+def test_explicit_adler_remains_strict_and_does_not_expand_to_sochi():
+    session = SochiDistricts("6")
+    assert alean.search_tours(settings(), session, info(destination="Адлер")).offers
+    assert session.calls[-1][1]["params"]["resortCIDs"] == "ADLER-CID"
+    assert not alean.search_tours(settings(), SochiDistricts("7"), info(destination="Адлер")).offers
+
+
+def test_ambiguous_sochi_member_is_not_selected_arbitrarily():
+    session = SochiDistricts("6", '<resort id="12" cid="SECOND-ADLER" countryId="1" name="Адлер"/>')
+    assert not alean.search_tours(settings(), session, info(destination="Сочи")).offers
+
+
 def test_search_uses_documented_cids_dates_children_and_total_budget():
     session = Session()
     result = alean.search_tours(settings(), session, info())

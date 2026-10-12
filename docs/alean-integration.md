@@ -50,10 +50,28 @@ nights and party returned 15 accepted offers, starting at RUB 76,228.11. These a
 observed supplier search prices, not confirmed prices or bookings. Local rendering
 checks used the captured offers without sending any messages.
 
-The Sochi request returned district-level resort IDs (Adler, Lazarevskoye, central
-Sochi and Mamayka) instead of the requested Sochi ID. The catalog supplies no parent
-link. Exact resort filtering remains strict pending a verified supplier group mapping;
-country-level search does not silently replace a customer's specific resort request.
+The Sochi request returned district-level resort IDs instead of the requested Sochi
+ID. The SAPI catalog supplies no parent link. Alean's official hotel hierarchy and
+authenticated catalog names now establish this limited membership:
+
+| SAPI resort name | Official child of Sochi city-resort |
+| --- | --- |
+| Адлер | https://www.alean.ru/hotels/rossiya/krasnodarskiy_kray/sochi_gorod-kurort/adler/ |
+| Лазаревское | https://www.alean.ru/hotels/rossiya/krasnodarskiy_kray/sochi_gorod-kurort/lazarevskoe/ |
+| Мамайка | https://www.alean.ru/hotels/rossiya/krasnodarskiy_kray/sochi_gorod-kurort/mamayka/ |
+| Сочи центр | https://www.alean.ru/hotels/rossiya/krasnodarskiy_kray/sochi_gorod-kurort/sochi_tsentralnyy_rayon/ |
+
+Only a Russia/Sochi request accepts those uniquely named catalog members, with
+their current IDs resolved from SAPI. The outbound request still uses Sochi's CID.
+An explicit Adler request remains Adler-only. Unverified districts, ambiguous
+names, unknown IDs and other countries are not accepted. Country-level search
+does not replace a specific resort request.
+
+The corrected Moscow–Sochi synthetic query for 11 November 2026, seven nights,
+two adults and a seven-year-old child returned 15 accepted offers in 19.05 seconds
+for the entire catalog/search check, starting at RUB 24,830.72 (Колибри,
+Лазаревское). It used a 45-second diagnostic timeout; application timeout defaults
+were unchanged. SOAP actualization and customer traffic remain disabled.
 
 ## Search behavior
 
@@ -83,6 +101,12 @@ country-level search does not silently replace a customer's specific resort requ
 Search results are indicative, not a confirmed booking. Alean's 9 October
 reply requires SOAP `Specify` methods for price actualization. SAPI `GetTours`
 must not be substituted for that operation.
+
+The [official API comparison](https://www.alean.ru/page/ta-api/?label=diff)
+distinguishes the full SOAP service from SAPI and says its documentation is
+provided on application. This environment currently has neither a verified SOAP
+service address/WSDL nor the Specify request schema. Successful SAPI access is
+not evidence of SOAP authorization. No guessed SOAP operation is called.
 
 This change leaves Alean actualization explicitly `unknown` and
 `confirmed=false`, with a manager-check instruction. Automated SOAP
