@@ -16,11 +16,18 @@ class AuditSession(requests.Session):
         self.operations = []
 
     def get(self, url, **kwargs):
-        operation = {"action": kwargs["params"]["action"]}
+        operation = {"action": kwargs["params"]["action"], "timeoutSeconds": kwargs["timeout"]}
         self.operations.append(operation)
-        response = super().get(url, **kwargs)
-        operation["status"] = response.status_code
-        return response
+        started = time.monotonic()
+        try:
+            response = super().get(url, **kwargs)
+            operation["status"] = response.status_code
+            return response
+        except requests.RequestException as exc:
+            operation["errorType"] = type(exc).__name__
+            raise
+        finally:
+            operation["responseHeadersSeconds"] = round(time.monotonic() - started, 2)
 
 
 def main() -> int:

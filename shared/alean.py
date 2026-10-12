@@ -44,14 +44,22 @@ class AleanSettings:
     password: str = field(default="", repr=False)
     timeout: float = 10
     max_offers: int = 15
+    search_timeout: float = 30
 
     @classmethod
     def from_env(cls):
+        try:
+            search_timeout = float(os.getenv("ALEAN_SEARCH_TIMEOUT_SECONDS", "30"))
+        except ValueError:
+            search_timeout = 30
+        if not math.isfinite(search_timeout) or not 10 <= search_timeout <= 60:
+            search_timeout = 30
         # Credentials alone never activate a new supplier in production.
         return cls(
             enabled=os.getenv("ALEAN_ENABLED", "false").lower() in ("true", "1", "yes"),
             username=os.getenv("ALEAN_USERNAME", "").strip(),
             password=os.getenv("ALEAN_PASSWORD", ""),
+            search_timeout=search_timeout,
         )
 
 
@@ -61,7 +69,10 @@ def _request(settings, session, action, params=None):
     with session.get(
         ENDPOINT, params={"action": action, **(params or {})},
         auth=(settings.username, settings.password),
-        headers={"Accept": "application/xml"}, timeout=settings.timeout,
+        headers={"Accept": "application/xml"},
+        # GetTours has taken >14 seconds in authenticated checks. Keep the
+        # connection/catalog limit short while allowing the search to respond.
+        timeout=(settings.timeout, settings.search_timeout) if action == "GetTours" else settings.timeout,
         allow_redirects=False, stream=True,
     ) as response:
         response.raise_for_status()

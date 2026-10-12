@@ -73,6 +73,22 @@ for the entire catalog/search check, starting at RUB 24,830.72 (Колибри,
 Лазаревское). It used a 45-second diagnostic timeout; application timeout defaults
 were unchanged. SOAP actualization and customer traffic remain disabled.
 
+The application now gives `GetTours` a 30-second read timeout while keeping its
+connection timeout and catalog timeouts at ten seconds. A country-level search
+had taken 14.22 seconds even with cached catalogs, exceeding the old limit.
+`ALEAN_SEARCH_TIMEOUT_SECONDS` optionally sets the search read timeout from 10 to
+60 seconds; missing, malformed, nonfinite or out-of-range values use 30 seconds.
+Requests timeouts bound connection/read inactivity, not the entire funnel or
+the cumulative time for all catalogs. A timeout still falls through to the next
+provider and does not mark a search as completed.
+
+The read-only smoke check on 12 October then passed using these application
+defaults, without a diagnostic timeout override: all five catalogs and `GetTours`
+returned HTTP 200, with 15 accepted Sochi offers in 5.74 seconds overall.
+The isolated adapter was enabled only inside the check; application activation
+remained off. This validates the search path, not SOAP confirmation or delivery
+to Telegram/VK users.
+
 ## Search behavior
 
 - Uses stable country, departure-city, resort and hotel CIDs from supplier
@@ -139,7 +155,9 @@ python -m scripts.alean_live_smoke
 It checks authenticated `GetCountries` and one Moscow–Sochi query 30 days ahead,
 seven nights, two adults and a seven-year-old child. Only its local adapter is
 enabled; it does not start a bot, modify activation flags, send messages, create
-leads or book anything. The JSON report includes operation/status counts and
+leads or book anything. It uses the same timeout settings as the application.
+The JSON report includes operation/status counts, configured timeouts, timings
+to response headers (excluding subsequent streamed body reads), total elapsed time and
 sanitized errors, never credentials or upstream bodies. Exit 2 means missing
 credentials; exit 1 means the authenticated catalog or search failed. Zero offers
 with a successful `GetTours` response verifies access, not available inventory.

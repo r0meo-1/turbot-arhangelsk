@@ -139,6 +139,80 @@ def test_search_uses_documented_cids_dates_children_and_total_budget():
     assert "трансфер не включён" in tv.format_client_message(result)
 
 
+@pytest.mark.parametrize("value,expected", [(None, 30), ("10", 10), ("45.5", 45.5),
+    ("60", 60), ("", 30), ("invalid", 30), ("nan", 30), ("inf", 30),
+    ("-1", 30), ("9.9", 30), ("60.1", 30)])
+def test_search_timeout_environment_is_bounded_and_never_enables_supplier(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("ALEAN_SEARCH_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("ALEAN_SEARCH_TIMEOUT_SECONDS", value)
+    monkeypatch.setenv("ALEAN_ENABLED", "false")
+    config = alean.AleanSettings.from_env()
+    assert config.search_timeout == expected and config.timeout == 10
+    assert config.enabled is False
+
+
+def test_slow_search_succeeds_without_extending_catalog_or_connect_timeout(monkeypatch):
+    class SlowSearch(Session):
+        def get(self, url, **kwargs):
+            if kwargs["params"]["action"] == "GetTours":
+                # Model the observed 14.22-second search without sleeping.
+                limit = kwargs["timeout"]
+                read_limit = limit[1] if isinstance(limit, tuple) else limit
+                if read_limit < 14.22:
+                    raise requests.ReadTimeout("never log fixture-secret")
+            return super().get(url, **kwargs)
+    monkeypatch.delenv("ALEAN_SEARCH_TIMEOUT_SECONDS", raising=False)
+    config = alean.AleanSettings.from_env()
+    config.enabled, config.username, config.password = True, "fixture-user", "fixture-secret"
+    session = SlowSearch()
+    assert alean.search_tours(config, session, info()).offers
+    assert all(call[1]["timeout"] == 10 for call in session.calls[:-1])
+    assert session.calls[-1][1]["timeout"] == (10, 30)
+
+
+def test_search_read_timeout_preserves_fallback_and_sanitizes_errors(monkeypatch, caplog):
+    class TimeoutSearch(Session):
+        def get(self, url, **kwargs):
+            if kwargs["params"]["action"] == "GetTours":
+                assert kwargs["timeout"] == (10, 45)
+                raise requests.ReadTimeout("fixture-secret private-url")
+            return super().get(url, **kwargs)
+    config = router.ProviderSettings(order=("alean", "tourvisor"), alean=settings(search_timeout=45),
+                                    tourvisor=tv.TourvisorSettings(enabled=True, token="token"))
+    expected = tv.SearchResult(offers=[tv.TourOffer("Fallback", 0, "", "", 7, "", "", "", 90000)])
+    monkeypatch.setattr(tv, "search_tours", lambda *args, **kwargs: expected)
+    result, provider = router.search_tours(config, TimeoutSearch(), info())
+    assert result is expected and provider == "tourvisor"
+    assert "fixture-secret" not in caplog.text and "private-url" not in caplog.text
+
+
+@pytest.mark.parametrize("failure", [False, True])
+def test_smoke_audit_records_timeout_and_safe_timing_on_success_and_failure(monkeypatch, failure):
+    from scripts.alean_live_smoke import AuditSession
+    ticks = iter([10, 24.22])
+    monkeypatch.setattr("scripts.alean_live_smoke.time.monotonic", lambda: next(ticks))
+    response = Response("<getToursResult/>")
+    def get(*args, **kwargs):
+        if failure:
+            raise requests.ReadTimeout("fixture-secret private-url")
+        return response
+    monkeypatch.setattr(requests.Session, "get", get)
+    with AuditSession() as session:
+        kwargs = dict(params={"action": "GetTours"}, timeout=(10, 30), auth=("fixture-user", "fixture-secret"))
+        if failure:
+            with pytest.raises(requests.ReadTimeout):
+                session.get(alean.ENDPOINT, **kwargs)
+        else:
+            assert session.get(alean.ENDPOINT, **kwargs) is response
+        report = json.loads(json.dumps(session.operations))
+    expected = {"action": "GetTours", "timeoutSeconds": [10, 30], "responseHeadersSeconds": 14.22}
+    expected.update({"errorType": "ReadTimeout"} if failure else {"status": 200})
+    assert report == [expected]
+    assert "fixture-secret" not in str(report) and "private-url" not in str(report)
+
+
 def test_resort_and_hotel_search_do_not_broaden_the_request():
     session = Session()
     assert alean.search_tours(settings(),session,info(destination="Сочи",hotel_query="Тестовый отель")).offers
