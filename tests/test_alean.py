@@ -1,5 +1,7 @@
 from dataclasses import asdict
 from datetime import date, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -133,6 +135,47 @@ def test_catalog_cache_expires(monkeypatch):
     monkeypatch.setattr(alean.time,"monotonic",lambda: 86401)
     alean.search_tours(settings(),session,info())
     assert len(session.calls) == 12
+
+
+def test_slow_catalog_request_does_not_block_another_catalog():
+    entered, release = Event(), Event()
+    class SlowCountries(Session):
+        def get(self, url, **kwargs):
+            if kwargs["params"]["action"] == "GetCountries":
+                entered.set()
+                assert release.wait(5)
+            return super().get(url, **kwargs)
+    session = SlowCountries()
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        slow = workers.submit(alean._catalog, settings(), session, "GetCountries", account=b"fixture")
+        try:
+            assert entered.wait(2)
+            fast = workers.submit(alean._catalog, settings(), session, "GetDepartCities", account=b"fixture")
+            assert fast.result(timeout=2)[0]["name"] == "Москва"
+        finally:
+            release.set()
+        assert slow.result(timeout=2)[0]["name"] == "Россия"
+
+
+def test_completed_empty_search_allows_explicit_vk_budget_retry():
+    config = router.ProviderSettings(order=("alean",), alean=settings())
+    # The valid fixture offer is above the customer's cap; only a fresh,
+    # explicitly requested open-ended search may return it.
+    session = Session()
+    capped, provider = router.search_tours(config, session, info(budget=50000))
+    assert not capped.offers and capped.search_id and not provider
+    assert session.calls[-1][1]["params"]["priceMax"] == 50000
+    uncapped, provider = router.search_tours(config, session, info(budget=50000, budget_open_ended=True))
+    assert provider == "alean" and uncapped.offers[0].price == 80000
+    assert "priceMax" not in session.calls[-1][1]["params"]
+
+
+def test_failed_search_does_not_allow_vk_budget_retry():
+    config = router.ProviderSettings(order=("alean",), alean=settings())
+    result, provider = router.search_tours(
+        config, Session(bad={"GetTours": Response('', 401)}), info(),
+    )
+    assert result.error and not result.offers and result.search_id is None and not provider
 
 
 @pytest.mark.parametrize("response", [Response('<error>fixture-secret</error>'),Response('not XML'),

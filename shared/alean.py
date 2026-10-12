@@ -93,8 +93,10 @@ def _catalog(settings, session, action, *, account=None):
         cached = _cache.get(key)
         if cached and time.monotonic() - cached[0] < 86400:
             return cached[1]
-        root = _request(settings, session, action)
-        rows = [dict(node.attrib) for node in root.findall(_CATALOGS[action])]
+    # Outbound I/O must not serialize unrelated searches during supplier outages.
+    root = _request(settings, session, action)
+    rows = [dict(node.attrib) for node in root.findall(_CATALOGS[action])]
+    with _lock:
         _cache[key] = (time.monotonic(), rows)
         _cache.move_to_end(key)
         while len(_cache) > 32:
@@ -224,7 +226,9 @@ def search_tours(settings, session, info, *, log=None):
                 operator="Алеан", price=price, currency="RUB", provider="alean",
                 departure=departure["name"], tour_id="alean:" + identity,
             ))
-        return tv.SearchResult(offers=sorted(offers, key=lambda o: o.price)[:settings.max_offers])
+        # Local completion marker, never a supplier token. VK uses it to offer
+        # an explicit above-budget retry after a successful empty search.
+        return tv.SearchResult(offers=sorted(offers, key=lambda o: o.price)[:settings.max_offers], search_id=-1)
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         log.warning("Alean HTTP status %s", status)

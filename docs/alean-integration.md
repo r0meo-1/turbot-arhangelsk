@@ -32,8 +32,14 @@ existing agency account. Provisioning requires an agency letterhead request
 signed by the responsible person, with agency tax ID and user details. This
 adapter does not provision or activate supplier accounts. Alean's 28 September
 reply says SAPI has no separate test endpoint; do not treat SOAP test credentials
-as verified SAPI access. The unauthenticated endpoint returned HTTP 401 during
-implementation on 10 October; authenticated search has not been verified.
+as verified SAPI access. On 12 October, the dedicated account passed authenticated
+`GetCountries` (HTTP 200, ten countries) and the other four catalog checks.
+One synthetic Moscow–Sochi search for 11 November 2026, seven nights, two adults
+and a seven-year-old child returned HTTP 200 with zero accepted offers. Its first
+attempt exceeded the default ten-second timeout; a diagnostic repeat with a
+45-second timeout completed in 6.51 seconds. This establishes SAPI access and a
+valid search response, not available inventory or SOAP actualization. Customer
+traffic remains disabled.
 
 ## Search behavior
 
@@ -49,6 +55,9 @@ implementation on 10 October; authenticated search has not been verified.
   than four values. SAPI would otherwise silently narrow those ranges.
 - Filters malformed, stopped, hotel-only, out-of-range and over-budget rows.
   Alean outages fall through to the next configured provider.
+- Catalog network requests do not hold the shared cache lock. A completed empty
+  search carries a local completion marker so VK can offer an explicit retry
+  above budget; an upstream failure does not carry that marker.
 - Uses the existing VK selection and manager handoff. Alean cards explicitly
   say that transfers are excluded. The Python Telegram bot uses the same adapter,
   preserving trip-date versus departure-date semantics and original child ages.
