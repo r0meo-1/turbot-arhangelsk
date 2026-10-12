@@ -2877,7 +2877,10 @@ def _tour_search_wait_animation(user_id: int, marker: str, message_id: int) -> N
         time.sleep(4)
         with _lock:
             live = user_data.get(user_id)
-            active = bool(live and live.get("_tour_search_marker") == marker)
+            active = bool(
+                live and live.get("_tour_search_marker") == marker
+                and live.get("_tour_searching") and live.get("state") == STATE_REVIEW
+            )
         if not active:
             return
         send_typing(user_id)
@@ -2891,10 +2894,15 @@ def _tour_search_wait_animation(user_id: int, marker: str, message_id: int) -> N
         # Restore the final state so a late animation tick never wins the race.
         with _lock:
             live = user_data.get(user_id)
-            active = bool(live and live.get("_tour_search_marker") == marker)
-            final_text = str((live or {}).get("_tour_wait_final_text") or "")
-        if not active and final_text:
-            edit_message(user_id, message_id, final_text, keyboard=_hide_keyboard())
+            current = bool(
+                live and live.get("_tour_search_marker") == marker
+                and live.get("state") == STATE_REVIEW
+            )
+            active = bool(current and live.get("_tour_searching"))
+            final_text = str(live.get("_tour_wait_final_text") or "") if current else ""
+        if not active:
+            if final_text:
+                edit_message(user_id, message_id, final_text, keyboard=_hide_keyboard())
             return
 
 
@@ -2942,9 +2950,11 @@ def _tour_search_worker(
         if live is None or live.get("_tour_search_marker") != marker:
             return
         live.pop("_tour_searching", None)
-        live.pop("_tour_search_marker", None)
         if live.get("state") != STATE_REVIEW:
+            live.pop("_tour_search_marker", None)
             return
+        # Retain the generation after completion. A new search or parameter
+        # edit invalidates it; REVIEW alone cannot identify this result after I/O.
         final_text = (
             f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
             if result.offers else
@@ -2961,7 +2971,7 @@ def _tour_search_worker(
         )
         with _lock:
             live = user_data.get(user_id)
-            if live is None or live.get("state") != STATE_REVIEW:
+            if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
                 return
             offers = [offer.__dict__.copy() for offer in result.offers]
             live["_tour_offers_base"] = offers
@@ -2975,6 +2985,10 @@ def _tour_search_worker(
                 "⚠️ Эти варианты дороже указанного бюджета. Показываю их только по вашему запросу.",
                 keyboard=_hide_keyboard(),
             )
+        with _lock:
+            live = user_data.get(user_id)
+            if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
+                return
         _send_tour_results_page(user_id, 0)
         return
 
@@ -2985,6 +2999,10 @@ def _tour_search_worker(
         final_text,
         keyboard=_hide_keyboard(),
     )
+    with _lock:
+        live = user_data.get(user_id)
+        if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
+            return
     can_show_over = bool(
         result.search_id and snapshot.get("budget")
         and not snapshot.get("budget_open_ended")
@@ -3504,6 +3522,8 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         _start_tour_search(user_id, info, ignore_budget=True)
         return
     if text == REVIEW_HOTEL_TEXT:
+        for key in ("_tour_searching", "_tour_search_marker", "selected_tour", "_tour_offers", "_tour_offers_base"):
+            info.pop(key, None)
         info["state"] = STATE_HOTEL
         _ask_hotel(user_id)
         return

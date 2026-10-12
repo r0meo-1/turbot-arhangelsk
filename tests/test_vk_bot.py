@@ -1132,6 +1132,124 @@ def test_vk_discards_tour_result_after_user_leaves_review(monkeypatch):
     assert not bot.user_data[user_id].get("_tour_searching")
 
 
+@pytest.mark.parametrize("has_offers", [True, False])
+@pytest.mark.parametrize("replace_session", [True, False])
+def test_vk_old_worker_cannot_publish_after_new_search_during_wait_edit(monkeypatch, has_offers, replace_session):
+    user_id, marker = 9571, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True,
+            "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    old_offer = bot._tourvisor.TourOffer(
+        hotel="Old Hotel", category=4, region="Сочи", date="2030-09-15",
+        nights=7, meal="", room="", operator="", price=100000)
+    result = bot._tourvisor.SearchResult(offers=[old_offer] if has_offers else [], search_id=-1)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k: (result, "alean"))
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    fresh_offer = {"hotel": "Fresh Hotel", "price": 120000}
+    fresh = {"state": bot.STATE_REVIEW, "dates": "2030-10-20", "_tour_search_marker": "fresh-search",
+             "_tour_offers": [fresh_offer], "_tour_offers_base": [fresh_offer],
+             "selected_tour": fresh_offer, "_tour_provider": "fresh-provider"}
+    def edit(*args, **kwargs):
+        if replace_session:
+            bot.user_data[user_id] = dict(fresh)
+        else:
+            live.update(fresh)
+        return True
+    published = []
+    monkeypatch.setattr(bot, "edit_message", edit)
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    monkeypatch.setattr(bot, "send_message", lambda *a, **k: published.append("message"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва", "budget": 50000}, 111)
+    assert bot.user_data[user_id]["_tour_offers"] == [fresh_offer]
+    assert bot.user_data[user_id]["selected_tour"] == fresh_offer
+    assert bot.user_data[user_id]["_tour_provider"] == "fresh-provider"
+    assert bot.user_data[user_id]["_tour_search_marker"] == "fresh-search"
+    assert published == []
+
+
+def test_vk_old_worker_cannot_publish_after_edit_returns_to_review_without_search(monkeypatch):
+    user_id, marker = 9572, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 100000)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k: (bot._tourvisor.SearchResult(offers=[offer]), "alean"))
+    def edit(*args, **kwargs):
+        live.pop("_tour_search_marker", None)
+        live.update(state=bot.STATE_REVIEW, dates="2030-10-20")
+        return True
+    published = []
+    monkeypatch.setattr(bot, "edit_message", edit)
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва"}, 111)
+    assert not live.get("_tour_offers") and published == []
+
+
+@pytest.mark.parametrize("transition", ["finished", "replaced", "left_review"])
+def test_vk_wait_animation_only_restores_its_current_completed_search(monkeypatch, transition):
+    user_id, marker = 9573, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    monkeypatch.setattr(bot.time, "sleep", lambda *a: None)
+    edits = []
+    def edit(uid, mid, text, **kwargs):
+        edits.append(text)
+        if len(edits) == 1:
+            if transition != "left_review":
+                live.pop("_tour_searching", None)
+            live["_tour_wait_final_text"] = "Ready"
+            if transition == "replaced":
+                live["_tour_search_marker"] = "fresh-search"
+            elif transition == "left_review":
+                live["state"] = bot.STATE_DATES
+        return True
+    monkeypatch.setattr(bot, "edit_message", edit)
+    bot._tour_search_wait_animation(user_id, marker, 111)
+    assert len(edits) == (2 if transition == "finished" else 1)
+    assert (edits[-1] == "Ready") is (transition == "finished")
+
+
+def test_vk_hotel_edit_invalidates_pending_search_and_previous_selection(monkeypatch):
+    user_id, marker = 9574, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker,
+            "selected_tour": {"hotel": "Old Hotel"}, "_tour_offers": [{"hotel": "Old Hotel"}],
+            "_tour_offers_base": [{"hotel": "Old Hotel"}]}
+    bot.user_data[user_id] = live
+    monkeypatch.setattr(bot, "_ask_hotel", lambda *a: None)
+    monkeypatch.setattr(bot, "_ask_review", lambda *a: None)
+    def search(*a, **k):
+        bot._step_review(user_id, bot.REVIEW_HOTEL_TEXT, {}, live)
+        bot._step_hotel(user_id, "Fresh Hotel", {}, live)
+        offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 100000)
+        return bot._tourvisor.SearchResult(offers=[offer]), "alean"
+    monkeypatch.setattr(bot._tour_providers, "search_tours", search)
+    published = []
+    monkeypatch.setattr(bot, "edit_message", lambda *a, **k: published.append("edit"))
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва"}, 111)
+    assert live["hotel_query"] == "Fresh Hotel"
+    assert not live.get("_tour_searching") and not live.get("_tour_search_marker")
+    assert not live.get("_tour_offers") and not live.get("selected_tour")
+    assert published == []
+
+
+def test_vk_old_worker_stops_if_new_search_starts_during_over_budget_notice(monkeypatch):
+    user_id, marker = 9575, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 100000)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k: (bot._tourvisor.SearchResult(offers=[offer]), "alean"))
+    monkeypatch.setattr(bot, "edit_message", lambda *a, **k: True)
+    fresh = {"hotel": "Fresh Hotel"}
+    def send(*a, **k):
+        live.update(_tour_search_marker="fresh-search", _tour_offers=[fresh], selected_tour=fresh)
+    monkeypatch.setattr(bot, "send_message", send)
+    published = []
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва", "_show_over_budget": True}, 111)
+    assert live["_tour_offers"] == [fresh] and live["selected_tour"] == fresh
+    assert published == []
+
+
 def test_vk_undecided_destination_marks_consultation(client):
     _post(client, 903, "Начать")
     _post(client, 903, bot.CONSENT_YES_TEXT)
