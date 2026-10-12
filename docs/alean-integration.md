@@ -114,8 +114,8 @@ to Telegram/VK users.
 - VK retains the search generation through completion and checks it after
   waiting-message edits and before result publication. An old worker cannot
   replace a newer selection or send its empty-search hint after those checks
-  detect a new search or parameter edit. Editing the hotel also clears the
-  previous search and selection. The wait animation stops when search ends and
+  detect a new search or parameter edit. Editing the hotel or navigating back
+  from review also clears the previous search and selection. The wait animation stops when search ends and
   restores final text only for its own current review.
 
 ## Price and availability confirmation

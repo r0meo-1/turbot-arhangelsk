@@ -1250,6 +1250,31 @@ def test_vk_old_worker_stops_if_new_search_starts_during_over_budget_notice(monk
     assert published == []
 
 
+def test_vk_back_then_budget_edit_invalidates_pending_result(monkeypatch):
+    user_id, marker = 9576, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker,
+            "budget": 100000, "selected_tour": {"hotel": "Old Hotel"},
+            "_tour_offers": [{"hotel": "Old Hotel"}], "_tour_offers_base": [{"hotel": "Old Hotel"}]}
+    bot.user_data[user_id] = live
+    monkeypatch.setattr(bot, "_prompt_for_state", lambda *a: None)
+    monkeypatch.setattr(bot, "_ask_review", lambda *a: None)
+    def search(*a, **k):
+        bot._go_back(user_id)
+        assert live["state"] == bot.STATE_BUDGET
+        bot._step_budget(user_id, "50000", {}, live)
+        offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 80000)
+        return bot._tourvisor.SearchResult(offers=[offer]), "alean"
+    monkeypatch.setattr(bot._tour_providers, "search_tours", search)
+    published = []
+    monkeypatch.setattr(bot, "edit_message", lambda *a, **k: published.append("edit"))
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва", "budget": 100000}, 111)
+    assert live["budget"] == 50000 and live["state"] == bot.STATE_REVIEW
+    assert not live.get("_tour_searching") and not live.get("_tour_search_marker")
+    assert not live.get("_tour_offers") and not live.get("selected_tour")
+    assert published == []
+
+
 def test_vk_undecided_destination_marks_consultation(client):
     _post(client, 903, "Начать")
     _post(client, 903, bot.CONSENT_YES_TEXT)

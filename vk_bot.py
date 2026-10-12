@@ -3812,6 +3812,9 @@ def _go_back(user_id: int) -> None:
         _mark_dirty(user_id, user=False)
         send_message(user_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отмена».", keyboard=_dest_keyboard())
         return
+    if state == STATE_REVIEW:
+        for key in ("_tour_searching", "_tour_search_marker", "selected_tour", "_tour_offers", "_tour_offers_base"):
+            info.pop(key, None)
     info["state"] = previous
     if previous == STATE_DESTINATION:
         info["direct_only"] = False
