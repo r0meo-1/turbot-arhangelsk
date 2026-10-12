@@ -3,7 +3,6 @@
 import os
 import json
 import time
-import tempfile
 import sqlite3
 
 # Configure the VK bot before it is imported.
@@ -20,13 +19,7 @@ os.environ.setdefault("VK_MDT_RETRY_ENABLED", "false")
 os.environ.setdefault("ADMIN_ERROR_ALERTS", "false")
 os.environ.setdefault("AI_MODE", "template")
 os.environ["CONSENT_MODE"] = "strict"  # classic consent in unit tests
-# Присваивание, а не setdefault: test_bot.py импортируется раньше и уже задал
-# DATABASE_PATH, из-за чего обе сюиты работали в одном файле. Миграция VK-бота
-# при этом никогда не выполнялась целиком — таблицы успевал создать Telegram-бот,
-# и опечатка в ALTER TABLE прожила до первого одиночного запуска этого файла.
-os.environ["DATABASE_PATH"] = os.path.join(
-    tempfile.gettempdir(), f"vk_turbot_test_{os.getpid()}.sqlite"
-)
+# Shared test configuration and the dedicated VK DB come from conftest.py.
 
 import vk_bot as bot
 

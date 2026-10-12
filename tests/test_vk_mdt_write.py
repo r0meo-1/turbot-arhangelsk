@@ -2,7 +2,6 @@
 
 import json
 import os
-import tempfile
 
 os.environ.setdefault("VK_ACCESS_TOKEN", "dummy-token")
 os.environ.setdefault("VK_GROUP_ID", "999")
@@ -16,9 +15,7 @@ os.environ.setdefault("SYNC_COMPLETION", "true")
 os.environ.setdefault("VK_MDT_RETRY_ENABLED", "false")
 os.environ.setdefault("AI_MODE", "template")
 os.environ.setdefault("CONSENT_MODE", "strict")
-os.environ["DATABASE_PATH"] = os.path.join(
-    tempfile.gettempdir(), f"vk_turbot_test_{os.getpid()}.sqlite"
-)
+# Shared test configuration and the dedicated VK DB come from conftest.py.
 
 import vk_bot as bot
 

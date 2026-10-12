@@ -14,12 +14,15 @@ for setting in ("DIALOG_TIMEOUT_HOURS", "FOLLOWUP_DELAY_HOURS", "DATA_RETENTION_
                 "PARTNER_ANALYTICS_RETENTION_DAYS", "FUNNEL_ANALYTICS_RETENTION_DAYS",
                 "OPS_METRICS_RETENTION_DAYS"):
     os.environ[setting] = "0"
-for setting in ("ADMIN_ERROR_ALERTS", "MDT_ENABLED", "VK_MDT_RETRY_ENABLED", "TUTU_ENABLED"):
+for setting in ("ADMIN_ERROR_ALERTS", "MDT_ENABLED", "VK_MDT_RETRY_ENABLED", "TUTU_ENABLED",
+                "DEMO_MODE", "VK_DEMO_MODE", "WEBSITE_LEAD_WORKER_ENABLED"):
     os.environ[setting] = "false"
 os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"turbot_suite_{os.getpid()}.sqlite")
-# Let each VK suite use its test DATABASE_PATH instead of an injected production
-# override, which may point outside the workspace or at a customer database.
-os.environ.pop("VK_DATABASE_PATH", None)
+# Keep the Telegram/website and VK schemas separate regardless of import order.
+# Override both injected paths before collection; no customer DB is opened.
+os.environ["VK_DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"vk_turbot_suite_{os.getpid()}.sqlite")
+os.environ["CONSENT_MODE"] = "strict"
+os.environ["SYNC_COMPLETION"] = "true"
 for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
     os.environ[setting] = ""
 
