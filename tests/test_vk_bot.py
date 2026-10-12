@@ -2786,6 +2786,42 @@ def test_vk_completed_actualization_survives_session_restore(actualization_choic
     assert restored["selected_tour"]["actualized_at"] == "17:20"
 
 
+@pytest.mark.parametrize("price", [None, 0, -1, "bad", "NaN", True])
+def test_vk_invalid_actualization_cannot_confirm_cached_price(actualization_choices, monkeypatch, price):
+    user_id, offers, sent, result = actualization_choices
+    result["total_price"] = price
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *args, **kwargs: result)
+    bot._select_tour(user_id, 1)
+    current = bot.user_data[user_id]["selected_tour"]
+    assert current["price"] == 90001
+    assert current["actualization_confirmed"] is False
+    assert current["actualization_status"] == "unknown"
+    assert not any("Актуализированная цена" in text for text in sent)
+
+
+def test_vk_fractional_live_price_survives_provider_selection_and_restore(actualization_choices, monkeypatch):
+    user_id, offers, sent, result = actualization_choices
+    def actualize(settings, session, offer, **kwargs):
+        return bot._tourvisor.actualize_tour_live(
+            bot._tourvisor.TourvisorSettings(enabled=True, token="token"), None, offer,
+            request_fn=lambda *args: {"flights": [{
+                "forward": [{"noPlaces": False, "onDemand": False}],
+                "backward": [{"noPlaces": False, "onDemand": False}],
+                "price": {"value": 90001.25, "currency": "RUB"},
+                "fuelCharge": {"value": 5000.5, "currency": "RUB"},
+            }]},
+        )
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", actualize)
+    bot._select_tour(user_id, 1)
+    assert bot.user_data[user_id]["selected_tour"]["price"] == 95001.75
+    _REAL_SAVE_STATE()
+    bot.user_data.pop(user_id)
+    restored = bot._restore_session_from_db(user_id)
+    assert restored["selected_tour"]["price"] == 95001.75
+
+
 def test_vk_sletat_actualization_updates_selected_price(monkeypatch):
     sent = []
     user_id = 963

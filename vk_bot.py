@@ -62,6 +62,7 @@ from shared.constants import (
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
 )
+from shared.money import money_amount, money_json
 from shared.vk_miniapp import build_open_app_button, create_blueprint
 from shared.telegram_webapp import MiniAppValidationError, normalise_source_tag
 from shared import tutu as _tutu
@@ -3189,13 +3190,20 @@ def _actualize_selected_tour_worker(
             return
         current = dict(expected_selection)
 
-        confirmed = bool(actual.get("confirmed"))
-        total_price = int(actual.get("total_price") or 0)
+        status = str(actual.get("status") or "unknown")
+        confirmed = actual.get("confirmed") is True and status == "available"
+        total_price = 0
+        try:
+            total_price = money_json(money_amount(actual.get("total_price")))
+        except ValueError:
+            confirmed = False
+            if status == "available":
+                status = "unknown"
         if confirmed and total_price > 0:
             current["price"] = total_price
             current["fuel_charge"] = 0
             current["currency"] = str(actual.get("currency") or current.get("currency") or "RUB")
-        current["actualization_status"] = str(actual.get("status") or "unknown")
+        current["actualization_status"] = status
         current["actualization_confirmed"] = confirmed
         current["actualized_at"] = str(actual.get("actualized_at") or "")
         live["selected_tour"] = current
@@ -3221,7 +3229,7 @@ def _actualize_selected_tour_worker(
         "tourvisor": "Tourvisor",
         "travelata": "Провайдер",
     }.get(provider, "Провайдер")
-    if actual.get("confirmed"):
+    if confirmed:
         intro = f"✅ {provider_label} перепроверил выбранный тур."
         price_line = f"\n💰 Актуализированная цена: {_compact_tour_price(current)} за тур"
     elif actual.get("status") == "unavailable":

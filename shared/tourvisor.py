@@ -14,9 +14,11 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from decimal import DecimalException
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
+from shared.money import money_amount, money_json
 
 from shared.dates import parse_russian_dates
 
@@ -1270,24 +1272,24 @@ def actualize_tour_live(
             if isinstance(selected.get("fuelCharge"), dict)
             else {}
         )
-        try:
-            price = int(float(price_obj.get("value") or 0))
-        except (TypeError, ValueError):
-            price = 0
-        try:
-            fuel = int(float(fuel_obj.get("value") or 0))
-        except (TypeError, ValueError):
-            fuel = 0
-        total_price = price + fuel
-        if total_price <= 0:
-            total_price = int(fallback.get("total_price") or 0)
-
         currency = str(
             price_obj.get("currency")
-            or fuel_obj.get("currency")
             or tour_data.get("currency")
             or "RUB"
-        )
+        ).strip().upper()
+        fuel_currency = str(fuel_obj.get("currency") or currency).strip().upper()
+        price_valid = False
+        try:
+            price = money_amount(price_obj.get("value"))
+            fuel = money_amount(fuel_obj.get("value", 0), allow_zero=True)
+            currencies = {currency, fuel_currency}
+            if fuel > 0 and len(currencies) > 1 and not currencies <= {"RUB", "RUR"}:
+                raise ValueError("Cannot add charges in different currencies")
+            total_price = money_json(price + fuel)
+            price_valid = True
+        except (ValueError, DecimalException):
+            total_price = fallback["total_price"]
+            currency = fallback["currency"]
 
         if no_places:
             flight_status = "🔴 На выбранном перелёте нет мест"
@@ -1305,6 +1307,11 @@ def actualize_tour_live(
             flight_status = "🟡 Статус перелёта требует дополнительной проверки"
             status = "unknown"
             confirmed = False
+
+        if not price_valid:
+            confirmed = False
+            if status == "available":
+                status = "unknown"
 
         info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
         surcharges = info.get("surcharges") if isinstance(info.get("surcharges"), list) else []
@@ -1336,14 +1343,17 @@ def actualize_tour(tour_data: Dict[str, Any]) -> Dict[str, Any]:
     price. Provider-specific adapters may replace this with a real live
     actualization, but this fallback must never fabricate green availability.
     """
-    price = int(tour_data.get("price") or 0)
-    fuel = int(tour_data.get("fuel_charge") or 0)
+    try:
+        total_price = money_json(money_amount(tour_data.get("price") or 0, allow_zero=True)
+                                 + money_amount(tour_data.get("fuel_charge") or 0, allow_zero=True))
+    except (ValueError, DecimalException):
+        total_price = 0
     return {
         "status": "unknown",
         "confirmed": False,
         "flight_status": "🟡 Перелёт требует актуальной проверки у провайдера",
         "hotel_status": "🟡 Наличие номера требует актуальной проверки у провайдера",
-        "total_price": price + fuel,
+        "total_price": total_price,
         "currency": str(tour_data.get("currency") or "RUB"),
         "actualized_at": "",
     }

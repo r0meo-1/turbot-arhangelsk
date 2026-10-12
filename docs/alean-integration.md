@@ -136,6 +136,13 @@ to Telegram/VK users.
 
 ## Price and availability confirmation
 
+Tourvisor and Sletat live checks require a fresh, finite positive price before
+marking a quote confirmed. A cached search price can remain an indicative
+fallback but cannot establish confirmation. Tourvisor does not add nonzero
+charges in a different currency; Sletat packages without flights or with hotel
+inventory under request/unknown remain unconfirmed. Fractional amounts survive
+provider parsing, VK selection and SQLite persistence.
+
 Search results are indicative, not a confirmed booking. Alean requires SOAP
 `Specify` methods for price actualization. SAPI `GetTours`
 must not be substituted for that operation.
