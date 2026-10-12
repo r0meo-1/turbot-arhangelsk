@@ -27,12 +27,10 @@ Restart the Telegram and/or VK service after configuration. VK's tour-search hea
 reports configured/enabled flags without exposing credentials. Sletat retains
 its existing automatic priority when enabled.
 
-Alean's 5 October 2026 account reply says that a new user can be added to the
-existing agency account. Provisioning requires an agency letterhead request
-signed by the responsible person, with agency tax ID and user details. This
-adapter does not provision or activate supplier accounts. Alean's 28 September
-reply says SAPI has no separate test endpoint; do not treat SOAP test credentials
-as verified SAPI access. On 12 October, the dedicated account passed authenticated
+Use a dedicated SAPI account on the agency's supplier contract. This adapter
+does not provision or activate supplier accounts. SAPI has no separate test
+endpoint; do not treat SOAP test credentials as verified SAPI access.
+On 12 October, the dedicated account passed authenticated
 `GetCountries` (HTTP 200, ten countries) and the other four catalog checks.
 One synthetic Moscow–Sochi search for 11 November 2026, seven nights, two adults
 and a seven-year-old child returned HTTP 200 with zero accepted offers. Its first
