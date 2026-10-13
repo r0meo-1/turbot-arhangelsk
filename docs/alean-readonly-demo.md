@@ -172,10 +172,15 @@ Captured browser evidence (all **local demo**, not signed-in Telegram Web):
 
 Cloud validation on 13 October 2026: 1,489 regression tests passed (existing
 browser-only suites are delegated to the Edge Bot job); the final Alean-specific
-suite passed 34 backend/handler cases and 7 browser cases. Resource-warning and
-secret-scanning checks passed 49 cases. The screenshots below were generated from
+suite passed 35 backend/handler cases and 7 browser cases. Resource-warning and
+secret-scanning checks passed 50 cases. The screenshots below were generated from
 the isolated browser run. The initial browser check found a missing stable
 destination label, which was corrected before the final passing run.
+CI security review also identified ambiguous whitespace regexes in existing date
+and child-age helpers reached by the new preview; these were replaced with linear
+delimiter matching while preserving existing formats. Public Mini App validation
+errors use fixed messages rather than exception details. The affected shared and
+Alean tests passed 197 cases, with an additional whitespace regression case passing.
 
 - [Mini App search form](screenshots/alean/miniapp-search.png)
 - [Visible Mini App entry card](screenshots/alean/miniapp-entry.png)
