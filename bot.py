@@ -5432,23 +5432,31 @@ def save_state() -> None:
         _dirty_sessions.clear()
         _dirty_users.clear()
 
-    for chat_id in session_ids:
-        info = user_data.get(chat_id)
-        if info is not None:
-            set_session(chat_id, info)
-        else:
-            delete_session(chat_id)
+    try:
+        for chat_id in session_ids:
+            info = user_data.get(chat_id)
+            if info is not None:
+                set_session(chat_id, info)
+            else:
+                delete_session(chat_id)
 
-    for chat_id in user_ids:
-        meta = all_users.get(chat_id)
-        if meta is None:
-            continue
-        touch_user(
-            chat_id,
-            meta.get("first_name", ""),
-            meta.get("username", ""),
-            last_seen=meta.get("last_seen"),
-        )
+        for chat_id in user_ids:
+            meta = all_users.get(chat_id)
+            if meta is None:
+                continue
+            touch_user(
+                chat_id,
+                meta.get("first_name", ""),
+                meta.get("username", ""),
+                last_seen=meta.get("last_seen"),
+            )
+    except Exception:
+        # Writes are idempotent. Retry the batch after a transient DB failure,
+        # preserving any new changes marked while this flush was in progress.
+        with _lock:
+            _dirty_sessions.update(session_ids)
+            _dirty_users.update(user_ids)
+        raise
 
 
 # ---------------------------------------------------------------------------
