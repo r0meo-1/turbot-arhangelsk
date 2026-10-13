@@ -224,7 +224,9 @@ def test_serverless_miniapp_sdk_transport_and_navigation(demo_server, scenario):
             assert filename in {"alean.html", "alean.js", "alean.css", "styles.css"}
             route.fulfill(path=str(ROOT / "miniapp" / filename))
         page.route("https://app8886586430.tgcloud.ai/**", static)
-        page.add_init_script("""window.__sdkCalls=[];window.Telegram.WebApp.Serverless={
+        page.add_init_script("""window.__sdkCalls=[];
+          window.Telegram.WebApp.initData='FICTIONAL_SDK_TEST_NOT_SIGNED';
+          window.Telegram.WebApp.Serverless={
           call(name,input,callback){window.__sdkCalls.push({name,input});window.__sdkCallback=callback}
         };""")
         page.goto("https://app8886586430.tgcloud.ai/")
@@ -257,3 +259,18 @@ def test_serverless_miniapp_sdk_transport_and_navigation(demo_server, scenario):
         page.evaluate("result=>window.__sdkCallback(null,result)", result)
         pw_api.expect(page.locator("#alean-results")).to_be_hidden()
         pw_api.expect(page.locator("#cancel-status")).to_contain_text("Ничего не отправлено")
+
+
+def test_serverless_miniapp_requires_telegram_launch_without_sdk_exception():
+    with browser_page() as page:
+        def static(route):
+            filename = route.request.url.rsplit("/", 1)[-1] or "alean.html"
+            route.fulfill(path=str(ROOT / "miniapp" / filename))
+        page.route("https://app8886586430.tgcloud.ai/**", static)
+        page.add_init_script("""window.Telegram.WebApp.Serverless={call(){
+          throw new Error('SDK must not be called without Telegram initData');
+        }};""")
+        page.goto("https://app8886586430.tgcloud.ai/")
+        review(page); page.get_by_role("button", name="Найти варианты").click()
+        pw_api.expect(page.locator("#search-status")).to_have_text(
+            "Откройте демо Mini App из Telegram для авторизации.")

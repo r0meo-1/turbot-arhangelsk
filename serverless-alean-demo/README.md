@@ -108,8 +108,12 @@ probes are not authenticated Telegram Web acceptance; report that separately.
 Fetch the current official CLI snapshot before rolling back, retaining the
 concurrency check. Restore the exact backed-up `handlers/message.js` and
 `handlers/callback_query.js` and previous static configuration (use
-`static:false` only if the baseline had no site); targeted-push these handlers
-and configuration, then restore the saved Bot API Web App menu/commands.
+`static:false` only if the baseline had no site). In a **fresh official pull
+containing every currently deployed module**, run `tgcloud push` to apply those
+two source changes and the static removal together. Inspect the diff first:
+there must be no missing/deleted modules. A push targeting only handler files
+leaves static hosting unchanged; do not use that to remove the site. Restore
+the saved Bot API Web App menu/commands afterward.
 Verify the webhook and previous handler behavior. Leave the additive unused
 demo table intact: rollback does not need a destructive migration. Preserved
 legacy library modules remain available for restoring the original handlers.

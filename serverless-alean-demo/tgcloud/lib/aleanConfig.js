@@ -6,6 +6,6 @@ export const CONFIG = Object.freeze({
   crmLeads:false, managerNotifications:false,
 });
 export function assertDemo() {
-  if (!CONFIG.ALEAN_DEMO_ONLY || Object.entries(CONFIG).some(([key,value]) => key !== 'ALEAN_DEMO_ONLY' && value !== false))
+  if (CONFIG.ALEAN_DEMO_ONLY !== true || Object.entries(CONFIG).some(([key,value]) => key !== 'ALEAN_DEMO_ONLY' && value !== false))
     throw new Error('Unsafe demo configuration');
 }

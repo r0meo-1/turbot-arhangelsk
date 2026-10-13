@@ -16,7 +16,7 @@
   }
   const serverlessRequest = (payload, signal) => new Promise((resolve, reject) => {
     const call = tg?.Serverless?.call;
-    if (!call) { reject(new Error('Откройте демо Mini App из Telegram для авторизации.')); return; }
+    if (!call || !tg?.initData) { reject(new Error('Откройте демо Mini App из Telegram для авторизации.')); return; }
     const abort = () => reject(new DOMException('Search cancelled', 'AbortError'));
     signal.addEventListener('abort', abort, {once:true});
     call.call(tg.Serverless, 'aleanSearch', payload, (error, result) => {
