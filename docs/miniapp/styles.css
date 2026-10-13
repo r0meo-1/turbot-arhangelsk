@@ -68,6 +68,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .secondary { border: 1px solid var(--border); background: rgba(255,255,255,.05); color: var(--tg-theme-text-color, #f8fafc); }
 .primary:active, .secondary:active { transform: translateY(1px); }
 .primary:disabled, .secondary:disabled { opacity: .55; }
+.alean-entry { display: grid; place-items: center; text-decoration: none; }
 .error { min-height: 18px; margin: -2px 2px -4px; color: #ff7b7b; font-size: 13px; }
 .privacy-note { margin: 0 8px; text-align: center; line-height: 1.45; }
 .review-card { display: grid; gap: 14px; }

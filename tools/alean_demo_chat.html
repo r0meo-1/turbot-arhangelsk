@@ -1,0 +1,17 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TurBot — local Telegram demo preview</title>
+<style>body{margin:0;background:#dfebef;color:#182632;font:16px/1.5 system-ui}main{max-width:640px;margin:auto;padding:20px}header{background:white;padding:18px;border-radius:18px}h1{margin:0;font-size:22px}.notice{color:#67460b;background:#fff1ce;padding:12px;border-radius:12px;font-size:14px}#messages{display:grid;gap:12px;margin:18px 0}.message{background:white;border-radius:16px;padding:14px;white-space:pre-wrap;max-width:94%;overflow-wrap:anywhere}.user{background:#cff1d1;justify-self:end}button{border:1px solid #add1e6;border-radius:10px;background:#eef8ff;color:#12547a;padding:10px;cursor:pointer;font:inherit;margin:5px 5px 0 0}.buttons{display:flex;flex-wrap:wrap}form{display:flex;gap:8px}input{min-width:0;flex:1;padding:12px;border-radius:12px;border:1px solid #acc2cc;font:inherit}select{padding:8px;width:100%;font:inherit}a{color:#12547a}</style></head><body><main>
+<header><h1>TurBot · Алеан</h1><p>Локальный Telegram transport preview</p><p class="notice">Это не Telegram Web: реальные обработчики бота, локальные сообщения и вымышленные данные. Заявки, менеджеры, бронирование и сеть отключены.</p><label>Демо-сценарий<select id="scenario"><option value="success">Результаты</option><option value="empty">Нет результатов</option><option value="timeout">Таймаут</option><option value="error">Ошибка провайдера</option></select></label><button id="start" type="button">/alean — начать</button> <a href="/miniapp/alean/alean.html">Мини-приложение</a></header>
+<div id="messages" aria-live="polite"></div><form id="chat-form"><input id="text" aria-label="Сообщение" placeholder="Ответ или /cancel" autocomplete="off"><button>Отправить</button></form><p id="safety">Реальных лидов: 0</p>
+</main><script>
+const messages=document.getElementById('messages');
+async function send(payload){
+ const response=await fetch('/demo/telegram/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...payload,scenario:document.getElementById('scenario').value})});
+ const result=await response.json(); messages.replaceChildren();
+ for(const message of result.messages){const div=document.createElement('div');div.className='message '+message.role;div.textContent=message.text;
+  for(const row of message.markup?.inline_keyboard||[]){const buttons=document.createElement('div');buttons.className='buttons';for(const item of row){const button=document.createElement('button');button.textContent=item.text;button.onclick=()=>send({callback:item.callback_data});buttons.append(button);}div.append(buttons);}messages.append(div);}
+ document.getElementById('safety').textContent='Реальных лидов: '+result.leads;
+ messages.lastElementChild?.scrollIntoView({block:'nearest'});
+}
+document.getElementById('start').onclick=()=>send({text:'/alean'});
+document.getElementById('chat-form').onsubmit=event=>{event.preventDefault();const input=document.getElementById('text');send({text:input.value});input.value='';};
+</script></body></html>
