@@ -241,6 +241,29 @@ def test_fractional_price_above_integer_cap_is_not_rounded_into_budget():
     assert not result.offers
 
 
+@pytest.mark.parametrize("field", ["price", "fuel_charge"])
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", "invalid", -1, True])
+def test_actualization_fallback_rejects_invalid_stored_amounts(field, value):
+    offer = {"price": 24830.72, "fuel_charge": 100.15, "currency": "RUB",
+             "provider": "alean", "confirmed": True}
+    offer[field] = value
+    result = alean.actualize_tour(offer)
+    assert result["confirmed"] is False
+    assert result["status"] == "unknown"
+    assert result["total_price"] == 0
+    assert "SOAP Specify" in result["hotel_status"]
+    json.dumps(result, allow_nan=False)
+
+
+def test_actualization_fallback_preserves_valid_fractional_total():
+    result = alean.actualize_tour({"price": 24830.72, "fuel_charge": 100.15,
+                                  "currency": "RUB", "provider": "alean"})
+    assert result["total_price"] == 24930.87
+    assert result["confirmed"] is False
+    assert result["currency"] == "RUB"
+    json.dumps(result, allow_nan=False)
+
+
 @pytest.mark.parametrize("price", ["NaN", "Infinity", "-Infinity", "1e10000"])
 def test_nonfinite_or_unrepresentable_supplier_price_is_rejected(price):
     result = alean.search_tours(settings(), Session(change={"price": price}), info(budget_open_ended=True))

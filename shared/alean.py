@@ -281,7 +281,7 @@ def search_tours(settings, session, info, *, log=None):
 
 def actualize_tour(offer):
     result = tv.actualize_tour(offer)
-    total = Decimal(str(offer.get("price") or 0)) + Decimal(str(offer.get("fuel_charge") or 0))
-    result["total_price"] = int(total) if total == total.to_integral_value() else float(total)
+    # The shared fallback already preserves kopecks and rejects invalid amounts.
+    # Do not overwrite its safe result with unchecked stored quote arithmetic.
     result["hotel_status"] = "🟡 Менеджеру нужно проверить цену и наличие через Alean SOAP Specify"
     return result
