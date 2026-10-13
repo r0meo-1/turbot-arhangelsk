@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional
 import requests
 
 from shared import tourvisor as _tourvisor
+from shared.money import money_amount, money_json
 
 logger = logging.getLogger("turbot.shared.sletat")
 
@@ -371,16 +372,8 @@ def actualize_tour(
     instead of pretending that search inventory is still current.
     """
     log = log or logger
-    base_price = _int_value(offer.get("price")) + _int_value(offer.get("fuel_charge"))
-    fallback = {
-        "status": "unknown",
-        "confirmed": False,
-        "flight_status": "🟡 Перелёт требует актуальной проверки у провайдера",
-        "hotel_status": "🟡 Наличие номера требует актуальной проверки у провайдера",
-        "total_price": base_price,
-        "currency": str(offer.get("currency") or "RUB"),
-        "actualized_at": "",
-    }
+    fallback = _tourvisor.actualize_tour(offer)
+    base_price = fallback["total_price"]
     if not settings.enabled or not settings.login or not settings.password:
         return fallback
 
@@ -420,7 +413,12 @@ def actualize_tour(
             }
 
         row = data.get("data") if isinstance(data.get("data"), list) else []
-        price = _int_value(_row(row, 19, 0), base_price)
+        price_valid = False
+        try:
+            price = money_json(money_amount(_row(row, 19, None)))
+            price_valid = True
+        except ValueError:
+            price = base_price
         currency = str(_row(row, 21, "") or offer.get("currency") or "RUB")
         hotel_code = _int_value(_row(row, 13, -1), -1)
         buy_status = _int_value(data.get("buyOnlineAvailabilityStatus"), 0)
@@ -442,18 +440,23 @@ def actualize_tour(
         elif tickets_included:
             flight_status = "🟢 Перелёт входит в актуализированный пакет"
             status = "available" if hotel_code != 1 else "unavailable"
-            confirmed = hotel_code != 1
+            confirmed = price_valid and hotel_code == 0
         else:
             flight_status = "🟡 Перелёт не входит в пакет или требует отдельной проверки"
             status = "available" if hotel_code != 1 else "unavailable"
-            confirmed = hotel_code != 1
+            confirmed = False
+
+        if status == "available" and not confirmed:
+            status = "unknown"
+        if not price_valid:
+            currency = fallback["currency"]
 
         return {
             "status": status,
             "confirmed": confirmed,
             "flight_status": flight_status,
             "hotel_status": hotel_status,
-            "total_price": price or base_price,
+            "total_price": price,
             "currency": currency,
             "actualized_at": datetime.now().strftime("%H:%M"),
             "provider": "sletat",

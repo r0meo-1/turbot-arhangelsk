@@ -14,9 +14,15 @@ for setting in ("DIALOG_TIMEOUT_HOURS", "FOLLOWUP_DELAY_HOURS", "DATA_RETENTION_
                 "PARTNER_ANALYTICS_RETENTION_DAYS", "FUNNEL_ANALYTICS_RETENTION_DAYS",
                 "OPS_METRICS_RETENTION_DAYS"):
     os.environ[setting] = "0"
-for setting in ("ADMIN_ERROR_ALERTS", "MDT_ENABLED", "VK_MDT_RETRY_ENABLED", "TUTU_ENABLED"):
+for setting in ("ADMIN_ERROR_ALERTS", "MDT_ENABLED", "VK_MDT_RETRY_ENABLED", "TUTU_ENABLED",
+                "DEMO_MODE", "VK_DEMO_MODE", "WEBSITE_LEAD_WORKER_ENABLED"):
     os.environ[setting] = "false"
 os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"turbot_suite_{os.getpid()}.sqlite")
+# Keep the Telegram/website and VK schemas separate regardless of import order.
+# Override both injected paths before collection; no customer DB is opened.
+os.environ["VK_DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"vk_turbot_suite_{os.getpid()}.sqlite")
+os.environ["CONSENT_MODE"] = "strict"
+os.environ["SYNC_COMPLETION"] = "true"
 for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
     os.environ[setting] = ""
 
@@ -25,9 +31,14 @@ for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
 os.environ["ADMIN_ID"] = "999"
 os.environ["VK_GROUP_ID"] = "999"
 os.environ["VK_SECRET_KEY"] = "vk-test-secret"
+os.environ["VK_CONFIRMATION"] = "confirm123"
+os.environ["BOT_TOKEN"] = "dummy-token"
+os.environ["VK_ACCESS_TOKEN"] = "dummy-token"
 os.environ["TELEGRAM_SECRET_TOKEN"] = "secret123"
 os.environ["AI_MODE"] = "template"
 os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"
+# Legal-page fixtures must use the repository default, not runtime branding.
+os.environ.pop("DATA_OPERATOR_NAME", None)
 
 
 _connect = socket.socket.connect

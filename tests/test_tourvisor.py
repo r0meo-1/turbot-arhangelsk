@@ -3,6 +3,7 @@
 import base64
 import json
 from datetime import date
+import pytest
 
 from shared import tourvisor
 
@@ -359,6 +360,55 @@ def test_actualize_live_uses_current_flight_price_and_availability():
     assert actual["provider"] == "tourvisor"
     assert "Места" in actual["flight_status"]
     assert actual["surcharges"] == [{"name": "service", "value": 1000}]
+
+
+@pytest.mark.parametrize("price", [None, 0, "bad", "NaN", True])
+def test_actualize_live_missing_price_cannot_confirm_search_price(price):
+    actual = tourvisor.actualize_tour_live(
+        tourvisor.TourvisorSettings(enabled=True, token="token"), None,
+        {"tour_id": "test", "price": 190000.25, "fuel_charge": 0, "currency": "RUB"},
+        request_fn=lambda *args: {"flights": [{
+            "forward": [{"noPlaces": False, "onDemand": False}],
+            "backward": [{"noPlaces": False, "onDemand": False}],
+            "price": {"value": price, "currency": "USD"},
+        }]},
+    )
+    assert actual["confirmed"] is False
+    assert actual["status"] == "unknown"
+    assert actual["total_price"] == 190000.25
+    assert actual["currency"] == "RUB"
+
+
+@pytest.mark.parametrize("fuel", [{"value": "bad", "currency": "RUB"},
+                                 {"value": 100, "currency": "EUR"},
+                                 {"value": -10, "currency": "RUB"}])
+def test_actualize_live_cannot_confirm_invalid_or_mixed_currency_charge(fuel):
+    actual = tourvisor.actualize_tour_live(
+        tourvisor.TourvisorSettings(enabled=True, token="token"), None,
+        {"tour_id": "test", "price": 190000.25, "currency": "RUB"},
+        request_fn=lambda *args: {"flights": [{
+            "forward": [{"noPlaces": False, "onDemand": False}],
+            "price": {"value": 200000, "currency": "RUB"}, "fuelCharge": fuel,
+        }]},
+    )
+    assert actual["confirmed"] is False
+    assert actual["status"] == "unknown"
+    assert actual["total_price"] == 190000.25
+
+
+def test_actualize_live_zero_charge_needs_no_currency_conversion():
+    actual = tourvisor.actualize_tour_live(
+        tourvisor.TourvisorSettings(enabled=True, token="token"), None,
+        {"tour_id": "test", "price": 190000, "currency": "RUB"},
+        request_fn=lambda *args: {"flights": [{
+            "forward": [{"noPlaces": False, "onDemand": False}],
+            "price": {"value": 1200.75, "currency": "EUR"},
+            "fuelCharge": {"value": 0, "currency": "RUB"},
+        }]},
+    )
+    assert actual["confirmed"] is True
+    assert actual["total_price"] == 1200.75
+    assert actual["currency"] == "EUR"
 
 
 def test_actualize_live_marks_no_flight_places_unavailable():

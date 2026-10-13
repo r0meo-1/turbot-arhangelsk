@@ -7,7 +7,7 @@ away.
 """
 
 import json
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 import requests
@@ -286,6 +286,40 @@ def test_search_offers_disabled_returns_none():
     off = tutu.TutuSettings(enabled=False)
     assert tutu.search_offers(off, FakeSession(), destination="Египет",
                               dates_raw="через месяц") is None
+
+
+@pytest.mark.parametrize("dates,nights,expected", [
+    ("2027-06-15", 9, "2027-06-24"),
+    ("15 июня 2027", 9, "2027-06-24"),
+    ("28 декабря 2027", "7", "2028-01-04"),
+    ("15-22 июня 2027", 9, "2027-06-22"),
+])
+def test_return_date_respects_separate_nights_and_explicit_trip_range(settings, dates, nights, expected):
+    fn = _stub([SAMPLE_SEARCH])
+    assert tutu.search_offers(settings, FakeSession(), destination="Египет",
+                             dates_raw=dates, nights=nights, request_fn=fn)
+    assert fn.seen[0][1]["return_date"] == expected
+
+
+@pytest.mark.parametrize("nights", [0, 29, True, "7-10", "не знаю"])
+def test_invalid_separate_nights_never_make_one_way_search(settings, nights):
+    fn = _stub([SAMPLE_SEARCH])
+    assert tutu.search_offers(settings, FakeSession(), destination="Египет",
+                             dates_raw="15 июня 2027", nights=nights, request_fn=fn) is None
+    assert not fn.seen
+
+
+def test_preset_nights_search_is_round_trip(settings):
+    fn = _stub([SAMPLE_SEARCH])
+    assert tutu.search_offers(settings, FakeSession(), destination="Египет",
+                             dates_raw="через месяц", nights=7, request_fn=fn)
+    args = fn.seen[0][1]
+    assert date.fromisoformat(args["return_date"]) - date.fromisoformat(args["departure_date"]) == timedelta(days=7)
+
+
+@pytest.mark.parametrize("raw", ["2026-02-30", "2025-06-15"])
+def test_invalid_or_past_iso_date_is_not_searched(raw):
+    assert tutu.resolve_dates(raw, today=date(2026, 10, 12)) == (None, None)
 
 
 def test_search_offers_skips_when_dates_unresolvable(settings):

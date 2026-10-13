@@ -7,6 +7,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
@@ -275,6 +276,50 @@ def add_tourist_temp(
     return tid
 
 
+def _selected_tour_text(selected: Any) -> str:
+    """Preserve the displayed package price and verification limits in CRM."""
+    if not isinstance(selected, dict) or not selected:
+        return ""
+    price_text = "Цена требует проверки менеджером"
+    price_valid = False
+    try:
+        price = Decimal(str(selected.get("price")))
+        fuel = Decimal(str(selected.get("fuel_charge") or 0))
+        if price.is_finite() and fuel.is_finite() and price > 0 and fuel >= 0:
+            total = price + fuel
+            amount = format(total, "f")
+            if "." in amount:
+                amount = amount.rstrip("0").rstrip(".")
+            currency = str(selected.get("currency") or "RUB").strip().upper() or "RUB"
+            suffix = "₽" if currency in {"RUB", "RUR"} else currency
+            price_text = f"{amount} {suffix} за тур"
+            price_valid = True
+    except (InvalidOperation, ValueError, TypeError):
+        pass
+
+    parts = [str(value) for value in (
+        selected.get("hotel"), selected.get("date"),
+        f"{selected.get('nights')} ночей" if selected.get("nights") else "",
+        selected.get("meal"), selected.get("room"),
+        f"Вылет: {selected['departure']}" if selected.get("departure") else "",
+        price_text,
+        f"ID {selected.get('tour_id')}" if selected.get("tour_id") else "",
+    ) if value]
+    provider = str(selected.get("provider") or "").strip().lower()
+    status = str(selected.get("actualization_status") or "").strip().lower()
+    if provider == "alean":
+        parts.append("Алеан: отель и авиабилеты; трансфер не включён. Цена и наличие требуют проверки менеджером.")
+    elif status == "unavailable":
+        parts.append("Предложение не подтвердилось; требуется проверка менеджером.")
+    elif price_valid and status == "available" and selected.get("actualization_confirmed") is True:
+        parts.append("Цена и перелёт подтверждены провайдером; окончательная проверка менеджером.")
+    else:
+        parts.append("Цена и наличие предварительные; требуют проверки менеджером.")
+    if selected.get("actualized_at"):
+        parts.append(f"Проверено: {selected['actualized_at']}")
+    return " · ".join(parts)
+
+
 def create_preorder(
     settings: MDTSettings,
     chat_id: int,
@@ -334,22 +379,9 @@ def create_preorder(
     delivery_key = str(info.get("_mdt_delivery_key") or "").strip()
     if delivery_key:
         comment_parts.append(f"ID заявки бота: {delivery_key}")
-    selected = info.get("selected_tour")
-    if isinstance(selected, dict):
-        selected_text = " · ".join(
-            str(value)
-            for value in (
-                selected.get("hotel"),
-                selected.get("date"),
-                f"{selected.get('nights')} ночей" if selected.get("nights") else "",
-                selected.get("meal"),
-                str(selected.get("price") or "") + " ₽" if selected.get("price") else "",
-                f"ID {selected.get('tour_id')}" if selected.get("tour_id") else "",
-            )
-            if value
-        )
-        if selected_text:
-            comment_parts.append(f"Выбранный тур: {selected_text}")
+    selected_text = _selected_tour_text(info.get("selected_tour"))
+    if selected_text:
+        comment_parts.append(f"Выбранный тур: {selected_text}")
 
     params: Dict[str, Any] = {
         "tourist_type": "tourist_temp",
@@ -421,18 +453,9 @@ def create_lead(
     if delivery_key:
         fields.append({"name": "ID заявки бота", "values": [delivery_key]})
 
-    selected = info.get("selected_tour")
-    if isinstance(selected, dict):
-        selected_text = " · ".join(str(value) for value in (
-            selected.get("hotel"),
-            selected.get("date"),
-            f"{selected.get('nights')} ночей" if selected.get("nights") else "",
-            selected.get("meal"),
-            str(selected.get("price") or "") + " ₽" if selected.get("price") else "",
-            f"ID {selected.get('tour_id')}" if selected.get("tour_id") else "",
-        ) if value)
-        if selected_text:
-            fields.append({"name": "Выбранный тур", "values": [selected_text]})
+    selected_text = _selected_tour_text(info.get("selected_tour"))
+    if selected_text:
+        fields.append({"name": "Выбранный тур", "values": [selected_text]})
 
     raw_contact = str(phone or "").strip()
     compact_contact = re.sub(r"[\s().-]+", "", raw_contact)
@@ -515,13 +538,9 @@ def notify_managers(
         text_parts.append(f"Человек: {info['people']}")
     if info.get("budget"):
         text_parts.append(f"Бюджет: {_budget_label(info)}")
-    selected = info.get("selected_tour")
-    if isinstance(selected, dict) and selected.get("hotel"):
-        text_parts.append(
-            f"Выбранный тур: {selected['hotel']} · "
-            f"{selected.get('date', '')} · {selected.get('price', '?')}₽ · "
-            f"ID {selected.get('tour_id', '—')}"
-        )
+    selected_text = _selected_tour_text(info.get("selected_tour"))
+    if selected_text:
+        text_parts.append(f"Выбранный тур: {selected_text}")
     text_parts.append(f"Телефон: {phone}")
 
     result = request_fn(

@@ -12,6 +12,7 @@ import os
 import re
 import json
 import base64
+import hashlib
 import hmac
 import time
 import random
@@ -20,6 +21,7 @@ import logging
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
@@ -60,6 +62,7 @@ from shared.constants import (
     CONTACT_VK_TEXT,
     POPULAR_DESTINATIONS_PLAIN,
 )
+from shared.money import money_amount, money_json
 from shared.vk_miniapp import build_open_app_button, create_blueprint
 from shared.telegram_webapp import MiniAppValidationError, normalise_source_tag
 from shared import tutu as _tutu
@@ -367,6 +370,11 @@ def _tour_search_health() -> Dict[str, Any]:
         "enabled": providers.enabled,
         "enabled_providers": providers.enabled_names(),
         "provider_order": list(TOUR_PROVIDER_ORDER),
+        "alean": {
+            "configured": bool(providers.alean.username and providers.alean.password),
+            "enabled": "alean" in providers.enabled_names(),
+            "actualization": "manager_required",
+        },
         "tourvisor": {
             "configured": bool(TOURVISOR_TOKEN),
             "enabled": bool(TOURVISOR_ENABLED),
@@ -1724,14 +1732,44 @@ def _upload_vk_message_photo(user_id: int, url: str) -> str:
         return ""
 
 
+def _tour_price_amount(offer: Dict[str, Any]) -> Decimal:
+    amount = Decimal(str(offer.get("price") or 0)) + Decimal(str(offer.get("fuel_charge") or 0))
+    if not amount.is_finite():
+        raise ValueError("Non-finite tour price")
+    return amount
+
+
 def _compact_tour_price(offer: Dict[str, Any]) -> str:
     try:
-        amount = int(offer.get("price") or 0) + int(offer.get("fuel_charge") or 0)
-    except (TypeError, ValueError):
+        amount = _tour_price_amount(offer)
+        amount = int(amount) if amount == amount.to_integral_value() else amount
+    except (TypeError, ValueError, InvalidOperation):
         amount = 0
     currency = str(offer.get("currency") or "RUB").upper()
     suffix = "₽" if currency in ("RUB", "RUR") else currency
     return f"{amount:,}".replace(",", " ") + f" {suffix}"
+
+
+def _tour_offer_key(offer: Dict[str, Any]) -> str:
+    # Bind a displayed choice, including its price, without exposing supplier IDs.
+    fields = ("provider", "provider_search_id", "tour_id", "hotel", "category", "region",
+              "date", "nights", "meal", "room", "operator", "departure", "price", "currency", "fuel_charge")
+    data = json.dumps({key: offer.get(key) for key in fields}, sort_keys=True,
+                      ensure_ascii=False, default=str).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()[:24]
+
+
+def _ensure_tour_marker(info: Dict[str, Any]) -> str:
+    marker = info.get("_tour_search_marker")
+    if not isinstance(marker, str) or not marker:
+        marker = f"{time.time_ns()}-{random.randint(1000, 9999)}"
+        info["_tour_search_marker"] = marker
+    return marker
+
+
+def _tour_select_payload(number: int, offer: Dict[str, Any], marker: Optional[str]) -> Dict[str, Any]:
+    return {"command": "tour_select", "number": number,
+            "search_marker": marker, "offer_key": _tour_offer_key(offer)}
 
 
 def send_tour_carousel(
@@ -1741,6 +1779,9 @@ def send_tour_carousel(
     active_check: Optional[Callable[[], bool]] = None,
 ) -> bool:
     """Send a native VK carousel. False lets the caller use a text fallback."""
+    with _lock:
+        live = user_data.get(user_id)
+        marker = _ensure_tour_marker(live) if live and live.get("state") == STATE_REVIEW else None
     elements = []
     for local_index, offer in enumerate(offers):
         number = offset + local_index + 1
@@ -1763,8 +1804,7 @@ def send_tour_carousel(
                 _btn(
                     f"Выбрать №{number}",
                     "primary",
-                    {"command": "tour_select", "number": number,
-                     "tour_id": offer.get("tour_id") or ""},
+                    _tour_select_payload(number, offer, marker),
                 )
             ],
         }
@@ -1931,12 +1971,16 @@ def _tour_search_wait_keyboard() -> str:
 def _tour_results_keyboard(
     select_numbers: Optional[List[int]] = None,
     selected: bool = False,
+    *,
+    offers: Optional[List[Dict[str, Any]]] = None,
+    search_marker: Optional[str] = None,
 ) -> str:
     rows: List[List[Dict[str, Any]]] = []
     if select_numbers:
         rows.append([
-            _btn(f"№{number}", "primary", {"command": "tour_select", "number": number})
-            for number in select_numbers
+            _btn(f"№{number}", "primary", _tour_select_payload(
+                number, offers[index], search_marker) if offers else {"command": "tour_select", "number": number})
+            for index, number in enumerate(select_numbers)
         ])
     rows.append([
         _btn(TOUR_CHEAPER_TEXT, "secondary"),
@@ -2863,7 +2907,10 @@ def _tour_search_wait_animation(user_id: int, marker: str, message_id: int) -> N
         time.sleep(4)
         with _lock:
             live = user_data.get(user_id)
-            active = bool(live and live.get("_tour_search_marker") == marker)
+            active = bool(
+                live and live.get("_tour_search_marker") == marker
+                and live.get("_tour_searching") and live.get("state") == STATE_REVIEW
+            )
         if not active:
             return
         send_typing(user_id)
@@ -2877,10 +2924,15 @@ def _tour_search_wait_animation(user_id: int, marker: str, message_id: int) -> N
         # Restore the final state so a late animation tick never wins the race.
         with _lock:
             live = user_data.get(user_id)
-            active = bool(live and live.get("_tour_search_marker") == marker)
-            final_text = str((live or {}).get("_tour_wait_final_text") or "")
-        if not active and final_text:
-            edit_message(user_id, message_id, final_text, keyboard=_hide_keyboard())
+            current = bool(
+                live and live.get("_tour_search_marker") == marker
+                and live.get("state") == STATE_REVIEW
+            )
+            active = bool(current and live.get("_tour_searching"))
+            final_text = str(live.get("_tour_wait_final_text") or "") if current else ""
+        if not active:
+            if final_text:
+                edit_message(user_id, message_id, final_text, keyboard=_hide_keyboard())
             return
 
 
@@ -2928,9 +2980,11 @@ def _tour_search_worker(
         if live is None or live.get("_tour_search_marker") != marker:
             return
         live.pop("_tour_searching", None)
-        live.pop("_tour_search_marker", None)
         if live.get("state") != STATE_REVIEW:
+            live.pop("_tour_search_marker", None)
             return
+        # Retain the generation after completion. A new search or parameter
+        # edit invalidates it; REVIEW alone cannot identify this result after I/O.
         final_text = (
             f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
             if result.offers else
@@ -2947,7 +3001,7 @@ def _tour_search_worker(
         )
         with _lock:
             live = user_data.get(user_id)
-            if live is None or live.get("state") != STATE_REVIEW:
+            if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
                 return
             offers = [offer.__dict__.copy() for offer in result.offers]
             live["_tour_offers_base"] = offers
@@ -2961,6 +3015,10 @@ def _tour_search_worker(
                 "⚠️ Эти варианты дороже указанного бюджета. Показываю их только по вашему запросу.",
                 keyboard=_hide_keyboard(),
             )
+        with _lock:
+            live = user_data.get(user_id)
+            if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
+                return
         _send_tour_results_page(user_id, 0)
         return
 
@@ -2971,6 +3029,10 @@ def _tour_search_worker(
         final_text,
         keyboard=_hide_keyboard(),
     )
+    with _lock:
+        live = user_data.get(user_id)
+        if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
+            return
     can_show_over = bool(
         result.search_id and snapshot.get("budget")
         and not snapshot.get("budget_open_ended")
@@ -3009,9 +3071,10 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         offers = pool[offset:offset + 3]
         live["_tour_page"] = page
         selected = bool(live.get("selected_tour"))
+        marker = _ensure_tour_marker(live)
 
     numbers = list(range(offset + 1, offset + len(offers) + 1))
-    keyboard = _tour_results_keyboard(numbers, selected=selected)
+    keyboard = _tour_results_keyboard(numbers, selected=selected, offers=offers, search_marker=marker)
     result = _tourvisor.SearchResult(
         offers=[_tourvisor.TourOffer(**offer) for offer in offers]
     )
@@ -3056,9 +3119,12 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
         "sletat": "Слетать.ру",
         "tourvisor": "Tourvisor",
         "travelata": "Travelata",
+        "alean": "Алеан",
     }.get(provider)
     if provider_label:
         parts.append(f"Провайдер: {provider_label}")
+    if provider == "alean":
+        parts.append("Отель и авиабилеты; трансфер не включён. Цена и наличие требуют проверки менеджером.")
     if offer.get("tour_id"):
         parts.append(f"ID предложения: {offer['tour_id']}")
     actualization_status = str(offer.get("actualization_status") or "").strip().lower()
@@ -3087,16 +3153,32 @@ def _budget_summary(info: Dict[str, Any]) -> str:
     return f"{prefix}{amount} ₽{suffix}"
 
 
-def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
+def _owns_tour_selection(
+    info: Optional[Dict[str, Any]],
+    selected: Dict[str, Any],
+    search_marker: Optional[str],
+    offer_key: str,
+) -> bool:
+    # Object identity also distinguishes selecting the same offer again.
+    return bool(
+        info and info.get("state") == STATE_REVIEW
+        and info.get("selected_tour") is selected
+        and info.get("_tour_search_marker") == search_marker
+        and _tour_offer_key(selected) == offer_key
+    )
+
+
+def _actualize_selected_tour_worker(
+    user_id: int,
+    expected_selection: Dict[str, Any],
+    search_marker: Optional[str],
+    offer_key: str,
+) -> None:
     with _lock:
         live = user_data.get(user_id)
-        selected = dict((live or {}).get("selected_tour") or {})
-        if (
-            live is None
-            or live.get("state") != STATE_REVIEW
-            or str(selected.get("tour_id") or "") != str(tour_id or "")
-        ):
+        if not _owns_tour_selection(live, expected_selection, search_marker, offer_key):
             return
+        selected = dict(expected_selection)
 
     actual = _tour_providers.actualize_offer(
         _tour_provider_settings(), http_session, selected, log=logger,
@@ -3104,21 +3186,24 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
 
     with _lock:
         live = user_data.get(user_id)
-        current = dict((live or {}).get("selected_tour") or {})
-        if (
-            live is None
-            or live.get("state") != STATE_REVIEW
-            or str(current.get("tour_id") or "") != str(tour_id or "")
-        ):
+        if not _owns_tour_selection(live, expected_selection, search_marker, offer_key):
             return
+        current = dict(expected_selection)
 
-        confirmed = bool(actual.get("confirmed"))
-        total_price = int(actual.get("total_price") or 0)
+        status = str(actual.get("status") or "unknown")
+        confirmed = actual.get("confirmed") is True and status == "available"
+        total_price = 0
+        try:
+            total_price = money_json(money_amount(actual.get("total_price")))
+        except ValueError:
+            confirmed = False
+            if status == "available":
+                status = "unknown"
         if confirmed and total_price > 0:
             current["price"] = total_price
             current["fuel_charge"] = 0
             current["currency"] = str(actual.get("currency") or current.get("currency") or "RUB")
-        current["actualization_status"] = str(actual.get("status") or "unknown")
+        current["actualization_status"] = status
         current["actualization_confirmed"] = confirmed
         current["actualized_at"] = str(actual.get("actualized_at") or "")
         live["selected_tour"] = current
@@ -3127,7 +3212,7 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
             for key in ("_tour_offers", "_tour_offers_base"):
                 pool = list(live.get(key) or [])
                 for item in pool:
-                    if str(item.get("tour_id") or "") == str(tour_id or ""):
+                    if _tour_offer_key(item) == offer_key:
                         item["price"] = current["price"]
                         item["fuel_charge"] = 0
                         item["currency"] = current["currency"]
@@ -3135,6 +3220,8 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
                         item["actualization_confirmed"] = True
                         item["actualized_at"] = current["actualized_at"]
                 live[key] = pool
+        current_key = _tour_offer_key(current)
+        _mark_dirty(user_id, user=False)
 
     provider = str(current.get("provider") or "").strip().lower()
     provider_label = {
@@ -3142,7 +3229,7 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
         "tourvisor": "Tourvisor",
         "travelata": "Провайдер",
     }.get(provider, "Провайдер")
-    if actual.get("confirmed"):
+    if confirmed:
         intro = f"✅ {provider_label} перепроверил выбранный тур."
         price_line = f"\n💰 Актуализированная цена: {_compact_tour_price(current)} за тур"
     elif actual.get("status") == "unavailable":
@@ -3152,26 +3239,44 @@ def _actualize_selected_tour_worker(user_id: int, tour_id: str) -> None:
         intro = "ℹ️ Автоматически подтвердить наличие сейчас не удалось."
         price_line = "\nЦена и наличие остаются предварительными до проверки менеджером."
 
-    send_message(
-        user_id,
+    message_text = (
         f"{intro}\n\n{_selected_tour_summary({'selected_tour': current})}\n\n"
         f"{actual['flight_status']}\n"
         f"{actual['hotel_status']}"
         f"{price_line}\n\n"
-        "Можно передать этот вариант Наталье для финальной проверки 👇",
+        "Можно передать этот вариант Наталье для финальной проверки 👇"
+    )
+    with _lock:
+        if not _owns_tour_selection(user_data.get(user_id), current, search_marker, current_key):
+            return
+    send_message(
+        user_id,
+        message_text,
         keyboard=_selected_tour_keyboard(),
     )
 
 
-def _select_tour(user_id: int, number: int) -> None:
+def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any]] = None) -> None:
     with _lock:
         live = user_data.get(user_id)
         pool = list((live or {}).get("_tour_offers") or [])
-        if live is None or live.get("state") != STATE_REVIEW or not (1 <= number <= len(pool)):
+        valid = bool(live and live.get("state") == STATE_REVIEW
+                     and type(number) is int and 1 <= number <= len(pool))
+        if valid and selection is not None:
+            valid = bool(
+                isinstance(selection, dict) and selection.get("command") == "tour_select"
+                and type(selection.get("number")) is int and selection["number"] == number
+                and isinstance(selection.get("search_marker"), str) and selection["search_marker"]
+                and selection["search_marker"] == live.get("_tour_search_marker")
+                and selection.get("offer_key") == _tour_offer_key(pool[number - 1])
+            )
+        if not valid:
             offer = None
         else:
             offer = dict(pool[number - 1])
             live["selected_tour"] = offer
+            search_marker = live.get("_tour_search_marker")
+            offer_key = _tour_offer_key(offer)
     if offer is None:
         send_message(user_id, "Этот вариант уже недоступен. Запустите поиск ещё раз.", keyboard=_review_keyboard())
         return
@@ -3190,11 +3295,11 @@ def _select_tour(user_id: int, number: int) -> None:
             keyboard=_hide_keyboard(),
         )
         if SYNC_COMPLETION:
-            _actualize_selected_tour_worker(user_id, str(offer.get("tour_id") or ""))
+            _actualize_selected_tour_worker(user_id, offer, search_marker, offer_key)
         else:
             threading.Thread(
                 target=_actualize_selected_tour_worker,
-                args=(user_id, str(offer.get("tour_id") or "")),
+                args=(user_id, offer, search_marker, offer_key),
                 daemon=True,
                 name=f"vk-tour-actualize-{user_id}",
             ).start()
@@ -3214,10 +3319,11 @@ def _select_tour(user_id: int, number: int) -> None:
     )
 
 
-def _offer_total_price(offer: Dict[str, Any]) -> int:
+def _offer_total_price(offer: Dict[str, Any]) -> int | float:
     try:
-        return int(offer.get("price") or 0) + int(offer.get("fuel_charge") or 0)
-    except (TypeError, ValueError):
+        amount = _tour_price_amount(offer)
+        return int(amount) if amount == amount.to_integral_value() else float(amount)
+    except (TypeError, ValueError, InvalidOperation):
         return 10**15
 
 
@@ -3477,7 +3583,7 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         re.I,
     )
     if selected_match:
-        _select_tour(user_id, int(selected_match.group(1)))
+        _select_tour(user_id, int(selected_match.group(1)), selection=message.get("_tour_select_payload"))
         return
     if text == TOUR_MORE_BUTTON_TEXT:
         _send_tour_results_page(user_id, int(info.get("_tour_page") or 0) + 1)
@@ -3486,6 +3592,8 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         _start_tour_search(user_id, info, ignore_budget=True)
         return
     if text == REVIEW_HOTEL_TEXT:
+        for key in ("_tour_searching", "_tour_search_marker", "selected_tour", "_tour_offers", "_tour_offers_base"):
+            info.pop(key, None)
         info["state"] = STATE_HOTEL
         _ask_hotel(user_id)
         return
@@ -3774,6 +3882,9 @@ def _go_back(user_id: int) -> None:
         _mark_dirty(user_id, user=False)
         send_message(user_id, "Вы на первом шаге. Можно отменить заявку кнопкой «Отмена».", keyboard=_dest_keyboard())
         return
+    if state == STATE_REVIEW:
+        for key in ("_tour_searching", "_tour_search_marker", "selected_tour", "_tour_offers", "_tour_offers_base"):
+            info.pop(key, None)
     info["state"] = previous
     if previous == STATE_DESTINATION:
         info["direct_only"] = False
@@ -4303,6 +4414,11 @@ def _process_message(message: Dict[str, Any]) -> None:
         button_payload = {}
     if not isinstance(button_payload, dict):
         button_payload = {}
+    msg.pop("_tour_select_payload", None)
+    if msg.get("payload"):
+        # Even malformed/legacy button payloads must not fall back to selecting
+        # the same ordinal from a different result. Bare numeric replies remain valid.
+        msg["_tour_select_payload"] = button_payload
     if button_payload.get("command") == "tour_select" and button_payload.get("number"):
         text = f"Выбрать №{button_payload['number']}"
     _remember_client_capabilities(user_id, message)

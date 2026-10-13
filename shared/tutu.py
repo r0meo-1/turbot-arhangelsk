@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import logging
 import threading
 import time
@@ -157,6 +158,14 @@ def resolve_dates(raw: str, today: Optional[date] = None) -> Tuple[Optional[str]
     text = (raw or "").strip().lower()
     if not text:
         return None, None
+
+    # Mini App drafts store an ISO departure date, unlike the chat's free text.
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        try:
+            exact = date.fromisoformat(text)
+        except ValueError:
+            return None, None
+        return (exact.isoformat(), None) if exact >= today else (None, None)
 
     # 1. Exact free-text range — reuse the parser already trusted by MDT.
     start, end = parse_russian_dates(raw)
@@ -421,6 +430,7 @@ def search_offers(
     *,
     destination: str,
     dates_raw: str,
+    nights: Any = None,
     origin: str = "",
     people: Any = 1,
     kids: Any = 0,
@@ -446,6 +456,14 @@ def search_offers(
     if not depart:
         log.info("Tutu search skipped: could not resolve dates from %r", dates_raw)
         return None
+
+    # Telegram collects nights separately for a departure date or date preset.
+    # An explicit trip range already supplies its own return date.
+    if not ret and nights is not None:
+        raw_nights = str(nights).strip()
+        if not re.fullmatch(r"[0-9]{1,2}", raw_nights) or not 1 <= int(raw_nights) <= 28:
+            return None
+        ret = (date.fromisoformat(depart) + timedelta(days=int(raw_nights))).isoformat()
 
     # Parameter names are fixed by the server's schema — `adults`, not
     # `passengers`. An invented name is rejected with a validation error,

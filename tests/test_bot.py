@@ -3,7 +3,6 @@
 import json
 import os
 import time
-import tempfile
 from types import SimpleNamespace
 
 # Configure the bot before it is imported.
@@ -19,10 +18,7 @@ os.environ.setdefault("TUTU_ENABLED", "false")
 os.environ.setdefault("DEMO_MODE", "false")  # tests assert on real stored values
 os.environ["CONSENT_MODE"] = "strict"  # keep classic consent in unit tests
 os.environ.setdefault("STATE_FILE", ":memory:")  # not used when save_state is mocked
-os.environ.setdefault(
-    "DATABASE_PATH",
-    os.path.join(tempfile.gettempdir(), f"turbot_test_{os.getpid()}.sqlite"),
-)
+# conftest.py sets the Telegram/website DB before any bot import.
 
 import bot
 
@@ -2227,6 +2223,7 @@ def test_tutu_search_preserves_total_budget_scope(monkeypatch):
         "destination": "Таиланд",
         "origin": "Москва",
         "dates": "2030-01-10",
+        "nights": 9,
         "people": "2",
         "kids_ages": [],
         "budget": 270000,
@@ -2235,6 +2232,7 @@ def test_tutu_search_preserves_total_budget_scope(monkeypatch):
 
     assert seen["budget"] == 270000
     assert seen["budget_is_total"] is True
+    assert seen["nights"] == 9
 
 
 # ---------------------------------------------------------------------------

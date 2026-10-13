@@ -13,6 +13,7 @@ from shared.mdt import (
     dispatch_lead,
     create_preorder,
     create_lead,
+    notify_managers,
 )
 
 
@@ -384,6 +385,85 @@ def test_create_lead_includes_selected_tour():
     assert "155000 ₽" in fields["Выбранный тур"]
     assert "ID th-6" in fields["Выбранный тур"]
 
+
+
+def _captured_mdt_selection(channel, selected):
+    payloads = {}
+    def req(method, params):
+        payloads[method] = params
+        return {"id": 321}
+    settings = MDTSettings(enabled=True, manager_ids=[17])
+    info = {"selected_tour": selected}
+    if channel == "lead":
+        create_lead(settings, 424242, info, "+70000000000", "Test", request_fn=req)
+        fields = {f["name"]: f["values"][0] for f in payloads["add-lead"]["fields"]}
+        return fields["Выбранный тур"]
+    elif channel == "preorder":
+        create_preorder(settings, 424242, info, "+70000000000", "Test", {}, request_fn=req)
+        return payloads["create-preorder"]["comment"]
+    else:
+        notify_managers(settings, 424242, info, "+70000000000", "Test", request_fn=req)
+        return payloads["send-push"]["text"]
+
+
+@pytest.mark.parametrize("channel", ["lead", "preorder", "push"])
+def test_mdt_handoff_preserves_selected_price_currency_and_verification(channel):
+    selected = {"hotel": "Synthetic Hotel", "date": "2030-09-15", "nights": 7,
+                "meal": "BB", "room": "Family", "departure": "Москва",
+                "price": 1200.25, "fuel_charge": 99.5, "currency": "EUR",
+                "tour_id": "synthetic-id", "provider": "alean"}
+    before = dict(selected)
+    text = _captured_mdt_selection(channel, selected)
+    assert "1299.75 EUR" in text
+    assert "₽" not in text
+    assert "трансфер не включён" in text.lower()
+    assert "проверки менеджером" in text.lower()
+    assert "Family" in text and "Вылет: Москва" in text
+    assert selected == before
+
+
+@pytest.mark.parametrize("channel", ["lead", "preorder", "push"])
+@pytest.mark.parametrize("currency,expected", [(None, "₽"), ("RUR", "₽"), (" usd ", "USD")])
+def test_mdt_handoff_adds_decimal_prices_without_currency_conversion(channel, currency, expected):
+    text = _captured_mdt_selection(channel, {"hotel": "Test", "price": 0.1, "fuel_charge": 0.2,
+                                            "currency": currency})
+    assert f"0.3 {expected} за тур" in text
+    assert "0.300000000" not in text
+
+
+@pytest.mark.parametrize("channel", ["lead", "preorder", "push"])
+@pytest.mark.parametrize("status,confirmed,expected", [
+    (None, False, "Цена и наличие предварительные"),
+    ("unavailable", False, "Предложение не подтвердилось"),
+    ("available", True, "Цена и перелёт подтверждены провайдером"),
+])
+def test_mdt_handoff_keeps_actualization_status(channel, status, confirmed, expected):
+    selected = {"hotel": "Test", "price": 155000, "provider": "tourvisor",
+                "actualization_status": status, "actualization_confirmed": confirmed,
+                "actualized_at": "17:20"}
+    text = _captured_mdt_selection(channel, selected)
+    assert expected in text
+    assert "проверка менеджером" in text or "проверки менеджером" in text
+    assert "17:20" in text
+
+
+@pytest.mark.parametrize("channel", ["lead", "preorder", "push"])
+def test_mdt_handoff_never_claims_alean_soap_confirmation(channel):
+    text = _captured_mdt_selection(channel, {"hotel": "Test", "price": 155000, "provider": "alean",
+                                            "actualization_status": "available", "actualization_confirmed": True})
+    assert "подтверждены провайдером" not in text
+    assert "трансфер не включён" in text
+    assert "требуют проверки менеджером" in text
+
+
+@pytest.mark.parametrize("channel", ["lead", "preorder", "push"])
+@pytest.mark.parametrize("price,fuel", [("NaN", 0), (155000, "invalid")])
+def test_mdt_handoff_does_not_present_invalid_total_as_confirmed(channel, price, fuel):
+    text = _captured_mdt_selection(channel, {"hotel": "Test", "price": price, "fuel_charge": fuel,
+                                            "actualization_status": "available", "actualization_confirmed": True})
+    assert "Цена требует проверки менеджером" in text
+    assert "подтверждены провайдером" not in text
+    assert "NaN" not in text and "invalid" not in text
 
 
 def test_create_lead_rejects_error_json_without_id():

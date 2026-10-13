@@ -3,7 +3,6 @@
 import os
 import json
 import time
-import tempfile
 import sqlite3
 
 # Configure the VK bot before it is imported.
@@ -20,13 +19,7 @@ os.environ.setdefault("VK_MDT_RETRY_ENABLED", "false")
 os.environ.setdefault("ADMIN_ERROR_ALERTS", "false")
 os.environ.setdefault("AI_MODE", "template")
 os.environ["CONSENT_MODE"] = "strict"  # classic consent in unit tests
-# Присваивание, а не setdefault: test_bot.py импортируется раньше и уже задал
-# DATABASE_PATH, из-за чего обе сюиты работали в одном файле. Миграция VK-бота
-# при этом никогда не выполнялась целиком — таблицы успевал создать Telegram-бот,
-# и опечатка в ALTER TABLE прожила до первого одиночного запуска этого файла.
-os.environ["DATABASE_PATH"] = os.path.join(
-    tempfile.gettempdir(), f"vk_turbot_test_{os.getpid()}.sqlite"
-)
+# Shared test configuration and the dedicated VK DB come from conftest.py.
 
 import vk_bot as bot
 
@@ -37,6 +30,7 @@ import pytest
 # состоянию. Ссылка берётся до подмены.
 _REAL_SEND_MESSAGE = bot.send_message
 _REAL_SEND_LEAD_TO_MDT = bot.send_lead_to_mdt
+_REAL_SAVE_STATE = bot.save_state
 
 
 @pytest.fixture(autouse=True)
@@ -948,7 +942,7 @@ def test_vk_search_replaces_review_keyboard_with_waiting_status(monkeypatch):
     assert len(started) == 2
 
 
-def test_vk_tourvisor_native_carousel_contains_selectable_tour_ids(monkeypatch):
+def test_vk_tourvisor_native_carousel_contains_bound_offer_keys(monkeypatch):
     captured = []
     offers = [{
         "hotel": "Test Hotel", "category": 4, "region": "Сиде",
@@ -956,6 +950,8 @@ def test_vk_tourvisor_native_carousel_contains_selectable_tour_ids(monkeypatch):
         "currency": "RUB", "fuel_charge": 5000, "tour_id": "tour-77",
         "picture_url": "https://example.test/hotel.jpg",
     }]
+    bot.user_data[956] = {"state": bot.STATE_REVIEW, "_tour_offers": offers,
+                          "_tour_search_marker": "current-search"}
     monkeypatch.setattr(bot, "_upload_vk_message_photo", lambda *args: "-999_123")
     monkeypatch.setattr(
         bot, "_vk_api",
@@ -972,7 +968,152 @@ def test_vk_tourvisor_native_carousel_contains_selectable_tour_ids(monkeypatch):
     assert card["photo_id"] == "-999_123"
     assert card["buttons"][0]["action"]["label"] == "Выбрать №1"
     payload = json.loads(card["buttons"][0]["action"]["payload"])
-    assert payload["tour_id"] == "tour-77"
+    assert payload["offer_key"] == bot._tour_offer_key(offers[0])
+    assert payload["search_marker"] == "current-search"
+    assert len(card["buttons"][0]["action"]["payload"].encode("utf-8")) <= 255
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *args, **kwargs: {
+        "confirmed": False, "status": "unknown", "flight_status": "", "hotel_status": ""})
+    event = _vk_message(956, "Выбрать №1")
+    event["object"]["message"]["payload"] = card["buttons"][0]["action"]["payload"]
+    bot._process_message(event)
+    assert bot.user_data[956]["selected_tour"]["tour_id"] == "tour-77"
+
+
+def test_vk_old_card_payload_cannot_select_replacement_hotel(monkeypatch):
+    user_id = 9577
+    fresh = {"hotel": "Fresh Hotel", "price": 90000, "tour_id": "fresh-id", "provider": "alean"}
+    bot.user_data[user_id] = {"state": bot.STATE_REVIEW, "_tour_search_marker": "fresh-search",
+                              "_tour_offers": [fresh]}
+    actualized = []
+    def actualize(settings, session, offer, **kwargs):
+        actualized.append(offer)
+        return {"confirmed": False, "status": "unknown", "flight_status": "", "hotel_status": ""}
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", actualize)
+    event = _vk_message(user_id, "Выбрать №1")
+    event["object"]["message"]["payload"] = json.dumps({
+        "command": "tour_select", "number": 1, "tour_id": "old-id"})
+    bot._process_message(event)
+    assert not bot.user_data[user_id].get("selected_tour")
+    assert actualized == []
+
+
+@pytest.fixture
+def rendered_tour_choices(monkeypatch):
+    user_id = 9578
+    offers = [
+        {"hotel": f"Hotel {i}", "category": 4, "region": "Сочи",
+         "date": "2030-09-15", "nights": 7, "meal": "BB", "room": "Std",
+         "operator": "Operator", "price": 90000 + i, "currency": "RUB",
+         "fuel_charge": 0, "tour_id": "shared-id", "provider": "alean"}
+        for i in range(1, 5)
+    ]
+    bot.user_data[user_id] = {"state": bot.STATE_REVIEW, "_tour_offers": offers}
+    sent, actualized = [], []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: sent.append(kwargs))
+    def actualize(settings, session, offer, **kwargs):
+        actualized.append(dict(offer))
+        return {"confirmed": False, "status": "unknown", "flight_status": "", "hotel_status": ""}
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", actualize)
+
+    def render(page=0):
+        bot._send_tour_results_page(user_id, page)
+        keyboard = json.loads(sent[-1]["keyboard"])
+        return [button["action"]["payload"] for button in keyboard["buttons"][0]]
+
+    def click(payload):
+        event = _vk_message(user_id, "№1")
+        event["object"]["message"]["payload"] = payload
+        bot._process_message(event)
+
+    return user_id, offers, actualized, render, click
+
+
+@pytest.mark.parametrize("page,index,hotel", [(0, 1, "Hotel 2"), (1, 0, "Hotel 4")])
+def test_vk_rendered_choice_selects_its_offer_on_each_page(rendered_tour_choices, page, index, hotel):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    payload = render(page)[index]
+    assert len(payload.encode("utf-8")) <= 255
+    click(payload)
+    assert bot.user_data[user_id]["selected_tour"]["hotel"] == hotel
+    assert [offer["hotel"] for offer in actualized] == [hotel]
+
+
+def test_vk_old_generation_button_preserves_current_selection(rendered_tour_choices):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    old_payload = render()[0]
+    bot.user_data[user_id]["_tour_search_marker"] = "replacement-search"
+    click(render()[1])
+    selected = dict(bot.user_data[user_id]["selected_tour"])
+    actualized.clear()
+    click(old_payload)
+    assert bot.user_data[user_id]["selected_tour"] == selected
+    assert actualized == []
+
+
+def test_vk_reordered_results_reject_old_position_and_accept_new_button(rendered_tour_choices):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    old_payload = render()[0]
+    bot.user_data[user_id]["_tour_offers"] = list(reversed(offers))
+    click(old_payload)
+    assert not bot.user_data[user_id].get("selected_tour")
+    assert actualized == []
+    click(render()[0])
+    assert bot.user_data[user_id]["selected_tour"]["hotel"] == "Hotel 4"
+    assert [offer["hotel"] for offer in actualized] == ["Hotel 4"]
+
+
+def test_vk_choice_without_supplier_id_rejects_replacement(rendered_tour_choices):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    for offer in offers:
+        offer.pop("tour_id")
+    payload = render()[0]
+    bot.user_data[user_id]["_tour_offers"] = offers[1:]
+    click(payload)
+    assert not bot.user_data[user_id].get("selected_tour")
+    assert actualized == []
+    click(render()[0])
+    assert bot.user_data[user_id]["selected_tour"]["hotel"] == "Hotel 2"
+
+
+@pytest.mark.parametrize("field,value", [
+    ("hotel", "Replacement"), ("room", "Family"), ("price", 110000),
+    ("fuel_charge", 5000), ("currency", "EUR"), ("date", "2030-09-16"),
+    ("departure", "Москва"), ("tour_id", "replacement-id"),
+])
+def test_vk_changed_offer_rejects_old_choice(rendered_tour_choices, field, value):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    payload = render()[0]
+    offers[0][field] = value
+    click(payload)
+    assert not bot.user_data[user_id].get("selected_tour")
+    assert actualized == []
+
+
+@pytest.mark.parametrize("payload", ["{", "null", "[]", "{}", '{"command":"tour_select","number":1}'])
+def test_vk_malformed_choice_cannot_fall_back_to_label_number(rendered_tour_choices, payload):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    render()
+    click(payload)
+    assert not bot.user_data[user_id].get("selected_tour")
+    assert actualized == []
+
+
+@pytest.mark.parametrize("number", [True, 1.0, "1", 0, -1, 5])
+def test_vk_invalid_choice_number_is_rejected(rendered_tour_choices, number):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    payload = json.loads(render()[0])
+    payload["number"] = number
+    click(json.dumps(payload))
+    assert not bot.user_data[user_id].get("selected_tour")
+    assert actualized == []
+
+
+def test_vk_plain_number_still_selects_current_offer(rendered_tour_choices):
+    user_id, offers, actualized, render, click = rendered_tour_choices
+    render()
+    bot._process_message(_vk_message(user_id, "2"))
+    assert bot.user_data[user_id]["selected_tour"]["hotel"] == "Hotel 2"
+    assert [offer["hotel"] for offer in actualized] == ["Hotel 2"]
 
 
 def test_vk_more_tours_pages_existing_results_without_new_search(monkeypatch):
@@ -1130,6 +1271,149 @@ def test_vk_discards_tour_result_after_user_leaves_review(monkeypatch):
 
     assert captured == []
     assert not bot.user_data[user_id].get("_tour_searching")
+
+
+@pytest.mark.parametrize("has_offers", [True, False])
+@pytest.mark.parametrize("replace_session", [True, False])
+def test_vk_old_worker_cannot_publish_after_new_search_during_wait_edit(monkeypatch, has_offers, replace_session):
+    user_id, marker = 9571, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True,
+            "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    old_offer = bot._tourvisor.TourOffer(
+        hotel="Old Hotel", category=4, region="Сочи", date="2030-09-15",
+        nights=7, meal="", room="", operator="", price=100000)
+    result = bot._tourvisor.SearchResult(offers=[old_offer] if has_offers else [], search_id=-1)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k: (result, "alean"))
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    fresh_offer = {"hotel": "Fresh Hotel", "price": 120000}
+    fresh = {"state": bot.STATE_REVIEW, "dates": "2030-10-20", "_tour_search_marker": "fresh-search",
+             "_tour_offers": [fresh_offer], "_tour_offers_base": [fresh_offer],
+             "selected_tour": fresh_offer, "_tour_provider": "fresh-provider"}
+    def edit(*args, **kwargs):
+        if replace_session:
+            bot.user_data[user_id] = dict(fresh)
+        else:
+            live.update(fresh)
+        return True
+    published = []
+    monkeypatch.setattr(bot, "edit_message", edit)
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    monkeypatch.setattr(bot, "send_message", lambda *a, **k: published.append("message"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва", "budget": 50000}, 111)
+    assert bot.user_data[user_id]["_tour_offers"] == [fresh_offer]
+    assert bot.user_data[user_id]["selected_tour"] == fresh_offer
+    assert bot.user_data[user_id]["_tour_provider"] == "fresh-provider"
+    assert bot.user_data[user_id]["_tour_search_marker"] == "fresh-search"
+    assert published == []
+
+
+def test_vk_old_worker_cannot_publish_after_edit_returns_to_review_without_search(monkeypatch):
+    user_id, marker = 9572, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 100000)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k: (bot._tourvisor.SearchResult(offers=[offer]), "alean"))
+    def edit(*args, **kwargs):
+        live.pop("_tour_search_marker", None)
+        live.update(state=bot.STATE_REVIEW, dates="2030-10-20")
+        return True
+    published = []
+    monkeypatch.setattr(bot, "edit_message", edit)
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва"}, 111)
+    assert not live.get("_tour_offers") and published == []
+
+
+@pytest.mark.parametrize("transition", ["finished", "replaced", "left_review"])
+def test_vk_wait_animation_only_restores_its_current_completed_search(monkeypatch, transition):
+    user_id, marker = 9573, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    monkeypatch.setattr(bot.time, "sleep", lambda *a: None)
+    edits = []
+    def edit(uid, mid, text, **kwargs):
+        edits.append(text)
+        if len(edits) == 1:
+            if transition != "left_review":
+                live.pop("_tour_searching", None)
+            live["_tour_wait_final_text"] = "Ready"
+            if transition == "replaced":
+                live["_tour_search_marker"] = "fresh-search"
+            elif transition == "left_review":
+                live["state"] = bot.STATE_DATES
+        return True
+    monkeypatch.setattr(bot, "edit_message", edit)
+    bot._tour_search_wait_animation(user_id, marker, 111)
+    assert len(edits) == (2 if transition == "finished" else 1)
+    assert (edits[-1] == "Ready") is (transition == "finished")
+
+
+def test_vk_hotel_edit_invalidates_pending_search_and_previous_selection(monkeypatch):
+    user_id, marker = 9574, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker,
+            "selected_tour": {"hotel": "Old Hotel"}, "_tour_offers": [{"hotel": "Old Hotel"}],
+            "_tour_offers_base": [{"hotel": "Old Hotel"}]}
+    bot.user_data[user_id] = live
+    monkeypatch.setattr(bot, "_ask_hotel", lambda *a: None)
+    monkeypatch.setattr(bot, "_ask_review", lambda *a: None)
+    def search(*a, **k):
+        bot._step_review(user_id, bot.REVIEW_HOTEL_TEXT, {}, live)
+        bot._step_hotel(user_id, "Fresh Hotel", {}, live)
+        offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 100000)
+        return bot._tourvisor.SearchResult(offers=[offer]), "alean"
+    monkeypatch.setattr(bot._tour_providers, "search_tours", search)
+    published = []
+    monkeypatch.setattr(bot, "edit_message", lambda *a, **k: published.append("edit"))
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва"}, 111)
+    assert live["hotel_query"] == "Fresh Hotel"
+    assert not live.get("_tour_searching") and not live.get("_tour_search_marker")
+    assert not live.get("_tour_offers") and not live.get("selected_tour")
+    assert published == []
+
+
+def test_vk_old_worker_stops_if_new_search_starts_during_over_budget_notice(monkeypatch):
+    user_id, marker = 9575, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker}
+    bot.user_data[user_id] = live
+    offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 100000)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k: (bot._tourvisor.SearchResult(offers=[offer]), "alean"))
+    monkeypatch.setattr(bot, "edit_message", lambda *a, **k: True)
+    fresh = {"hotel": "Fresh Hotel"}
+    def send(*a, **k):
+        live.update(_tour_search_marker="fresh-search", _tour_offers=[fresh], selected_tour=fresh)
+    monkeypatch.setattr(bot, "send_message", send)
+    published = []
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва", "_show_over_budget": True}, 111)
+    assert live["_tour_offers"] == [fresh] and live["selected_tour"] == fresh
+    assert published == []
+
+
+def test_vk_back_then_budget_edit_invalidates_pending_result(monkeypatch):
+    user_id, marker = 9576, "old-search"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker,
+            "budget": 100000, "selected_tour": {"hotel": "Old Hotel"},
+            "_tour_offers": [{"hotel": "Old Hotel"}], "_tour_offers_base": [{"hotel": "Old Hotel"}]}
+    bot.user_data[user_id] = live
+    monkeypatch.setattr(bot, "_prompt_for_state", lambda *a: None)
+    monkeypatch.setattr(bot, "_ask_review", lambda *a: None)
+    def search(*a, **k):
+        bot._go_back(user_id)
+        assert live["state"] == bot.STATE_BUDGET
+        bot._step_budget(user_id, "50000", {}, live)
+        offer = bot._tourvisor.TourOffer("Old Hotel", 4, "Сочи", "2030-09-15", 7, "", "", "", 80000)
+        return bot._tourvisor.SearchResult(offers=[offer]), "alean"
+    monkeypatch.setattr(bot._tour_providers, "search_tours", search)
+    published = []
+    monkeypatch.setattr(bot, "edit_message", lambda *a, **k: published.append("edit"))
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda *a: published.append("page"))
+    bot._tour_search_worker(user_id, marker, {"origin": "Москва", "budget": 100000}, 111)
+    assert live["budget"] == 50000 and live["state"] == bot.STATE_REVIEW
+    assert not live.get("_tour_searching") and not live.get("_tour_search_marker")
+    assert not live.get("_tour_offers") and not live.get("selected_tour")
+    assert published == []
 
 
 def test_vk_undecided_destination_marks_consultation(client):
@@ -2369,6 +2653,175 @@ def test_vk_ops_alert_uses_stable_cooldown_key(monkeypatch):
     assert "failed=1" in payload["text"]
 
 
+@pytest.fixture
+def actualization_choices(monkeypatch):
+    user_id = 9631
+    offers = [
+        {"hotel": f"Hotel {i}", "category": 4, "region": "Сочи",
+         "date": "2030-09-15", "nights": 7, "meal": "BB", "room": "Std",
+         "operator": "Operator", "price": 90000 + i, "currency": "RUB",
+         "fuel_charge": 0, "tour_id": "shared-id", "provider": "tourvisor",
+         "provider_search_id": i}
+        for i in range(1, 3)
+    ]
+    bot.user_data[user_id] = {"state": bot.STATE_REVIEW, "_tour_search_marker": "search-one",
+                              "_tour_offers": offers, "_tour_offers_base": [dict(o) for o in offers]}
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: sent.append(text))
+    result = {"status": "available", "confirmed": True, "total_price": 120000,
+              "currency": "RUB", "actualized_at": "17:20", "flight_status": "OK", "hotel_status": "OK"}
+    return user_id, offers, sent, result
+
+
+@pytest.mark.parametrize("change", ["other-offer", "new-search", "same-offer-reselected"])
+def test_vk_late_actualization_cannot_change_replacement_selection(actualization_choices, monkeypatch, change):
+    user_id, offers, sent, result = actualization_choices
+    replacement = {}
+    def actualize(*args, **kwargs):
+        live = bot.user_data[user_id]
+        replacement.update(offers[1] if change == "other-offer" else live["selected_tour"])
+        if change == "new-search":
+            live["_tour_search_marker"] = "search-two"
+        else:
+            live["selected_tour"] = dict(replacement)
+        return result
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", actualize)
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    bot._select_tour(user_id, 1)
+    assert bot.user_data[user_id]["selected_tour"] == replacement
+    assert [o["price"] for o in offers] == [90001, 90002]
+    assert not any("перепроверил выбранный тур" in text for text in sent)
+
+
+@pytest.mark.parametrize("number", [1, 2])
+def test_vk_queued_old_actualization_does_not_query_new_selection(actualization_choices, monkeypatch, number):
+    user_id, offers, sent, result = actualization_choices
+    jobs, queried = [], []
+    class QueuedThread:
+        def __init__(self, *, target, args, **kwargs):
+            self.job = (target, args)
+        def start(self):
+            jobs.append(self.job)
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", False)
+    monkeypatch.setattr(bot.threading, "Thread", QueuedThread)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *args, **kwargs: queried.append(args[2]) or result)
+    bot._select_tour(user_id, 1)
+    bot._select_tour(user_id, number)
+    jobs[0][0](*jobs[0][1])
+    assert queried == []
+    assert bot.user_data[user_id]["selected_tour"]["hotel"] == f"Hotel {number}"
+    jobs[1][0](*jobs[1][1])
+    assert [o["hotel"] for o in queried] == [f"Hotel {number}"]
+    assert bot.user_data[user_id]["selected_tour"]["price"] == 120000
+
+
+@pytest.mark.parametrize("shared_pool", [False, True])
+def test_vk_actualization_updates_only_matching_offer_in_both_pools(actualization_choices, monkeypatch, shared_pool):
+    user_id, offers, sent, result = actualization_choices
+    if shared_pool:
+        bot.user_data[user_id]["_tour_offers_base"] = offers
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *args, **kwargs: result)
+    bot._select_tour(user_id, 1)
+    assert bot.user_data[user_id]["selected_tour"]["price"] == 120000
+    for pool in (offers, bot.user_data[user_id]["_tour_offers_base"]):
+        assert [o["price"] for o in pool] == [120000, 90002]
+        assert not pool[1].get("actualization_confirmed")
+
+
+@pytest.mark.parametrize("field,value", [("price", 95000), ("room", "Family"), ("provider_search_id", 999)])
+def test_vk_actualization_rejects_mutated_selection(actualization_choices, monkeypatch, field, value):
+    user_id, offers, sent, result = actualization_choices
+    def actualize(*args, **kwargs):
+        bot.user_data[user_id]["selected_tour"][field] = value
+        return result
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", actualize)
+    bot._select_tour(user_id, 1)
+    current = bot.user_data[user_id]["selected_tour"]
+    assert current[field] == value
+    assert not current.get("actualization_confirmed")
+    assert [o["price"] for o in offers] == [90001, 90002]
+    assert not any("перепроверил выбранный тур" in text for text in sent)
+
+
+@pytest.mark.parametrize("change", ["new-search", "reselected", "mutated"])
+def test_vk_actualization_checks_ownership_before_confirmation_message(actualization_choices, monkeypatch, change):
+    user_id, offers, sent, result = actualization_choices
+    ready = []
+    real_summary = bot._selected_tour_summary
+    def actualize(*args, **kwargs):
+        ready.append(True)
+        return result
+    def summary(info):
+        text = real_summary(info)
+        if ready:
+            live = bot.user_data[user_id]
+            if change == "new-search":
+                live["_tour_search_marker"] = "search-two"
+            elif change == "reselected":
+                live["selected_tour"] = dict(offers[1])
+            else:
+                live["selected_tour"]["room"] = "Family"
+        return text
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", actualize)
+    monkeypatch.setattr(bot, "_selected_tour_summary", summary)
+    bot._select_tour(user_id, 1)
+    assert ready
+    assert not any("перепроверил выбранный тур" in text for text in sent)
+
+
+def test_vk_completed_actualization_survives_session_restore(actualization_choices, monkeypatch):
+    user_id, offers, sent, result = actualization_choices
+    bot._dirty_sessions.discard(user_id)
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *args, **kwargs: result)
+    bot._select_tour(user_id, 1)
+    _REAL_SAVE_STATE()
+    bot.user_data.pop(user_id)
+    restored = bot._restore_session_from_db(user_id)
+    assert restored["selected_tour"]["price"] == 120000
+    assert restored["selected_tour"]["actualization_confirmed"] is True
+    assert restored["selected_tour"]["actualized_at"] == "17:20"
+
+
+@pytest.mark.parametrize("price", [None, 0, -1, "bad", "NaN", True])
+def test_vk_invalid_actualization_cannot_confirm_cached_price(actualization_choices, monkeypatch, price):
+    user_id, offers, sent, result = actualization_choices
+    result["total_price"] = price
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *args, **kwargs: result)
+    bot._select_tour(user_id, 1)
+    current = bot.user_data[user_id]["selected_tour"]
+    assert current["price"] == 90001
+    assert current["actualization_confirmed"] is False
+    assert current["actualization_status"] == "unknown"
+    assert not any("Актуализированная цена" in text for text in sent)
+
+
+def test_vk_fractional_live_price_survives_provider_selection_and_restore(actualization_choices, monkeypatch):
+    user_id, offers, sent, result = actualization_choices
+    def actualize(settings, session, offer, **kwargs):
+        return bot._tourvisor.actualize_tour_live(
+            bot._tourvisor.TourvisorSettings(enabled=True, token="token"), None, offer,
+            request_fn=lambda *args: {"flights": [{
+                "forward": [{"noPlaces": False, "onDemand": False}],
+                "backward": [{"noPlaces": False, "onDemand": False}],
+                "price": {"value": 90001.25, "currency": "RUB"},
+                "fuelCharge": {"value": 5000.5, "currency": "RUB"},
+            }]},
+        )
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", actualize)
+    bot._select_tour(user_id, 1)
+    assert bot.user_data[user_id]["selected_tour"]["price"] == 95001.75
+    _REAL_SAVE_STATE()
+    bot.user_data.pop(user_id)
+    restored = bot._restore_session_from_db(user_id)
+    assert restored["selected_tour"]["price"] == 95001.75
+
+
 def test_vk_sletat_actualization_updates_selected_price(monkeypatch):
     sent = []
     user_id = 963
@@ -2415,7 +2868,8 @@ def test_vk_sletat_actualization_updates_selected_price(monkeypatch):
         lambda uid, text, **kwargs: sent.append(text),
     )
 
-    bot._actualize_selected_tour_worker(user_id, selected["tour_id"])
+    current_selection = bot.user_data[user_id]["selected_tour"]
+    bot._actualize_selected_tour_worker(user_id, current_selection, None, bot._tour_offer_key(current_selection))
 
     current = bot.user_data[user_id]["selected_tour"]
     assert current["price"] == 225500

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 from typing import Any
+import pytest
 
 from shared import sletat
 from shared import tour_providers
@@ -514,6 +515,27 @@ def test_provider_metrics_failure_never_blocks_search(monkeypatch):
     assert provider == "tourvisor"
     assert result.offers == [expected]
 
+
+
+@pytest.mark.parametrize("price,tickets,hotel,expected_price,confirmed", [
+    (None, True, 0, 219000.25, False), (0, True, 0, 219000.25, False),
+    ("bad", True, 0, 219000.25, False), ("NaN", True, 0, 219000.25, False),
+    (225500.75, True, 0, 225500.75, True), (225500, False, 0, 225500, False),
+    (225500, True, 2, 225500, False), (225500, True, -1, 225500, False),
+])
+def test_sletat_requires_fresh_price_and_complete_inventory(monkeypatch, price, tickets, hotel, expected_price, confirmed):
+    row = [None] * 40
+    row[12], row[13], row[19], row[21] = tickets, hotel, price, "RUB"
+    monkeypatch.setattr(sletat, "_request", lambda *args: {
+        "isFound": True, "buyOnlineAvailabilityStatus": 1, "data": row})
+    actual = sletat.actualize_tour(
+        sletat.SletatSettings(enabled=True, login="agency", password="dummy"), None,
+        {"tour_id": "sletat:4:1792097464", "provider_search_id": 321,
+         "price": 219000.25, "currency": "RUB"},
+    )
+    assert actual["confirmed"] is confirmed
+    assert actual["status"] == ("available" if confirmed else "unknown")
+    assert actual["total_price"] == expected_price
 
 
 def test_sletat_actualize_price_uses_offer_provenance():

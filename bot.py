@@ -58,6 +58,8 @@ from shared.templates import template_selection as _template_selection
 from shared.privacy import consent_text as _shared_consent_text, privacy_text as _shared_privacy_text
 from shared.log_privacy import correlation_id as _log_correlation
 from shared import tutu as _tutu
+from shared import alean as _alean
+from shared import tourvisor as _tourvisor
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared.ai_provider import build_selection_provider
@@ -4348,6 +4350,37 @@ def _send_ai_blurb(chat_id: int, info: Dict[str, Any]) -> None:
 SYNC_COMPLETION = os.getenv("SYNC_COMPLETION", "").lower().strip() in ("1", "true", "yes")
 
 
+def _alean_search(info: Dict[str, Any]) -> Optional[Any]:
+    """Opt-in package search; keep contact data out of the supplier boundary."""
+    settings = _alean.AleanSettings.from_env()
+    order = os.getenv("TOUR_PROVIDER_ORDER", "").lower().split(",")
+    if not settings.enabled or not settings.username or not settings.password or "alean" not in {x.strip() for x in order}:
+        return None
+    query = {key: info[key] for key in (
+        "destination", "origin", "dates", "nights", "people", "kids_ages",
+        "budget", "budget_scope", "budget_open_ended", "direct_only", "needs_consultation",
+    ) if key in info}
+    # Telegram asks for nights separately unless the user supplied trip dates.
+    query["dates_are_trip"] = _duration_from_dates(str(info.get("dates") or "")) is not None
+    try:
+        return _alean.search_tours(settings, telegram_session, query, log=logger)
+    except Exception as exc:
+        logger.warning("Alean Telegram search failed (%s)", type(exc).__name__)
+        return None
+
+
+def _send_alean_results(chat_id: int, result: Any, client_name: Optional[str]) -> None:
+    """Send indicative package offers as plain text, with a manager handoff."""
+    shown = _tourvisor.SearchResult(offers=result.offers[:3])
+    text = _tourvisor.format_client_message(shown, max_len=3000)
+    # Always retain this notice even when unusually long supplier fields truncate.
+    text += "\n\nАлеан: отель и авиабилеты; трансфер не включён. Цена и наличие требуют проверки менеджером. Менеджер свяжется с вами по заявке."
+    send_message(chat_id, text)
+    manager_text = f"По заявке от {str(client_name or 'Клиент')[:100]} (chat {chat_id}):\n{text}\nПроверьте выбранный тур в Алеан перед подтверждением (SOAP Specify)."
+    for recipient in LEAD_NOTIFY_IDS:
+        send_message(recipient, manager_text)
+
+
 def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
     """Live transport search for a completed lead. Never raises."""
     if not TUTU_ENABLED:
@@ -4361,6 +4394,7 @@ def _tutu_search(info: Dict[str, Any]) -> Optional[Any]:
             telegram_session,
             destination=info.get("destination", ""),
             dates_raw=info.get("dates", ""),
+            nights=info.get("nights"),
             origin=info.get("origin", ""),
             people=_adults,
             kids=_children,
@@ -4398,6 +4432,11 @@ def _post_completion_side_effects(
     """MDT push + live offers + AI blurb — off the webhook critical path."""
     try:
         send_lead_to_mdt(chat_id, info, phone, client_name)
+
+        package_result = _alean_search(info)
+        if package_result and package_result.offers:
+            _send_alean_results(chat_id, package_result, client_name)
+            return
 
         result = _tutu_search(info)
         client_text = ""
