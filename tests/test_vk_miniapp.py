@@ -63,7 +63,8 @@ def test_reject_trip(change):
         validate_vk_trip(dict(payload(), **change))
 
 
-def test_draft_api_and_static():
+def test_draft_api_and_static(monkeypatch):
+    monkeypatch.delenv("DATA_OPERATOR_NAME", raising=False)
     saved = []
     app = Flask(__name__)
     app.register_blueprint(create_blueprint(lambda uid, info: saved.append((uid, info)), lambda: (SECRET, '123', 999)))

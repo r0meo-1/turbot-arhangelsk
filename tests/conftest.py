@@ -17,6 +17,9 @@ for setting in ("DIALOG_TIMEOUT_HOURS", "FOLLOWUP_DELAY_HOURS", "DATA_RETENTION_
 for setting in ("ADMIN_ERROR_ALERTS", "MDT_ENABLED", "VK_MDT_RETRY_ENABLED", "TUTU_ENABLED"):
     os.environ[setting] = "false"
 os.environ["DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"turbot_suite_{os.getpid()}.sqlite")
+# VK prefers its channel-specific path over DATABASE_PATH. Pin both so a
+# deployment setting cannot send test imports to a live or unavailable DB.
+os.environ["VK_DATABASE_PATH"] = str(Path(tempfile.gettempdir()) / f"vk_turbot_suite_{os.getpid()}.sqlite")
 for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
     os.environ[setting] = ""
 
@@ -24,6 +27,7 @@ for setting in ("BOT_DISPLAY_NAME", "BOT_SHORT_DESCRIPTION", "BOT_DESCRIPTION"):
 # Do not use setdefault here: production .env values must never leak into tests.
 os.environ["ADMIN_ID"] = "999"
 os.environ["VK_GROUP_ID"] = "999"
+os.environ["VK_CONFIRMATION"] = "confirm123"
 os.environ["VK_SECRET_KEY"] = "vk-test-secret"
 os.environ["TELEGRAM_SECRET_TOKEN"] = "secret123"
 os.environ["AI_MODE"] = "template"
