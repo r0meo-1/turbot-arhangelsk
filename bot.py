@@ -4663,8 +4663,9 @@ def alean_miniapp_search():
     try:
         result = _alean_readonly.search(body.get("query"), mode=mode, scenario=body.get("scenario", "success"))
         return _miniapp_json(result, 200 if result["ok"] else 503)
-    except _alean_readonly.ValidationError as exc:
-        return _miniapp_json({"ok": False, "state": "validation", "error": str(exc)}, 400)
+    except _alean_readonly.ValidationError:
+        return _miniapp_json({"ok": False, "state": "validation",
+            "error": "Проверьте направление в России, даты (1–28 ночей), состав туристов и бюджет."}, 400)
     except Exception:
         return _miniapp_json({"ok": False, "state": "error", "error": "Алеан временно недоступен."}, 503)
     finally:

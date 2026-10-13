@@ -7,7 +7,9 @@ from typing import Dict, List, Optional, Tuple
 
 # Возраст в месяцах переводится в полные годы до разбора обычного списка.
 _UNDER_ONE = re.compile(r"(?:до\s*года|меньше\s*года|полгода|грудной|грудничок|младенец)", re.I)
-_SPLIT_AGES = re.compile(r"[,;/]|\s+и\s+|\n")
+# Whitespace is stripped from each chunk. Fixed-width lookarounds keep the
+# conjunction delimiter linear even for repeated spaces in a rejected answer.
+_SPLIT_AGES = re.compile(r"[,;/\n]|(?<=\s)и(?=\s)")
 _NO_KIDS = re.compile(
     r"\s*(0+|нет(\s+детей)?|нету|неа|без\s+детей|детей\s+нет|не\s+едут|[-—])\s*", re.I
 )

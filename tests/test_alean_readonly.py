@@ -8,6 +8,8 @@ import pytest
 from shared import alean_readonly as search
 from shared import tourvisor as tv
 from shared.telegram_alean_search import AleanDialog
+from shared.dates import parse_russian_dates
+from shared.validation import parse_kids_ages
 
 
 def query(**updates):
@@ -15,6 +17,11 @@ def query(**updates):
     return dict(kind="tour", destination="Сочи", arrival=start.isoformat(),
                 departure=(start + timedelta(days=7)).isoformat(), adults=2,
                 children_ages=[7], budget=150000, origin="Москва", **updates)
+
+
+def test_existing_date_and_age_formats_keep_whitespace_tolerant_parsing():
+    assert parse_russian_dates("1" + " " * 80 + "—" + " " * 80 + "2 июня 2030") == ("2030-06-01", "2030-06-02")
+    assert parse_kids_ages("5" + " " * 200 + "и" + " " * 200 + "9") == (True, [5, 9], "")
 
 
 @pytest.mark.parametrize("kind", ["hotel", "tour"])
