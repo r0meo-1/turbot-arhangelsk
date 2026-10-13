@@ -1,5 +1,11 @@
 # Alean in the Telegram bot and Mini App
 
+The designated demo bot can also run this read-only flow on **Telegram
+Serverless**, without a VPS. See [the native port, safeguards, deployment and
+rollback instructions](../serverless-alean-demo/README.md). That deployment
+uses an immutable server-side `ALEAN_DEMO_ONLY=true` constant, fictional
+inventory only, and the authenticated official Mini App SDK transport.
+
 ## What is implemented
 
 The main Python TourBot/TurBot (`@apreltour_bot`) has an independent, read-only

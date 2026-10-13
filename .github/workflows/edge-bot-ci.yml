@@ -15,6 +15,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Set up Node for Telegram Serverless demo contracts
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Alean Serverless demo contracts and static build
+        run: |
+          npm --prefix serverless-alean-demo test
+          npm --prefix serverless-alean-demo run build
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:

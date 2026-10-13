@@ -213,3 +213,47 @@ def test_telegram_real_handler_preview_search_back_cancel_failures(demo_server):
         last_button("Отмена")
         pw_api.expect(page.locator(".message.bot").last).to_contain_text("Ничего не отправлено")
         pw_api.expect(page.locator("#safety")).to_have_text("Реальных лидов: 0")
+
+
+@pytest.mark.parametrize("scenario", ["success", "empty", "error", "timeout"])
+def test_serverless_miniapp_sdk_transport_and_navigation(demo_server, scenario):
+    """Official SDK call contract is stubbed; this is not Telegram authentication."""
+    with browser_page() as page:
+        def static(route):
+            filename = route.request.url.split("?")[0].rsplit("/", 1)[-1] or "alean.html"
+            assert filename in {"alean.html", "alean.js", "alean.css", "styles.css"}
+            route.fulfill(path=str(ROOT / "miniapp" / filename))
+        page.route("https://app8886586430.tgcloud.ai/**", static)
+        page.add_init_script("""window.__sdkCalls=[];window.Telegram.WebApp.Serverless={
+          call(name,input,callback){window.__sdkCalls.push({name,input});window.__sdkCallback=callback}
+        };""")
+        page.goto("https://app8886586430.tgcloud.ai/")
+        assert page.locator('#mode option[value="live"]').is_disabled()
+        page.locator("#ages").fill("7")
+        page.get_by_label("Демо-сценарий").select_option(scenario)
+        review(page); page.get_by_role("button", name="Найти варианты").click()
+        pw_api.expect(page.locator("#search-status")).to_contain_text("Ищем")
+        call = page.evaluate("window.__sdkCalls.at(-1)")
+        assert call["name"] == "aleanSearch"
+        assert call["input"]["mode"] == "demo"
+        assert set(call["input"]) == {"query", "mode", "scenario"}
+        with requests.post(demo_server + "/miniapp/alean/search", json=call["input"], timeout=5) as response:
+            result = response.json()
+        page.evaluate("result=>window.__sdkCallback(null,result)", result)
+        if scenario == "success":
+            pw_api.expect(page.locator(".offer-card")).to_have_count(3)
+            assert page.get_by_role("button", name="Бронирование недоступно").first.is_disabled()
+            capture(page, "serverless-sdk-results.png")
+        elif scenario == "empty":
+            pw_api.expect(page.locator("#search-status")).to_contain_text("не найдено")
+        else:
+            pw_api.expect(page.get_by_role("button", name="Повторить поиск")).to_be_visible()
+            page.get_by_role("button", name="Повторить поиск").click()
+            assert len(page.evaluate("window.__sdkCalls")) == 2
+        page.get_by_role("button", name="← Назад", exact=True).click()
+        assert page.locator("#ages").input_value() == "7"
+        review(page); page.get_by_role("button", name="Найти варианты").click()
+        page.get_by_role("button", name="Отмена", exact=True).click()
+        page.evaluate("result=>window.__sdkCallback(null,result)", result)
+        pw_api.expect(page.locator("#alean-results")).to_be_hidden()
+        pw_api.expect(page.locator("#cancel-status")).to_contain_text("Ничего не отправлено")

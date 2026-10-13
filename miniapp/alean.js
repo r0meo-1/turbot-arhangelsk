@@ -2,12 +2,30 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const tg = window.Telegram?.WebApp;
+  const serverless = window.location.hostname.endsWith('.tgcloud.ai');
   const localEndpoint = window.location.pathname.startsWith('/miniapp/');
   const endpoint = localEndpoint ? new URL('/miniapp/alean/search', window.location.origin).href
     : 'https://bot.r0meo1.ru/miniapp/alean/search';
   let query = null;
   let controller = null;
   let generation = 0;
+  if (serverless) {
+    const liveOption = $('mode').querySelector('[value="live"]');
+    liveOption.disabled = true; liveOption.hidden = true;
+    $('mode').value = 'demo';
+  }
+  const serverlessRequest = (payload, signal) => new Promise((resolve, reject) => {
+    const call = tg?.Serverless?.call;
+    if (!call) { reject(new Error('Откройте демо Mini App из Telegram для авторизации.')); return; }
+    const abort = () => reject(new DOMException('Search cancelled', 'AbortError'));
+    signal.addEventListener('abort', abort, {once:true});
+    call.call(tg.Serverless, 'aleanSearch', payload, (error, result) => {
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) return;
+      if (error) { reject(new Error(error.message || 'Не удалось выполнить демо-поиск.')); return; }
+      resolve({response:{ok:true},result});
+    });
+  });
   const iso = (date) => `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
   const today = new Date(); today.setHours(0,0,0,0);
   const arrival = new Date(today); arrival.setDate(arrival.getDate()+30);
@@ -79,10 +97,15 @@
     const timer = setTimeout(() => requestController.abort(), 45000);
     try {
       if ($('mode').value === 'live' && !tg?.initData) throw new Error('Для живого поиска откройте приложение из Telegram. Пока доступно демо.');
-      const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'},
-        signal:requestController.signal, body:JSON.stringify({query, mode:$('mode').value, scenario:$('scenario').value,
-          ...($('mode').value === 'live' ? {initData:tg.initData} : {})})});
-      const result = await response.json();
+      const payload = {query,mode:$('mode').value,scenario:$('scenario').value};
+      let response, result;
+      if (serverless) ({response,result} = await serverlessRequest(payload, requestController.signal));
+      else {
+        response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'},
+          signal:requestController.signal, body:JSON.stringify({...payload,
+            ...($('mode').value === 'live' ? {initData:tg.initData} : {})})});
+        result = await response.json();
+      }
       if (current !== generation) return;
       if (!response.ok || !result.ok) throw new Error(result.error || 'Алеан временно недоступен.');
       $('result-notice').textContent = result.notice;
