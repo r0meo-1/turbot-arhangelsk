@@ -1741,9 +1741,8 @@ def _tour_price_amount(offer: Dict[str, Any]) -> Decimal:
 
 def _compact_tour_price(offer: Dict[str, Any]) -> str:
     try:
-        amount = _tour_price_amount(offer)
-        amount = int(amount) if amount == amount.to_integral_value() else amount
-    except (TypeError, ValueError, InvalidOperation):
+        amount = money_json(money_amount(offer.get("price") or 0, allow_zero=True) + money_amount(offer.get("fuel_charge") or 0, allow_zero=True))
+    except (TypeError, ValueError):
         amount = 0
     currency = str(offer.get("currency") or "RUB").upper()
     suffix = "₽" if currency in ("RUB", "RUR") else currency
@@ -2975,6 +2974,11 @@ def _tour_search_worker(
         error="; ".join(result.error for result in results if result.error),
         search_id=next((result.search_id for result in results if result.search_id), None),
     )
+    search_failed = not result.offers and any(item.error for item in results)
+    catalog_mismatch = search_failed and "Направление или город вылета не найден в Alean" in result.error
+    dates_need_detail = not result.offers and not result.search_id and any(
+        hint in result.error for hint in ("Для Alean нужны точные даты", "Для Alean сузьте диапазоны")
+    )
     with _lock:
         live = user_data.get(user_id)
         if live is None or live.get("_tour_search_marker") != marker:
@@ -2988,6 +2992,9 @@ def _tour_search_worker(
         final_text = (
             f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
             if result.offers else
+            "📅 Для поиска нужно уточнить даты." if dates_need_detail else
+            "🔎 Поиск не выполнен — нужно уточнить параметры." if catalog_mismatch else
+            "⚠️ Поиск временно недоступен. Повторите попытку позже." if search_failed else
             "🔎 Поиск завершён. Готовых вариантов по заданным параметрам не нашлось."
         )
         live["_tour_wait_final_text"] = final_text
@@ -3034,10 +3041,28 @@ def _tour_search_worker(
         if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
             return
     can_show_over = bool(
-        result.search_id and snapshot.get("budget")
+        not search_failed and result.search_id and snapshot.get("budget")
         and not snapshot.get("budget_open_ended")
     )
-    if can_show_over:
+    if dates_need_detail:
+        message_text = (
+            "Для поиска в Алеан нужна точная дата вылета или диапазон не более четырёх дней.\n\n"
+            "Нажмите «📅 Даты» и укажите точную дату вылета. "
+            "Если выбрали диапазон ночей, он тоже должен содержать не более четырёх значений. "
+            "Длительность поездки можно изменить через «◀️ Назад»."
+        )
+    elif catalog_mismatch:
+        message_text = (
+            "Выбранное направление или город вылета не доступны в текущем автоматическом поиске Алеан.\n\n"
+            "Нажмите «◀️ Назад», чтобы изменить параметры, либо попросите помощи менеджера. "
+            "Это ограничение поиска, а не подтверждённое отсутствие туров."
+        )
+    elif search_failed:
+        message_text = (
+            "Не удалось получить ответ от сервиса поиска. Наличие туров пока не проверено.\n\n"
+            "Повторите поиск позже или попросите помощи менеджера."
+        )
+    elif can_show_over:
         message_text = (
             f"До {_budget_summary(snapshot).replace('до ', '', 1)} вариантов не нашлось.\n\n"
             "Могу отдельно показать ближайшие предложения дороже бюджета."
@@ -3319,11 +3344,10 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
     )
 
 
-def _offer_total_price(offer: Dict[str, Any]) -> int | float:
+def _offer_total_price(offer: Dict[str, Any]) -> int:
     try:
-        amount = _tour_price_amount(offer)
-        return int(amount) if amount == amount.to_integral_value() else float(amount)
-    except (TypeError, ValueError, InvalidOperation):
+        return money_json(money_amount(offer.get("price") or 0, allow_zero=True) + money_amount(offer.get("fuel_charge") or 0, allow_zero=True))
+    except (TypeError, ValueError):
         return 10**15
 
 
