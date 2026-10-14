@@ -64,14 +64,14 @@ export async function handle(deps, kind, input, ctx) {
       saved = await db.run('INSERT INTO alean_readonly_demo_sessions (chat_id,version,payload,expires) VALUES (:id,:version,:payload,:expires) ON CONFLICT(chat_id) DO NOTHING',params);
     }
     if (!saved.rowsAffected) continue;
-    if(outcome.loading)await api.sendMessage({chat_id:chatId,text:'Демо Алеан: ищем вымышленные варианты…'});
-    await deliver(db,api,chatId,updateId,next,outcome.notice);
+    await deliver(db,api,chatId,updateId,next,outcome.notice,outcome.loading);
     return;
   }
   throw new Error('Concurrent session update; retry delivery');
 }
-async function deliver(db,api,chatId,version,state,notice) {
+async function deliver(db,api,chatId,version,state,notice,loading=false) {
   try {
+    if(loading)await api.sendMessage({chat_id:chatId,text:'Демо Алеан: ищем вымышленные варианты…'});
     await api.sendMessage({chat_id:chatId,...render(state,version,notice)});
   } catch (error) {
     await db.run('UPDATE alean_readonly_demo_sessions SET payload=:payload WHERE chat_id=:id AND version=:version',{
