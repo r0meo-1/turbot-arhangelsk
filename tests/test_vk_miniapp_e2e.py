@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import hmac
+import os
+from pathlib import Path
 from contextlib import ExitStack
 import time
 from urllib.parse import urlencode
@@ -23,6 +25,85 @@ GROUP_ID = 240310110
 USER_ID = 424242
 REVIEW_COMMAND = "Проверить заявку"
 REVIEW_PAYLOAD = {"command": "miniapp_review", "version": 1}
+
+
+def _launch_browser(pw):
+    channel = os.getenv("VK_E2E_BROWSER", "msedge")
+    return pw.chromium.launch(channel=None if channel == "chromium" else channel, headless=True)
+
+
+@pytest.fixture(autouse=True)
+def local_bridge_transport(monkeypatch):
+    """Exercise the app's Bridge contract without a real VK host transport."""
+    original = playwright_sync.BrowserContext.new_page
+
+    def new_page(context, *args, **kwargs):
+        page = original(context, *args, **kwargs)
+        page.route("**/vk-bridge.js", lambda route: route.fulfill(
+            content_type="application/javascript",
+            body="window.vkBridge = {send: () => Promise.resolve({})};",
+        ))
+        static = Path(__file__).resolve().parents[1] / "vk-miniapp"
+        for name, content_type in (("app.js", "application/javascript"), ("styles.css", "text/css")):
+            page.route(f"**/vk/miniapp/{name}*", (lambda asset, mime: lambda route: route.fulfill(
+                path=str(static / asset), content_type=mime,
+            ))(name, content_type))
+        return page
+
+    monkeypatch.setattr(playwright_sync.BrowserContext, "new_page", new_page)
+
+
+@pytest.mark.parametrize("width", [320, 1280])
+def test_review_edit_preserves_party_direct_flag_and_budget_without_saving(width, tmp_path):
+    saved, external = [], []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(
+        lambda uid, info: saved.append((uid, info)), lambda: (SECRET, APP_ID, GROUP_ID)
+    ))
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = _launch_browser(pw)
+        resources.callback(browser.close)
+        context = browser.new_context(viewport={"width": width, "height": 900})
+        resources.callback(context.close)
+        def local_only(route):
+            if route.request.url.startswith(f"http://127.0.0.1:{server.server_port}/"):
+                route.continue_()
+            else:
+                external.append(route.request.url)
+                route.abort()
+        context.route("**/*", local_only)
+        page = context.new_page()
+        page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
+        page.wait_for_function("document.getElementById('destination-options') && document.getElementById('date').value !== ''")
+        page.locator('#destination').fill('Сочи')
+        page.locator('#departure').fill('Москва')
+        page.locator('#children').fill('2')
+        ages = page.locator('#children-ages input')
+        ages.nth(0).fill('7')
+        ages.nth(1).fill('10')
+        page.locator('#direct').check()
+        page.locator('#consent').check()
+        page.locator('#terms-accepted').check()
+        budget = page.locator('#budget').input_value()
+        page.locator('#submit').click()
+        page.locator('#review').wait_for(state='visible')
+        original = page.locator('#summary').inner_text()
+        assert 'Сочи' in original and 'Москва' in original
+        assert saved == []
+        page.locator('#edit').click()
+        page.locator('#trip-form').wait_for(state='visible')
+        assert page.locator('#destination').input_value() == 'Сочи'
+        assert page.locator('#children').input_value() == '2'
+        assert [ages.nth(i).input_value() for i in range(2)] == ['7', '10']
+        assert page.locator('#direct').is_checked()
+        assert page.locator('#budget').input_value() == budget
+        page.locator('#submit').click()
+        page.locator('#review').wait_for(state='visible')
+        assert page.locator('#summary').inner_text() == original
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        assert saved == [] and external == []
+        page.screenshot(path=str(tmp_path / f'vk-review-edit-{width}.png'), full_page=True)
 
 
 def _signed_launch_params():
@@ -78,6 +159,7 @@ def _assert_zoom_and_default_contrast(page):
     assert ratios["muted"] >= 4.5
 
 def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
+    page.wait_for_function("document.getElementById('destination-options') && document.getElementById('date').value !== ''")
     page.locator("#destination").fill(destination)
     page.locator("#departure").fill("Архангельск")
     page.locator("#consent").check()
@@ -85,7 +167,8 @@ def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator("#submit").click()
     page.locator("#review").wait_for(state="visible")
     page.locator("#save").click()
-    page.locator("#chat").wait_for(state="visible")
+    page.wait_for_function("document.getElementById('review').getAttribute('aria-busy') === 'false' && document.getElementById('status').textContent !== ''")
+    assert page.locator("#chat").is_visible(), page.locator("#status").inner_text()
 
 
 @pytest.mark.parametrize("locale,width", [("en-US", 1280), ("en-US", 320), ("ru-RU", 390)])
@@ -95,10 +178,10 @@ def test_flight_date_uses_russian_display_and_iso_payload(locale, width, tmp_pat
     app.register_blueprint(create_blueprint(
         lambda uid, info: saved.append(info), lambda: (SECRET, APP_ID, GROUP_ID)
     ))
-    server = make_server("127.0.0.1", 0, app)
+    server = make_server("127.0.0.1", 0, app, threaded=True)
     with local_server(server):
         with sync_playwright() as pw, ExitStack() as resources:
-            browser = pw.chromium.launch(channel="msedge", headless=True)
+            browser = _launch_browser(pw)
             resources.callback(browser.close)
             page = browser.new_page(locale=locale, viewport={"width": width, "height": 900})
             page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
@@ -139,12 +222,12 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
         create_blueprint(save_draft, lambda: (SECRET, APP_ID, GROUP_ID))
     )
 
-    server = make_server("127.0.0.1", 0, app)
+    server = make_server("127.0.0.1", 0, app, threaded=True)
 
     with local_server(server):
         url = f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}"
         with sync_playwright() as pw, ExitStack() as resources:
-            browser = pw.chromium.launch(channel="msedge", headless=True)
+            browser = _launch_browser(pw)
             resources.callback(browser.close)
             context = browser.new_context(viewport={"width": width, "height": 760})
             resources.callback(context.close)
@@ -228,6 +311,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             assert saved == []
             assert "Заявка ещё не отправлена менеджеру." in page.locator("#review").inner_text()
             page.reload(wait_until="domcontentloaded")
+            page.wait_for_function("Boolean(window.vkBridge && window.vkBridge.send) && document.getElementById('destination-options')")
             page.locator("#trip-form").wait_for(state="visible")
             assert page.locator("#review").is_hidden()
             assert saved == []
@@ -272,6 +356,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             # stay successful and fall back to copying the review command.
             fallback_page = context.new_page()
             fallback_page.goto(url, wait_until="domcontentloaded")
+            fallback_page.wait_for_function("Boolean(window.vkBridge && window.vkBridge.send) && document.getElementById('destination-options')")
             fallback_page.evaluate(
                 """
                 () => {
@@ -325,10 +410,10 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
         lambda uid, info: saved.append((uid, info)),
         lambda: (SECRET, APP_ID, GROUP_ID),
     ))
-    server = make_server('127.0.0.1', 0, app)
+    server = make_server('127.0.0.1', 0, app, threaded=True)
     with local_server(server):
         with sync_playwright() as pw, ExitStack() as resources:
-            browser = pw.chromium.launch(channel='msedge', headless=True)
+            browser = _launch_browser(pw)
             resources.callback(browser.close)
             page = browser.new_page()
             page.route('**/vk-bridge.js', lambda route: route.fulfill(
@@ -378,9 +463,9 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
         lambda uid, info: saved.append((uid, info)),
         lambda: (SECRET, APP_ID, GROUP_ID),
     ))
-    server = make_server("127.0.0.1", 0, app)
+    server = make_server("127.0.0.1", 0, app, threaded=True)
     with local_server(server), sync_playwright() as pw, ExitStack() as resources:
-        browser = pw.chromium.launch(channel="msedge", headless=True)
+        browser = _launch_browser(pw)
         resources.callback(browser.close)
         context = browser.new_context(viewport={"width": 390, "height": 844})
         resources.callback(context.close)
