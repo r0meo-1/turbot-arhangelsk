@@ -30,6 +30,7 @@ _CATALOGS = {
 }
 _cache = OrderedDict()
 _lock = threading.Lock()
+_search_slots = threading.BoundedSemaphore(2)
 _cache_salt = secrets.token_bytes(32)
 # Group membership verified against Alean's public Sochi hotel hierarchy and
 # the SAPI names on 2026-10-12. Other districts remain unaccepted until verified.
@@ -121,11 +122,21 @@ def _catalog(settings, session, action, *, account=None):
         return rows
 
 
+def _place_name(value):
+    value = " ".join(str(value or "").casefold().replace("ё", "е").split())
+    value = re.sub(r"^г\.\s*", "", value)
+    return re.sub(r",\s*город$", "", value).strip()
+
+
 def _named(rows, name):
     normalized = " ".join(str(name or "").casefold().replace("ё", "е").split())
-    matches = [r for r in rows if " ".join(r.get("name", "").casefold().replace("ё", "е").split()) == normalized]
-    # Never silently select a different or ambiguous city/country.
-    return matches[0] if len(matches) == 1 and normalized else None
+    exact = [r for r in rows if " ".join(r.get("name", "").casefold().replace("ё", "е").split()) == normalized]
+    if exact:
+        return exact[0] if len(exact) == 1 and normalized else None
+    city = _place_name(name)
+    matches = [r for r in rows if _place_name(r.get("name", "")) == city]
+    # Only city decorations are ignored; regions/excursions remain distinct.
+    return matches[0] if len(matches) == 1 and city else None
 
 
 def _allowed_resort_ids(rows, resort, country):
@@ -141,6 +152,15 @@ def _allowed_resort_ids(rows, resort, country):
 
 
 def search_tours(settings, session, info, *, log=None):
+    if not _search_slots.acquire(blocking=False):
+        return tv.SearchResult(error="Alean: поиск занят, повторите позже")
+    try:
+        return _search_tours(settings, session, info, log=log)
+    finally:
+        _search_slots.release()
+
+
+def _search_tours(settings, session, info, *, log=None):
     log = log or logging.getLogger(__name__)
     if not settings.enabled or not settings.username or not settings.password:
         return tv.SearchResult(error="Alean сейчас не настроен")
