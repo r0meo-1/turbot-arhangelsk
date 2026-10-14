@@ -35,10 +35,7 @@ def _launch_browser(pw):
 @pytest.fixture(autouse=True)
 def local_bridge_transport(monkeypatch):
     """Exercise the app's Bridge contract without a real VK host transport."""
-    original = playwright_sync.BrowserContext.new_page
-
-    def new_page(context, *args, **kwargs):
-        page = original(context, *args, **kwargs)
+    def prepare_page(page):
         page.route("**/vk-bridge.js", lambda route: route.fulfill(
             content_type="application/javascript",
             body="window.vkBridge = {send: () => Promise.resolve({})};",
@@ -50,7 +47,15 @@ def local_bridge_transport(monkeypatch):
             ))(name, content_type))
         return page
 
-    monkeypatch.setattr(playwright_sync.BrowserContext, "new_page", new_page)
+    def intercept(original):
+        def new_page(owner, *args, **kwargs):
+            return prepare_page(original(owner, *args, **kwargs))
+        return new_page
+
+    # Browser.new_page is a convenience API that bypasses the public
+    # BrowserContext.new_page wrapper; both need the same local transport.
+    for owner in (playwright_sync.BrowserContext, playwright_sync.Browser):
+        monkeypatch.setattr(owner, "new_page", intercept(owner.new_page))
 
 
 @pytest.mark.parametrize("width", [320, 1280])
@@ -104,6 +109,40 @@ def test_review_edit_preserves_party_direct_flag_and_budget_without_saving(width
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         assert saved == [] and external == []
         page.screenshot(path=str(tmp_path / f'vk-review-edit-{width}.png'), full_page=True)
+
+
+def test_repeated_save_while_pending_creates_one_synthetic_draft():
+    saved, pending = [], []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(
+        lambda uid, info: saved.append((uid, info)), lambda: (SECRET, APP_ID, GROUP_ID)
+    ))
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = _launch_browser(pw)
+        resources.callback(browser.close)
+        page = browser.new_page(viewport={"width": 390, "height": 844})
+        page.route("**/vk/miniapp/draft", lambda route: pending.append(route))
+        page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
+        page.wait_for_function("document.getElementById('destination-options') && document.getElementById('date').value !== ''")
+        page.locator("#destination").fill("Сочи")
+        page.locator("#departure").fill("Москва")
+        page.locator("#consent").check()
+        page.locator("#terms-accepted").check()
+        page.locator("#submit").click()
+        page.locator("#review").wait_for(state="visible")
+        with page.expect_request("**/vk/miniapp/draft"):
+            page.locator("#save").evaluate("el => { el.click(); el.click(); }")
+        # Dispatch more taps while the actual server response is held back.
+        page.locator("#save").evaluate("el => { el.click(); el.click(); }")
+        assert page.locator("#save").is_disabled()
+        assert page.locator("#edit").is_disabled()
+        assert saved == [] and len(pending) == 1
+        pending[0].continue_()
+        page.locator("#chat").wait_for(state="visible")
+        assert len(pending) == len(saved) == 1
+        assert saved[0][0] == USER_ID
+        assert saved[0][1]["destination"] == "Сочи"
 
 
 def _signed_launch_params():
