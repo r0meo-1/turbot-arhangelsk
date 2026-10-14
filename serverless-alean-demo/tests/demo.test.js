@@ -55,3 +55,20 @@ test('duplicate deliveries do not repeat state transitions',async()=>{
 test('pending prompt can recover after send failure without advancing twice',async()=>{
  const f=fixture();try{f.setFailure();await assert.rejects(f.message('/alean'));await handle({db:f.db,api:f.api,now:()=>now},'message',{message_id:100,chat:{id:f.user,type:'private'},from:{id:f.user},text:'/alean'},{update:{update_id:100}});assert.match(f.sent.at(-1).text,/Что ищем/);assert.equal(JSON.parse(f.sqlite.prepare('SELECT payload FROM alean_readonly_demo_sessions').get().payload).index,0);}finally{f.sqlite.close();}
 });
+
+test('failed search loading prompt releases delivery lease for immediate replay',async()=>{
+ const f=fixture();try{
+  for(const text of answers)await f.message(text);
+  const row=f.sqlite.prepare('SELECT version FROM alean_readonly_demo_sessions').get();
+  const input={id:'loading-retry',from:{id:f.user},data:`a:${row.version}:search`,message:{chat:{id:f.user,type:'private'}}};
+  const ctx={update:{update_id:f.getId()}};
+  const deps={db:f.db,api:f.api,now:()=>now};
+  f.setFailure();await assert.rejects(handle(deps,'callback',input,ctx));
+  const saved=JSON.parse(f.sqlite.prepare('SELECT payload FROM alean_readonly_demo_sessions').get().payload);
+  assert.equal(saved.pending,true);assert.equal(saved.deliveryUntil,0);
+  await handle(deps,'callback',input,ctx);
+  assert.match(f.sent.at(-1).text,/вымышленный/);
+  const delivered=JSON.parse(f.sqlite.prepare('SELECT payload FROM alean_readonly_demo_sessions').get().payload);
+  assert.equal(delivered.pending,false);assert.deepEqual(delivered.data,saved.data);
+ }finally{f.sqlite.close();}
+});
