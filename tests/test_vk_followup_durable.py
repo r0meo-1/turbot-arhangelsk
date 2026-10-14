@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+import pytest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
@@ -101,6 +102,47 @@ def test_known_vk_send_failure_releases_claim_for_retry(tmp_path):
     bot.fail_send = False
     assert vk_followup.send_followups(bot) == 1
     assert bot.sent == [101]
+
+
+def test_followup_reads_current_destination_after_claim(tmp_path, monkeypatch):
+    bot = FakeBot(tmp_path / "vk.sqlite")
+    _create_sessions(bot)
+    _insert_eligible(bot)
+    messages = []
+    bot.send_message = lambda cid, text: messages.append(text) or {"message_id": 1}
+    original = vk_followup._claim_candidate
+    def claim(*args):
+        claimed = original(*args)
+        with bot._db_cursor(commit=True) as cur:
+            cur.execute("UPDATE sessions SET destination = 'Абхазия' WHERE chat_id = 101")
+        return claimed
+    monkeypatch.setattr(vk_followup, "_claim_candidate", claim)
+    assert vk_followup.send_followups(bot) == 1
+    assert "Абхазия" in messages[0] and "Таиланд" not in messages[0]
+
+
+@pytest.mark.parametrize("change", ["updated", "cancelled", "pending_cache"])
+def test_followup_skips_session_changed_or_cancelled_after_claim(tmp_path, monkeypatch, change):
+    bot = FakeBot(tmp_path / "vk.sqlite")
+    _create_sessions(bot)
+    _insert_eligible(bot)
+    original = vk_followup._claim_candidate
+    def claim(*args):
+        claimed = original(*args)
+        if change == "pending_cache":
+            bot.user_data[101] = {"destination": "Абхазия", "updated_at": int(time.time())}
+        else:
+            with bot._db_cursor(commit=True) as cur:
+                if change == "cancelled":
+                    cur.execute("DELETE FROM sessions WHERE chat_id = 101")
+                else:
+                    cur.execute("UPDATE sessions SET destination = 'Абхазия', updated_at = ? WHERE chat_id = 101", (int(time.time()),))
+        return claimed
+    monkeypatch.setattr(vk_followup, "_claim_candidate", claim)
+    assert vk_followup.send_followups(bot) == 0
+    assert bot.sent == []
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM vk_followup_claims").fetchone()[0] == 0
 
 
 def test_atomic_claim_allows_only_one_sender(tmp_path):

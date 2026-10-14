@@ -165,7 +165,25 @@ def send_followups(bot: Any) -> int:
         ):
             continue
 
-        destination = str(row["destination"] or "")
+        # The candidate list can outlive a dialog edit/cancellation. Re-read
+        # after reserving delivery; second-resolution timestamps alone cannot
+        # identify a destination edited within the same second.
+        with bot._lock:
+            with bot._db_cursor() as cur:
+                current = cur.execute(
+                    "SELECT destination, updated_at FROM sessions "
+                    "WHERE chat_id = ? AND updated_at = ?",
+                    (chat_id, updated_at),
+                ).fetchone()
+            live = bot.user_data.get(chat_id)
+            stale = current is None or (live is not None and (
+                live.get("destination") != current["destination"]
+                or int(live.get("updated_at", updated_at)) != updated_at
+            ))
+            destination = str(current["destination"] or "") if not stale else ""
+        if stale:
+            _release_failed_claim(bot, chat_id, updated_at)
+            continue
         hint = f" в {destination}" if destination else ""
         response = bot.send_message(
             chat_id,

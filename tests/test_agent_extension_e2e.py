@@ -22,6 +22,10 @@ def test_pairing_change_ignores_pending_connection_response(tmp_path, status, ac
             worker = context.service_workers[0] if context.service_workers else context.wait_for_event("serviceworker")
             page = context.new_page()
             page.goto(f"chrome-extension://{worker.url.split('/')[2]}/sidepanel.html")
+            # The HTML already says "Не подключено" before load() has read
+            # storage. Wait for that initialization, which otherwise can
+            # overwrite the synthetic token entered by this test.
+            page.evaluate("async () => { await agentDeskReady; }")
             pw_api.expect(page.locator("#connectionState")).to_have_text("Не подключено")
             page.locator("#name").fill("QA LOCAL DRAFT")
             page.locator("#token").evaluate("el => el.closest('details').open = true")

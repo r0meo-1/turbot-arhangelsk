@@ -81,6 +81,20 @@ def _post(client, user_id, text=None, ref=None, ref_source=None):
                        content_type="application/json")
 
 
+@pytest.mark.parametrize("label,period", bot.DATE_PRESETS)
+def test_vk_date_preset_readback_preserves_search_period(monkeypatch, label, period):
+    uid = 9580
+    info = {"state": bot.STATE_DATES}
+    bot.user_data[uid] = info
+    messages = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kw: messages.append(text))
+    monkeypatch.setattr(bot._tutu, "resolve_dates", lambda raw: ("2030-11-13", None))
+    bot._step_dates(uid, label, {}, info)
+    assert info["dates"] == period
+    assert period in messages[-1]
+    assert "13 ноября" not in messages[-1]
+
+
 def test_validate_phone():
     assert bot.validate_phone("+79161234567") == (True, "+79161234567")
     assert bot.validate_phone("89161234567") == (True, "+79161234567")
@@ -997,6 +1011,75 @@ def test_vk_old_card_payload_cannot_select_replacement_hotel(monkeypatch):
     assert actualized == []
 
 
+def test_vk_automated_search_edit_stale_choice_cancel_without_lead(client, monkeypatch):
+    """Drive real webhook/reducer/worker code with only external transports stubbed."""
+    uid = 9599
+    messages, searches, side_effects = [], [], []
+    monkeypatch.setattr(bot, "send_message", lambda user, text, **kw: messages.append((text, kw)))
+    monkeypatch.setattr(bot, "edit_message", lambda *args, **kw: False)
+    monkeypatch.setattr(bot, "send_tour_carousel", lambda *args, **kw: False)
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    def forbidden(*args, **kwargs):
+        side_effects.append((args, kwargs))
+        raise AssertionError("acceptance must not contact VK, manager or CRM")
+    monkeypatch.setattr(bot, "_vk_api", forbidden)
+    monkeypatch.setattr(bot, "send_lead_to_mdt", forbidden)
+    monkeypatch.setattr(bot, "_notify_admin", forbidden)
+    def supplier(settings, session, query, **kwargs):
+        searches.append(dict(query))
+        offer = bot._tourvisor.TourOffer(
+            hotel=f"QA Hotel {len(searches)}", category=4, region="Сочи",
+            date="2030-11-13", nights=7, meal="BB", room="Standard",
+            operator="QA Operator", price=190000, tour_id=f"qa-{len(searches)}",
+        )
+        return bot._tourvisor.SearchResult(offers=[offer]), "alean"
+    monkeypatch.setattr(bot._tour_providers, "search_tours", supplier)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *a, **kw: {
+        "confirmed": False, "status": "unknown", "flight_status": "",
+        "hotel_status": "QA: manager verification required",
+    })
+    for text in ["Начать", bot.CONSENT_YES_TEXT, "Сочи", "Москва",
+                 "13-20 ноября 2030", "2", "7", "500000"]:
+        assert _post(client, uid, text).status_code == 200
+    assert bot.user_data[uid]["state"] == bot.STATE_REVIEW
+    assert bot.user_data[uid]["kids_ages"] == [7]
+    def choice():
+        for text, kw in reversed(messages):
+            keyboard = json.loads(kw.get("keyboard") or '{}')
+            for row in keyboard.get("buttons", []):
+                for button in row:
+                    payload = button["action"].get("payload")
+                    if payload and json.loads(payload).get("command") == "tour_select":
+                        return payload
+        raise AssertionError("no rendered selection control")
+    def click(payload):
+        event = _vk_message(uid, "Выбрать №1")
+        event["object"]["message"]["payload"] = payload
+        assert client.post('/vk/webhook', json=event).status_code == 200
+    _post(client, uid, bot.TOUR_SEARCH_BUTTON_TEXT)
+    old = choice()
+    click(old)
+    assert bot.user_data[uid]["selected_tour"]["hotel"] == "QA Hotel 1"
+    _post(client, uid, bot.REVIEW_EDIT_BUDGET_TEXT)
+    _post(client, uid, "400000")
+    assert bot.user_data[uid]["state"] == bot.STATE_REVIEW
+    _post(client, uid, bot.TOUR_SEARCH_BUTTON_TEXT)
+    fresh = choice()
+    click(old)
+    assert not bot.user_data[uid].get("selected_tour")
+    click(fresh)
+    assert bot.user_data[uid]["selected_tour"]["hotel"] == "QA Hotel 2"
+    _post(client, uid, bot.CANCEL_BUTTON_TEXT)
+    assert uid not in bot.user_data
+    click(fresh)
+    assert not bot.user_data.get(uid, {}).get("selected_tour")
+    assert not bot.user_data.get(uid, {}).get("_tour_offers")
+    with bot._db_cursor() as cur:
+        assert cur.execute('SELECT COUNT(*) FROM leads').fetchone()[0] == 0
+    assert [query["budget"] for query in searches] == [500000, 400000]
+    assert side_effects == []
+
+
 @pytest.fixture
 def rendered_tour_choices(monkeypatch):
     user_id = 9578
@@ -1414,6 +1497,49 @@ def test_vk_back_then_budget_edit_invalidates_pending_result(monkeypatch):
     assert not live.get("_tour_searching") and not live.get("_tour_search_marker")
     assert not live.get("_tour_offers") and not live.get("selected_tour")
     assert published == []
+
+
+@pytest.mark.parametrize("error,search_id,expected,show_over", [
+    ("sletat: Подходящих туров пока не найдено", 123, "дороже бюджета", True),
+    ("tourvisor: Подходящих туров пока не найдено", 456, "дороже бюджета", True),
+    ("Подходящих туров пока не найдено", None, "готовых вариантов", False),
+    ("alean: Alean: timeout; sletat: Подходящих туров пока не найдено", 123, "дороже бюджета", True),
+    ("alean: Отель не найден в Alean", None, "другой отель", False),
+    ("alean: Для этих условий Alean требуется подбор менеджером", None, "прямого перелёта", False),
+    ("alean: Для этих условий Alean требуется подбор менеджером", None, "нужен подбор менеджером", False),
+    ("alean: Для Alean уточните состав туристов", None, "состав туристов", False),
+    ("alean: Для Alean уточните бюджет", None, "Уточните бюджет", False),
+    ("", -1, "дороже бюджета", True),
+    ("alean: Для Alean уточните возраст каждого ребёнка", None, "возраст", False),
+    ("alean: Для Alean укажите от 1 до 28 ночей", None, "ночей", False),
+    ("alean: Для Alean нужны точные даты", None, "точную дату", False),
+    ("alean: Направление или город вылета не найден в Alean", None, "изменить параметры", False),
+    ("alean: Alean: timeout", None, "Повторите поиск позже", False),
+    ("alean: Alean недоступен (HTTP 503)", None, "Повторите поиск позже", False),
+])
+def test_vk_search_outcome_guidance(monkeypatch, error, search_id, expected, show_over):
+    user_id, marker = 9577, "outcome-search"
+    snapshot = {"origin": "Москва", "budget": 100000}
+    if expected == "прямого перелёта":
+        snapshot["direct_only"] = True
+    bot.user_data[user_id] = dict(snapshot, state=bot.STATE_REVIEW,
+                                  _tour_search_marker=marker, _tour_searching=True)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k:
+                        (bot._tourvisor.SearchResult(error=error, search_id=search_id), ""))
+    messages, edits, keyboards = [], [], []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **k: messages.append(text))
+    monkeypatch.setattr(bot, "edit_message", lambda uid, mid, text, **k: edits.append(text))
+    monkeypatch.setattr(bot, "_no_tours_keyboard", lambda over: keyboards.append(over))
+    bot._tour_search_worker(user_id, marker, snapshot, 111)
+    assert len(messages) == len(edits) == 1
+    assert expected in messages[0]
+    assert keyboards == [show_over]
+    if "Повторите поиск позже" not in expected:
+        assert "временно недоступен" not in edits[0]
+        assert "Не удалось получить ответ" not in messages[0]
+    assert not bot.user_data[user_id].get("selected_tour")
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0
 
 
 def test_vk_undecided_destination_marks_consultation(client):

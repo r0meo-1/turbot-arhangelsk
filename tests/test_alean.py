@@ -6,6 +6,28 @@ import xml.etree.ElementTree as ET
 import json
 
 import pytest
+
+
+def test_decorated_city_names_match_only_when_unambiguous():
+    rows = [{"id": "1", "name": "г. Москва"}]
+    assert alean._named(rows, "Москва")["id"] == "1"
+    assert alean._named(rows, "Москва, город")["id"] == "1"
+    assert alean._named(rows + [{"id": "2", "name": "Москва, город"}], "Москва") is None
+    assert alean._named([{"id": "3", "name": "Московская область"}], "Москва") is None
+
+
+def test_busy_search_does_not_call_supplier_and_releases_slots():
+    assert alean._search_slots.acquire(blocking=False)
+    assert alean._search_slots.acquire(blocking=False)
+    try:
+        class NoNetwork:
+            def get(self, *args, **kwargs):
+                raise AssertionError("busy search must not contact supplier")
+        result = alean.search_tours(settings(), NoNetwork(), info())
+        assert not result.offers and "поиск занят" in result.error
+    finally:
+        alean._search_slots.release()
+        alean._search_slots.release()
 import requests
 
 from shared import alean, tour_providers as router, tourvisor as tv

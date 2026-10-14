@@ -1741,9 +1741,8 @@ def _tour_price_amount(offer: Dict[str, Any]) -> Decimal:
 
 def _compact_tour_price(offer: Dict[str, Any]) -> str:
     try:
-        amount = _tour_price_amount(offer)
-        amount = int(amount) if amount == amount.to_integral_value() else amount
-    except (TypeError, ValueError, InvalidOperation):
+        amount = money_json(money_amount(offer.get("price") or 0, allow_zero=True) + money_amount(offer.get("fuel_charge") or 0, allow_zero=True))
+    except (TypeError, ValueError):
         amount = 0
     currency = str(offer.get("currency") or "RUB").upper()
     suffix = "₽" if currency in ("RUB", "RUR") else currency
@@ -2637,7 +2636,9 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
         return
 
     info["dates"] = raw
-    human_dates = _human_dates(depart, ret)
+    # A preset is a departure window, not the single anchor date returned by
+    # the flight helper. Read back the same period the package search receives.
+    human_dates = raw if chosen_preset else _human_dates(depart, ret)
     try:
         duration = (
             datetime.strptime(ret, "%Y-%m-%d") - datetime.strptime(depart, "%Y-%m-%d")
@@ -2975,6 +2976,33 @@ def _tour_search_worker(
         error="; ".join(result.error for result in results if result.error),
         search_id=next((result.search_id for result in results if result.search_id), None),
     )
+    # Adapters report an empty completed search through error as well. A
+    # successful fallback must not inherit an earlier provider's failure copy.
+    search_completed = any(
+        item.search_id is not None or "Подходящих туров пока не найдено" in (item.error or "")
+        for item in results
+    )
+    search_failed = not result.offers and not search_completed and any(item.error for item in results)
+    catalog_mismatch = search_failed and "Направление или город вылета не найден в Alean" in result.error
+    dates_need_detail = search_failed and any(
+        hint in result.error for hint in ("Для Alean нужны точные даты", "Для Alean сузьте диапазоны")
+    )
+    parameter_guidance = ""
+    if search_failed:
+        for hint, guidance in (
+            ("Отель не найден в Alean", "Этот отель не найден в каталоге автоматического поиска. Выберите другой отель через «◀️ Назад» либо попросите помощи менеджера."),
+            ("Для этих условий Alean требуется подбор менеджером",
+             "Автоматический поиск Алеан не поддерживает выбранные условия прямого перелёта. Можно изменить это условие через «◀️ Назад» либо попросить помощи менеджера."
+             if snapshot.get("direct_only") else
+             "Для выбранных условий нужен подбор менеджером. Можно изменить параметры через «◀️ Назад» либо попросить помощи менеджера."),
+            ("Для Alean укажите от 1 до 28 ночей", "Для поиска Алеан укажите длительность от 1 до 28 ночей через «◀️ Назад»."),
+            ("Для Alean уточните состав туристов", "Уточните состав туристов через «◀️ Назад», затем повторите поиск."),
+            ("Для Alean уточните возраст каждого ребёнка", "Укажите возраст каждого ребёнка через «◀️ Назад», затем повторите поиск."),
+            ("Для Alean уточните бюджет", "Уточните бюджет через «💰 Бюджет», затем повторите поиск."),
+        ):
+            if hint in result.error:
+                parameter_guidance = guidance
+                break
     with _lock:
         live = user_data.get(user_id)
         if live is None or live.get("_tour_search_marker") != marker:
@@ -2988,6 +3016,9 @@ def _tour_search_worker(
         final_text = (
             f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
             if result.offers else
+            "📅 Для поиска нужно уточнить даты." if dates_need_detail else
+            "🔎 Поиск не выполнен — нужно уточнить параметры." if catalog_mismatch or parameter_guidance else
+            "⚠️ Поиск временно недоступен. Повторите попытку позже." if search_failed else
             "🔎 Поиск завершён. Готовых вариантов по заданным параметрам не нашлось."
         )
         live["_tour_wait_final_text"] = final_text
@@ -3034,10 +3065,30 @@ def _tour_search_worker(
         if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
             return
     can_show_over = bool(
-        result.search_id and snapshot.get("budget")
+        not search_failed and result.search_id and snapshot.get("budget")
         and not snapshot.get("budget_open_ended")
     )
-    if can_show_over:
+    if dates_need_detail:
+        message_text = (
+            "Для поиска в Алеан нужна точная дата вылета или диапазон не более четырёх дней.\n\n"
+            "Нажмите «📅 Даты» и укажите точную дату вылета. "
+            "Если выбрали диапазон ночей, он тоже должен содержать не более четырёх значений. "
+            "Длительность поездки можно изменить через «◀️ Назад»."
+        )
+    elif catalog_mismatch:
+        message_text = (
+            "Выбранное направление или город вылета не доступны в текущем автоматическом поиске Алеан.\n\n"
+            "Нажмите «◀️ Назад», чтобы изменить параметры, либо попросите помощи менеджера. "
+            "Это ограничение поиска, а не подтверждённое отсутствие туров."
+        )
+    elif parameter_guidance:
+        message_text = parameter_guidance
+    elif search_failed:
+        message_text = (
+            "Не удалось получить ответ от сервиса поиска. Наличие туров пока не проверено.\n\n"
+            "Повторите поиск позже или попросите помощи менеджера."
+        )
+    elif can_show_over:
         message_text = (
             f"До {_budget_summary(snapshot).replace('до ', '', 1)} вариантов не нашлось.\n\n"
             "Могу отдельно показать ближайшие предложения дороже бюджета."
@@ -3319,11 +3370,10 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
     )
 
 
-def _offer_total_price(offer: Dict[str, Any]) -> int | float:
+def _offer_total_price(offer: Dict[str, Any]) -> int:
     try:
-        amount = _tour_price_amount(offer)
-        return int(amount) if amount == amount.to_integral_value() else float(amount)
-    except (TypeError, ValueError, InvalidOperation):
+        return money_json(money_amount(offer.get("price") or 0, allow_zero=True) + money_amount(offer.get("fuel_charge") or 0, allow_zero=True))
+    except (TypeError, ValueError):
         return 10**15
 
 
