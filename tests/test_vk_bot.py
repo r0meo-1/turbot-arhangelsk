@@ -997,6 +997,75 @@ def test_vk_old_card_payload_cannot_select_replacement_hotel(monkeypatch):
     assert actualized == []
 
 
+def test_vk_automated_search_edit_stale_choice_cancel_without_lead(client, monkeypatch):
+    """Drive real webhook/reducer/worker code with only external transports stubbed."""
+    uid = 9599
+    messages, searches, side_effects = [], [], []
+    monkeypatch.setattr(bot, "send_message", lambda user, text, **kw: messages.append((text, kw)))
+    monkeypatch.setattr(bot, "edit_message", lambda *args, **kw: False)
+    monkeypatch.setattr(bot, "send_tour_carousel", lambda *args, **kw: False)
+    monkeypatch.setattr(bot, "SYNC_COMPLETION", True)
+    def forbidden(*args, **kwargs):
+        side_effects.append((args, kwargs))
+        raise AssertionError("acceptance must not contact VK, manager or CRM")
+    monkeypatch.setattr(bot, "_vk_api", forbidden)
+    monkeypatch.setattr(bot, "send_lead_to_mdt", forbidden)
+    monkeypatch.setattr(bot, "_notify_admin", forbidden)
+    def supplier(settings, session, query, **kwargs):
+        searches.append(dict(query))
+        offer = bot._tourvisor.TourOffer(
+            hotel=f"QA Hotel {len(searches)}", category=4, region="Сочи",
+            date="2030-11-13", nights=7, meal="BB", room="Standard",
+            operator="QA Operator", price=190000, tour_id=f"qa-{len(searches)}",
+        )
+        return bot._tourvisor.SearchResult(offers=[offer]), "alean"
+    monkeypatch.setattr(bot._tour_providers, "search_tours", supplier)
+    monkeypatch.setattr(bot._tour_providers, "actualize_offer", lambda *a, **kw: {
+        "confirmed": False, "status": "unknown", "flight_status": "",
+        "hotel_status": "QA: manager verification required",
+    })
+    for text in ["Начать", bot.CONSENT_YES_TEXT, "Сочи", "Москва",
+                 "13-20 ноября 2030", "2", "7", "500000"]:
+        assert _post(client, uid, text).status_code == 200
+    assert bot.user_data[uid]["state"] == bot.STATE_REVIEW
+    assert bot.user_data[uid]["kids_ages"] == [7]
+    def choice():
+        for text, kw in reversed(messages):
+            keyboard = json.loads(kw.get("keyboard") or '{}')
+            for row in keyboard.get("buttons", []):
+                for button in row:
+                    payload = button["action"].get("payload")
+                    if payload and json.loads(payload).get("command") == "tour_select":
+                        return payload
+        raise AssertionError("no rendered selection control")
+    def click(payload):
+        event = _vk_message(uid, "Выбрать №1")
+        event["object"]["message"]["payload"] = payload
+        assert client.post('/vk/webhook', json=event).status_code == 200
+    _post(client, uid, bot.TOUR_SEARCH_BUTTON_TEXT)
+    old = choice()
+    click(old)
+    assert bot.user_data[uid]["selected_tour"]["hotel"] == "QA Hotel 1"
+    _post(client, uid, bot.REVIEW_EDIT_BUDGET_TEXT)
+    _post(client, uid, "400000")
+    assert bot.user_data[uid]["state"] == bot.STATE_REVIEW
+    _post(client, uid, bot.TOUR_SEARCH_BUTTON_TEXT)
+    fresh = choice()
+    click(old)
+    assert not bot.user_data[uid].get("selected_tour")
+    click(fresh)
+    assert bot.user_data[uid]["selected_tour"]["hotel"] == "QA Hotel 2"
+    _post(client, uid, bot.CANCEL_BUTTON_TEXT)
+    assert uid not in bot.user_data
+    click(fresh)
+    assert not bot.user_data.get(uid, {}).get("selected_tour")
+    assert not bot.user_data.get(uid, {}).get("_tour_offers")
+    with bot._db_cursor() as cur:
+        assert cur.execute('SELECT COUNT(*) FROM leads').fetchone()[0] == 0
+    assert [query["budget"] for query in searches] == [500000, 400000]
+    assert side_effects == []
+
+
 @pytest.fixture
 def rendered_tour_choices(monkeypatch):
     user_id = 9578
