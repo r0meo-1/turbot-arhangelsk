@@ -2974,11 +2974,33 @@ def _tour_search_worker(
         error="; ".join(result.error for result in results if result.error),
         search_id=next((result.search_id for result in results if result.search_id), None),
     )
-    search_failed = not result.offers and any(item.error for item in results)
+    # Adapters report an empty completed search through error as well. A
+    # successful fallback must not inherit an earlier provider's failure copy.
+    search_completed = any(
+        item.search_id is not None or "Подходящих туров пока не найдено" in (item.error or "")
+        for item in results
+    )
+    search_failed = not result.offers and not search_completed and any(item.error for item in results)
     catalog_mismatch = search_failed and "Направление или город вылета не найден в Alean" in result.error
-    dates_need_detail = not result.offers and not result.search_id and any(
+    dates_need_detail = search_failed and any(
         hint in result.error for hint in ("Для Alean нужны точные даты", "Для Alean сузьте диапазоны")
     )
+    parameter_guidance = ""
+    if search_failed:
+        for hint, guidance in (
+            ("Отель не найден в Alean", "Этот отель не найден в каталоге автоматического поиска. Выберите другой отель через «◀️ Назад» либо попросите помощи менеджера."),
+            ("Для этих условий Alean требуется подбор менеджером",
+             "Автоматический поиск Алеан не поддерживает выбранные условия прямого перелёта. Можно изменить это условие через «◀️ Назад» либо попросить помощи менеджера."
+             if snapshot.get("direct_only") else
+             "Для выбранных условий нужен подбор менеджером. Можно изменить параметры через «◀️ Назад» либо попросить помощи менеджера."),
+            ("Для Alean укажите от 1 до 28 ночей", "Для поиска Алеан укажите длительность от 1 до 28 ночей через «◀️ Назад»."),
+            ("Для Alean уточните состав туристов", "Уточните состав туристов через «◀️ Назад», затем повторите поиск."),
+            ("Для Alean уточните возраст каждого ребёнка", "Укажите возраст каждого ребёнка через «◀️ Назад», затем повторите поиск."),
+            ("Для Alean уточните бюджет", "Уточните бюджет через «💰 Бюджет», затем повторите поиск."),
+        ):
+            if hint in result.error:
+                parameter_guidance = guidance
+                break
     with _lock:
         live = user_data.get(user_id)
         if live is None or live.get("_tour_search_marker") != marker:
@@ -2993,7 +3015,7 @@ def _tour_search_worker(
             f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
             if result.offers else
             "📅 Для поиска нужно уточнить даты." if dates_need_detail else
-            "🔎 Поиск не выполнен — нужно уточнить параметры." if catalog_mismatch else
+            "🔎 Поиск не выполнен — нужно уточнить параметры." if catalog_mismatch or parameter_guidance else
             "⚠️ Поиск временно недоступен. Повторите попытку позже." if search_failed else
             "🔎 Поиск завершён. Готовых вариантов по заданным параметрам не нашлось."
         )
@@ -3057,6 +3079,8 @@ def _tour_search_worker(
             "Нажмите «◀️ Назад», чтобы изменить параметры, либо попросите помощи менеджера. "
             "Это ограничение поиска, а не подтверждённое отсутствие туров."
         )
+    elif parameter_guidance:
+        message_text = parameter_guidance
     elif search_failed:
         message_text = (
             "Не удалось получить ответ от сервиса поиска. Наличие туров пока не проверено.\n\n"

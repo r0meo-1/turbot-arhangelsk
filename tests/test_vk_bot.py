@@ -1485,6 +1485,49 @@ def test_vk_back_then_budget_edit_invalidates_pending_result(monkeypatch):
     assert published == []
 
 
+@pytest.mark.parametrize("error,search_id,expected,show_over", [
+    ("sletat: Подходящих туров пока не найдено", 123, "дороже бюджета", True),
+    ("tourvisor: Подходящих туров пока не найдено", 456, "дороже бюджета", True),
+    ("Подходящих туров пока не найдено", None, "готовых вариантов", False),
+    ("alean: Alean: timeout; sletat: Подходящих туров пока не найдено", 123, "дороже бюджета", True),
+    ("alean: Отель не найден в Alean", None, "другой отель", False),
+    ("alean: Для этих условий Alean требуется подбор менеджером", None, "прямого перелёта", False),
+    ("alean: Для этих условий Alean требуется подбор менеджером", None, "нужен подбор менеджером", False),
+    ("alean: Для Alean уточните состав туристов", None, "состав туристов", False),
+    ("alean: Для Alean уточните бюджет", None, "Уточните бюджет", False),
+    ("", -1, "дороже бюджета", True),
+    ("alean: Для Alean уточните возраст каждого ребёнка", None, "возраст", False),
+    ("alean: Для Alean укажите от 1 до 28 ночей", None, "ночей", False),
+    ("alean: Для Alean нужны точные даты", None, "точную дату", False),
+    ("alean: Направление или город вылета не найден в Alean", None, "изменить параметры", False),
+    ("alean: Alean: timeout", None, "Повторите поиск позже", False),
+    ("alean: Alean недоступен (HTTP 503)", None, "Повторите поиск позже", False),
+])
+def test_vk_search_outcome_guidance(monkeypatch, error, search_id, expected, show_over):
+    user_id, marker = 9577, "outcome-search"
+    snapshot = {"origin": "Москва", "budget": 100000}
+    if expected == "прямого перелёта":
+        snapshot["direct_only"] = True
+    bot.user_data[user_id] = dict(snapshot, state=bot.STATE_REVIEW,
+                                  _tour_search_marker=marker, _tour_searching=True)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k:
+                        (bot._tourvisor.SearchResult(error=error, search_id=search_id), ""))
+    messages, edits, keyboards = [], [], []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **k: messages.append(text))
+    monkeypatch.setattr(bot, "edit_message", lambda uid, mid, text, **k: edits.append(text))
+    monkeypatch.setattr(bot, "_no_tours_keyboard", lambda over: keyboards.append(over))
+    bot._tour_search_worker(user_id, marker, snapshot, 111)
+    assert len(messages) == len(edits) == 1
+    assert expected in messages[0]
+    assert keyboards == [show_over]
+    if "Повторите поиск позже" not in expected:
+        assert "временно недоступен" not in edits[0]
+        assert "Не удалось получить ответ" not in messages[0]
+    assert not bot.user_data[user_id].get("selected_tour")
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM leads").fetchone()[0] == 0
+
+
 def test_vk_undecided_destination_marks_consultation(client):
     _post(client, 903, "Начать")
     _post(client, 903, bot.CONSENT_YES_TEXT)
