@@ -50,7 +50,9 @@ def parse_russian_dates(text: str) -> Tuple[Optional[str], Optional[str]]:
     year_match = re.search(r"\b(20\d{2})\b", text)
     year = int(year_match.group(1)) if year_match else current_year
 
-    parts = re.split(r"\s*(?:-|–|—|\bпо\b)\s*", text)
+    # Trim each part below instead of matching arbitrary whitespace around
+    # delimiters: the latter retries long whitespace runs at every position.
+    parts = re.split(r"(?:-|–|—|\bпо\b)", text)
     parts = [p.strip() for p in parts if p.strip()]
     if len(parts) < 2:
         single = re.fullmatch(

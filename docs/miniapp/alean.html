@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Алеан — отели и туры по России · TurBot</title>
+  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./alean.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+<main class="shell">
+  <header class="hero"><div class="brand-mark" aria-hidden="true">🏨</div><div><p class="eyebrow">АПРЕЛЬ тур · TurBot</p><h1>Алеан</h1></div><span class="ai-badge">Россия</span></header>
+  <h2>Отели и туры по России</h2>
+  <p id="demo-banner" class="demo-banner" role="status">ДЕМО: вымышленные отели, цены и наличие. Это не предложения Алеан.</p>
+  <p class="hint">Без контактов и заявок. Бронирование, оплата и отправка менеджеру отключены.</p>
+  <label class="mode-label" for="mode">Режим поиска</label>
+  <select id="mode"><option value="demo">Демо • вымышленные результаты</option><option value="live">Живой поиск • только после настройки</option></select>
+  <form id="alean-form" novalidate>
+    <fieldset class="card"><legend>Что ищем?</legend><div class="product-options"><label><input type="radio" name="kind" value="hotel"> Отель</label><label><input type="radio" name="kind" value="tour" checked> Тур с перелётом</label></div></fieldset>
+    <label class="card">Направление<select id="destination" name="destination" aria-label="Направление"><option>Сочи</option><option>Адлер</option><option>Анапа</option><option>Геленджик</option><option>Кисловодск</option><option>Россия</option></select></label>
+    <div class="grid two-col"><label class="card">Заезд<input id="arrival" name="arrival" type="date" required></label><label class="card">Выезд<input id="departure" name="departure" type="date" required></label></div>
+    <div class="grid two-col"><label class="card">Взрослых<input id="adults" name="adults" type="number" min="1" max="8" value="2" required></label><label class="card">Возраст детей<input id="ages" name="ages" type="text" placeholder="7, 12 или пусто"></label></div>
+    <p class="hint">Укажите возраст каждого ребёнка на дату заезда: 0–17 лет, не более шести детей.</p>
+    <label class="card">Бюджет на всех, ₽<input id="budget" name="budget" type="number" min="0" max="10000000" value="150000" required><span class="hint">0 — без ограничения</span></label>
+    <label id="origin-card" class="card">Город вылета<input id="origin" name="origin" type="text" value="Москва" minlength="2" maxlength="100"></label>
+    <label id="scenario-card" class="card">Демо-сценарий<select id="scenario"><option value="success">Результаты</option><option value="empty">Ничего не найдено</option><option value="timeout">Таймаут провайдера</option><option value="error">Ошибка провайдера</option></select></label>
+    <p id="validation" class="error" role="alert"></p>
+    <button class="primary" type="submit">Проверить параметры</button>
+  </form>
+  <section id="alean-review" class="card" hidden><h2 tabindex="-1">Проверьте поиск</h2><dl id="alean-summary" class="review-summary"></dl><p class="hint">Ничего не бронируется. Заявка не создаётся.</p><button id="search" class="primary" type="button">Найти варианты</button></section>
+  <section id="alean-results" hidden aria-live="polite"><h2 id="result-title" tabindex="-1">Результаты</h2><p id="search-status" role="status"></p><div id="offer-list"></div><p id="result-notice" class="hint"></p><button id="retry" class="primary" type="button" hidden>Повторить поиск</button><button class="secondary" type="button" disabled>Бронирование и отправка отключены</button></section>
+  <nav id="search-nav" class="review-actions" aria-label="Навигация"><button id="back" class="secondary" type="button" hidden>← Назад</button><button id="cancel" class="secondary" type="button">Отмена</button></nav>
+  <p id="cancel-status" role="status"></p>
+  <p class="hint">Живой поиск отелей и SOAP-подтверждение ещё не проверены. <a href="https://www.alean.ru/page/ta-api/?label=diff" target="_blank" rel="noopener noreferrer">Официальное описание API Алеан</a></p>
+</main>
+<script src="./alean.js"></script>
+</body>
+</html>

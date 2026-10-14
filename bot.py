@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, send_from_directory
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -59,6 +59,9 @@ from shared.privacy import consent_text as _shared_consent_text, privacy_text as
 from shared.log_privacy import correlation_id as _log_correlation
 from shared import tutu as _tutu
 from shared import alean as _alean
+from shared import alean_readonly as _alean_readonly
+from shared.telegram_alean_search import AleanDialog
+
 from shared import tourvisor as _tourvisor
 from shared import version as _version
 from shared.ai import generate_ai_selection as _shared_generate_ai
@@ -81,6 +84,9 @@ from shared.telegram_webapp import (
 )
 
 load_dotenv()
+
+_alean_dialog = AleanDialog()
+ALEAN_DEMO_ONLY = os.getenv("ALEAN_DEMO_ONLY", "false").lower() in ("true", "1", "yes")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -543,6 +549,7 @@ BUDGET_PRESETS: List[Tuple[str, int]] = [
 
 BOT_COMMANDS = [
     {"command": "start", "description": "🌴 Начать подбор тура"},
+    {"command": "alean", "description": "🏨 Алеан: отели и туры по России (демо)"},
     {"command": "help", "description": "ℹ️ Справка и контакты"},
     {"command": "cancel", "description": "❌ Отменить заявку"},
     {"command": "ask", "description": "🤖 Вопрос ИИ по поездке"},
@@ -2387,6 +2394,7 @@ def kb_destinations() -> str:
             "text": "🌐 Открыть приложение",
             "web_app": {"url": MINI_APP_URL},
         }])
+    rows.append([_inline_btn("🏨 Алеан: отели и туры • демо", "as:open")])
     rows.append([_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)])
     return inline_keyboard(rows)
 
@@ -4469,6 +4477,9 @@ def handle_completion(chat_id: int, phone: str, message: Dict[str, Any], *, revi
     Telegram's update_id dedup does not help here: the updates are genuinely
     different. Check-and-set under the same lock that guards user_data.
     """
+    if ALEAN_DEMO_ONLY:
+        send_message(chat_id, "Демо: отправка заявок, бронирование и оплата отключены. Поиск: /alean.")
+        return
     with _lock:
         live = user_data.get(chat_id)
         if live is None or live.get("_completing"):
@@ -4605,6 +4616,7 @@ def _miniapp_json(body: Dict[str, Any], status: int = 200) -> Response:
     """JSON response with narrowly scoped CORS for the GitHub Pages Mini App."""
     response = jsonify(body)
     response.status_code = status
+    response.headers["Cache-Control"] = "no-store"
     origin = request.headers.get("Origin", "")
     if origin and origin == MINI_APP_ORIGIN:
         response.headers["Access-Control-Allow-Origin"] = origin
@@ -4614,9 +4626,57 @@ def _miniapp_json(body: Dict[str, Any], status: int = 200) -> Response:
     return response
 
 
+_alean_search_slots = threading.BoundedSemaphore(2)
+
+
+@app.route("/miniapp/alean/<asset>")
+@app.route("/miniapp/<asset>")
+@app.route("/miniapp/", defaults={"asset": "index.html"})
+def alean_miniapp_asset(asset):
+    if asset not in ("index.html", "app.js", "alean.html", "alean.js", "alean.css", "styles.css"):
+        return "Not found", 404
+    return send_from_directory(os.path.join(os.path.dirname(__file__), "miniapp"), asset)
+
+
+@app.route("/miniapp/alean/search", methods=["POST", "OPTIONS"])
+def alean_miniapp_search():
+    """Read-only demo is anonymous; opt-in live searches require signed initData."""
+    origin = request.headers.get("Origin", "")
+    same_origin = request.host_url.rstrip("/")
+    if origin and origin not in (MINI_APP_ORIGIN, same_origin):
+        return _miniapp_json({"ok": False, "state": "error", "error": "Origin is not allowed"}, 403)
+    if request.method == "OPTIONS":
+        return _miniapp_json({"ok": True}, 204)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return _miniapp_json({"ok": False, "state": "validation", "error": "Invalid JSON body"}, 400)
+    mode = body.get("mode", "demo")
+    if mode == "live":
+        if ALEAN_DEMO_ONLY:
+            return _miniapp_json({"ok": False, "state": "unavailable", "error": "Live search disabled in demo"}, 403)
+        try:
+            validate_init_data(str(body.get("initData") or ""), BOT_TOKEN, max_age=3600)
+        except MiniAppValidationError:
+            return _miniapp_json({"ok": False, "state": "error", "error": "Telegram authorization failed"}, 401)
+    if not _alean_search_slots.acquire(blocking=False):
+        return _miniapp_json({"ok": False, "state": "error", "error": "Поиск занят. Повторите позже."}, 429)
+    try:
+        result = _alean_readonly.search(body.get("query"), mode=mode, scenario=body.get("scenario", "success"))
+        return _miniapp_json(result, 200 if result["ok"] else 503)
+    except _alean_readonly.ValidationError:
+        return _miniapp_json({"ok": False, "state": "validation",
+            "error": "Проверьте направление в России, даты (1–28 ночей), состав туристов и бюджет."}, 400)
+    except Exception:
+        return _miniapp_json({"ok": False, "state": "error", "error": "Алеан временно недоступен."}, 503)
+    finally:
+        _alean_search_slots.release()
+
+
 @app.route("/miniapp/submit", methods=["POST", "OPTIONS"])
 def miniapp_submit() -> Response:
     """Accept a menu-button Mini App request after Telegram initData validation."""
+    if ALEAN_DEMO_ONLY:
+        return _miniapp_json({"ok": False, "error": "Demo: submissions disabled"}, 403)
     origin = request.headers.get("Origin", "")
     if not MINI_APP_ORIGIN or origin != MINI_APP_ORIGIN:
         return _miniapp_json({"ok": False, "error": "Origin is not allowed"}, 403)
@@ -4975,6 +5035,12 @@ def _process_callback(data: Dict[str, Any]) -> None:
     if chat_id is None or not cb_data:
         return
 
+    if _alean_dialog.callback(chat_id, cb_data, send_message):
+        return
+    if ALEAN_DEMO_ONLY:
+        _alean_dialog.start(chat_id, send_message)
+        return
+
     first_name = from_info.get("first_name", "")
     username = from_info.get("username", "")
     _touch_user(chat_id, first_name, username)
@@ -5150,6 +5216,8 @@ def _accept_miniapp_trip(
     submission_id: str = "",
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
+    if ALEAN_DEMO_ONLY:
+        raise MiniAppValidationError("Demo: submissions disabled")
     info = validate_trip_request(payload)
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
@@ -5196,6 +5264,15 @@ def _process_update(data: Dict[str, Any]) -> None:
     from_info = message.get("from", {})
     first_name = from_info.get("first_name", "")
     username = from_info.get("username", "")
+
+    if ALEAN_DEMO_ONLY and text.split("@", 1)[0] == "/alean_live":
+        send_message(chat_id, "Живой поиск отключён на демо-инстансе. Используйте /alean.")
+        return
+    if _alean_dialog.text(chat_id, text, send_message):
+        return
+    if ALEAN_DEMO_ONLY:
+        _alean_dialog.start(chat_id, send_message)
+        return
 
     _touch_user(chat_id, first_name, username)
 
@@ -5287,7 +5364,7 @@ def _process_update(data: Dict[str, Any]) -> None:
 
     # --- User commands ---
     if text == "/help":
-        send_message(chat_id, USER_HELP, parse_mode="HTML")
+        send_message(chat_id, USER_HELP + "\n\n/alean — отели и туры по России (демо, без заявки).", parse_mode="HTML")
         return
 
     if text == "/privacy":

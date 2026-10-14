@@ -1,0 +1,20 @@
+.demo-banner { padding: 14px 16px; border-radius: 14px; border: 1px solid #e6b455; color: #ffe4a7; background: #30271b; line-height: 1.5; font-size: 14px; }
+select { width: 100%; min-height: 48px; padding: 10px; background: var(--panel); color: var(--tg-theme-text-color, #f8fafc); border: 1px solid var(--border); border-radius: 12px; font: inherit; }
+select:focus-visible { outline: 3px solid #64c9ff; outline-offset: 3px; }
+.mode-label { display: block; margin: 16px 0 8px; color: var(--muted); }
+#alean-form { margin-top: 18px; }
+#alean-form label { display: block; }
+.product-options { display: flex; gap: 18px; }
+.product-options label { margin: 0; font-size: 15px; }
+fieldset { margin: 0; }
+legend { padding: 0 6px; }
+.offer-card { margin: 12px 0; overflow-wrap: anywhere; }
+.offer-card h3 { margin: 0 0 8px; font-size: 18px; line-height: 1.4; }
+.offer-card p { line-height: 1.5; margin: 7px 0; }
+.offer-price { font-size: 23px; font-weight: 800; color: #70d6ff; }
+.offer-tag { display: inline-block; padding: 4px 8px; border-radius: 8px; color: #ffe4a7; background: #30271b; font-size: 12px; }
+#search-nav { margin-top: 18px; }
+#search-status { line-height: 1.5; }
+#alean-results > button { margin-top: 10px; }
+#alean-review { margin-top: 18px; }
+@media (max-width: 350px) { .two-col { grid-template-columns: 1fr; } }
