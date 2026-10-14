@@ -823,7 +823,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-load().catch(() => {
+const agentDeskReady = load().catch(() => {
   setConnectionState("Не удалось загрузить Agent Desk.", "bad");
   setStatus("Не удалось загрузить Agent Desk.");
 });
