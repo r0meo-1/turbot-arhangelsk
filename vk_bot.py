@@ -2636,7 +2636,9 @@ def _step_dates(user_id: int, text: str, message: Dict[str, Any], info: Dict[str
         return
 
     info["dates"] = raw
-    human_dates = _human_dates(depart, ret)
+    # A preset is a departure window, not the single anchor date returned by
+    # the flight helper. Read back the same period the package search receives.
+    human_dates = raw if chosen_preset else _human_dates(depart, ret)
     try:
         duration = (
             datetime.strptime(ret, "%Y-%m-%d") - datetime.strptime(depart, "%Y-%m-%d")

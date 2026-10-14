@@ -81,6 +81,20 @@ def _post(client, user_id, text=None, ref=None, ref_source=None):
                        content_type="application/json")
 
 
+@pytest.mark.parametrize("label,period", bot.DATE_PRESETS)
+def test_vk_date_preset_readback_preserves_search_period(monkeypatch, label, period):
+    uid = 9580
+    info = {"state": bot.STATE_DATES}
+    bot.user_data[uid] = info
+    messages = []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kw: messages.append(text))
+    monkeypatch.setattr(bot._tutu, "resolve_dates", lambda raw: ("2030-11-13", None))
+    bot._step_dates(uid, label, {}, info)
+    assert info["dates"] == period
+    assert period in messages[-1]
+    assert "13 ноября" not in messages[-1]
+
+
 def test_validate_phone():
     assert bot.validate_phone("+79161234567") == (True, "+79161234567")
     assert bot.validate_phone("89161234567") == (True, "+79161234567")
