@@ -814,6 +814,8 @@ def init_db() -> None:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN direct_only INTEGER")
             if "source_tag" not in _cols:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN source_tag TEXT")
+            if "selected_tour" not in _cols:
+                cur.execute(f"ALTER TABLE {_table} ADD COLUMN selected_tour TEXT")
         cur.execute("PRAGMA table_info(sessions)")
         _session_cols = {row[1] for row in cur.fetchall()}
         if "review_token" not in _session_cols:
@@ -1129,9 +1131,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
             INSERT INTO sessions (
                 chat_id, state, destination, origin, dates, nights, people,
                 kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, review_token, miniapp_submission_id, source_tag, updated_at
+                phone, review_token, miniapp_submission_id, source_tag, updated_at, selected_tour
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
@@ -1149,7 +1151,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 review_token=excluded.review_token,
                 miniapp_submission_id=excluded.miniapp_submission_id,
                 source_tag=excluded.source_tag,
-                updated_at=excluded.updated_at
+                updated_at=excluded.updated_at,
+                selected_tour=excluded.selected_tour
             """,
             (
                 chat_id,
@@ -1170,6 +1173,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("miniapp_submission_id"),
                 data.get("source_tag"),
                 data.get("updated_at", now),
+                json.dumps(data.get("selected_tour"), ensure_ascii=False) if data.get("selected_tour") else None,
             ),
         )
 
@@ -1198,6 +1202,7 @@ def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
     if not row:
         return None
     data = dict(row)
+    data['selected_tour'] = _decode_selected_package(data.get('selected_tour'))
     if data.get("direct_only") is not None:
         data["direct_only"] = bool(data["direct_only"])
     return data
@@ -1275,8 +1280,8 @@ def save_lead(
             INSERT INTO leads (
                 chat_id, first_name, username, destination, origin, dates, nights,
                 people, kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, source_tag, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                phone, source_tag, created_at, selected_tour
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chat_id,
@@ -1296,6 +1301,7 @@ def save_lead(
                 phone,
                 info.get("source_tag"),
                 now,
+                json.dumps(info.get("selected_tour"), ensure_ascii=False) if info.get("selected_tour") else None,
             ),
         )
         lead_id = int(cur.lastrowid)
@@ -4001,9 +4007,13 @@ def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
         f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: {'от' if info.get('budget_open_ended') else 'до'} {budget} ₽ {_budget_scope_text(info)}\n"
         f"📞 Связь: {_esc(info.get('phone', '?'))}\n\n"
+        + (_esc(_selected_package_text(info)) + "\n\n" if info.get("selected_tour") else "")
+        +
         "Заявка ещё не отправлена. Если всё верно, нажмите «Отправить менеджеру».",
         parse_mode="HTML",
-        reply_markup=inline_keyboard([
+        reply_markup=inline_keyboard(([
+            [_inline_btn("🔎 Посмотреть предложения", f"{CB_REVIEW_PREFIX}search:{token}")]
+        ] if _package_preview_enabled() else []) + [
             [_inline_btn("✅ Отправить менеджеру", f"{CB_REVIEW_PREFIX}send:{token}")],
             [_inline_btn("✏️ Изменить", f"{CB_REVIEW_PREFIX}edit:{token}")],
             [_inline_btn(CANCEL_BUTTON_TEXT, f"{CB_REVIEW_PREFIX}cancel:{token}")],
@@ -4023,7 +4033,35 @@ def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict
         send_message(chat_id, "Эта кнопка устарела. Продолжите текущий шаг заявки.")
         return
     action = parts[1]
-    if action == "send":
+    if action == "search":
+        _start_package_preview(chat_id, info)
+    elif action.startswith(("page_", "details_", "choose_")):
+        try:
+            kind, raw_index = action.split('_', 1)
+            index = int(raw_index)
+        except (ValueError, TypeError):
+            return
+        offers = info.get('_package_offers') or []
+        if not offers or index < 0 or (kind != 'page' and index >= len(offers)):
+            send_message(chat_id, 'Эта подборка недоступна. Повторите поиск.')
+            return
+        if kind == 'page':
+            _show_package_page(chat_id, info, index)
+        elif kind == 'details':
+            offer = _tourvisor.TourOffer(**offers[index])
+            text = _tourvisor.format_client_message(_tourvisor.SearchResult(offers=[offer]))
+            send_message(chat_id, text + '\n\nСостав: ' + _party_text(info) + '\nЗаявка менеджеру не отправлена.',
+                reply_markup=inline_keyboard([
+                    [_inline_btn('Обсудить этот вариант', f'{CB_REVIEW_PREFIX}choose_{index}:{parts[2]}')],
+                    [_inline_btn('◀️ К предложениям', f'{CB_REVIEW_PREFIX}page_{index // 3}:{parts[2]}')],
+                    [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{parts[2]}')]]))
+        else:
+            info['selected_tour'] = dict(offers[index])
+            _ask_review(chat_id, info)
+    elif action == "send":
+        if info.get('_package_searching'):
+            send_message(chat_id, 'Поиск ещё идёт. Дождитесь результата или отмените подбор.')
+            return
         handle_completion(chat_id, info["phone"], message, review_token=parts[2])
     elif action == "cancel":
         handle_cancel(chat_id)
@@ -4040,6 +4078,8 @@ def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict
         _ask_review(chat_id, info)
     elif action in (STATE_DESTINATION, STATE_ORIGIN, STATE_DATES, STATE_PEOPLE,
                     STATE_BUDGET, STATE_CONTACT):
+        info.pop('selected_tour', None)
+        info.pop('_package_offers', None)
         info["review_token"] = None
         info["phone"] = None
         info["state"] = action
@@ -4144,6 +4184,8 @@ def _go_back(chat_id: int) -> None:
         send_message(chat_id, "◀️ Назад", reply_markup=hide_keyboard())
     info["state"] = previous
     info["review_token"] = None
+    info.pop('selected_tour', None)
+    info.pop('_package_offers', None)
     _mark_dirty(chat_id, user=False)
     _prompt_for_state(chat_id, previous)
 
@@ -4229,6 +4271,8 @@ def _format_lead_notify_text(
         f"👥 {_esc(_party_text(info))}\n"
         f"💰 {'от' if info.get('budget_open_ended') else 'до'} {_esc(info.get('budget', '?'))} ₽ {_budget_scope_text(info)}\n"
         f"📞 Связь: <code>{_esc(phone)}</code>\n\n"
+        + (_esc(_selected_package_text(info)) + "\n\n" if info.get('selected_tour') else '')
+        +
         f"Нажмите «✍️ Ответить» ниже — или /send {chat_id}\n\n"
         f"⚡ SLA: {_esc(MANAGER_SLA_HINT)}\n"
         f"💬 Быстрый ответ:\n{_esc(_manager_quick_reply_text())}"
@@ -4370,7 +4414,111 @@ def _send_ai_blurb(chat_id: int, info: Dict[str, Any]) -> None:
 SYNC_COMPLETION = os.getenv("SYNC_COMPLETION", "").lower().strip() in ("1", "true", "yes")
 
 
-def _alean_search(info: Dict[str, Any]) -> Optional[Any]:
+def _package_preview_enabled() -> bool:
+    settings = _alean.AleanSettings.from_env()
+    return bool(settings.enabled and settings.username and settings.password
+                and 'alean' in os.getenv('TOUR_PROVIDER_ORDER', '').lower().split(','))
+
+
+def _selected_package_text(info: Dict[str, Any]) -> str:
+    selected = _decode_selected_package(info.get('selected_tour'))
+    if not selected:
+        return ''
+    try:
+        return 'Выбран для обсуждения:\n' + _tourvisor.format_client_message(
+            _tourvisor.SearchResult(offers=[_tourvisor.TourOffer(**selected)]), max_len=1200)
+    except (TypeError, ValueError):
+        return ''
+
+
+def _decode_selected_package(selected):
+    if isinstance(selected, str):
+        try:
+            selected = json.loads(selected)
+        except ValueError:
+            return ''
+    return selected if isinstance(selected, dict) else None
+
+
+def _show_package_page(chat_id: int, info: Dict[str, Any], page: int = 0) -> None:
+    pool = info.get('_package_offers') or []
+    count = max(1, (len(pool) + 2) // 3)
+    page %= count
+    token = info['review_token']
+    offset = page * 3
+    shown = pool[offset:offset+3]
+    result = _tourvisor.SearchResult(offers=[_tourvisor.TourOffer(**row) for row in shown],
+        partial=bool(info.get('_package_warning')), warning=info.get('_package_warning') or '')
+    text = f'Страница {page+1} из {count}\nСостав: {_party_text(info)}\n\n'
+    text += _tourvisor.format_client_message(result, max_len=2800, start_index=offset+1)
+    text += '\n\nЦены указаны на всех туристов. Заявка менеджеру не отправлена.'
+    buttons = [[_inline_btn(f'Подробнее №{offset+i+1}', f'{CB_REVIEW_PREFIX}details_{offset+i}:{token}')]
+               for i in range(len(shown))]
+    if count > 1:
+        buttons.append([_inline_btn('◀️ Предыдущие', f'{CB_REVIEW_PREFIX}page_{(page-1)%count}:{token}'),
+                        _inline_btn('Следующие ▶️', f'{CB_REVIEW_PREFIX}page_{(page+1)%count}:{token}')])
+    buttons.extend([[_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
+                    [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
+                    [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]])
+    send_message(chat_id, text, reply_markup=inline_keyboard(buttons))
+
+
+def _start_package_preview(chat_id: int, info: Dict[str, Any]) -> None:
+    if not _package_preview_enabled():
+        send_message(chat_id, 'Поиск предложений сейчас недоступен. Заявка не отправлена.')
+        return
+    with _lock:
+        if user_data.get(chat_id) is not info or info.get('_package_searching'):
+            return
+        token = secrets.token_hex(8)
+        info.update(review_token=token, _package_searching=True)
+        info.pop('selected_tour', None)
+        info.pop('_package_offers', None)
+        snapshot = dict(info)
+    send_message(chat_id, '🔎 Ищу предложения. Можно отменить подбор; заявка менеджеру не отправлена.',
+        reply_markup=inline_keyboard([[_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
+    if SYNC_COMPLETION:
+        _package_preview_worker(chat_id, info, token, snapshot)
+    else:
+        threading.Thread(target=_package_preview_worker, args=(chat_id, info, token, snapshot), daemon=True,
+                         name='telegram-package-preview').start()
+
+
+def _package_preview_worker(chat_id: int, owner: Dict[str, Any], token: str, snapshot: Dict[str, Any]) -> None:
+    def cancelled():
+        with _lock:
+            live = user_data.get(chat_id)
+            return live is not owner or live.get('state') != STATE_REVIEW or live.get('review_token') != token
+    try:
+        result = _alean_search(snapshot, cancelled=cancelled)
+        if cancelled():
+            return
+        with _lock:
+            owner.pop('_package_searching', None)
+            owner['_package_offers'] = [offer.__dict__.copy() for offer in result.offers] if result else []
+            owner['_package_warning'] = result.warning if result else ''
+        if result and result.offers:
+            _show_package_page(chat_id, owner)
+        else:
+            text = (('⚠️ ' + result.warning) if result and result.partial else
+                    '⚠️ Поиск не выполнен. Наличие туров не проверено.' if not result or result.error else
+                    'Поиск завершён. По этим параметрам вариантов не нашлось.')
+            send_message(chat_id, text + '\nЗаявка менеджеру не отправлена.', reply_markup=inline_keyboard([
+                [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
+                [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
+                [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
+    except Exception as exc:
+        if not cancelled():
+            owner.pop('_package_searching', None)
+            logger.warning('Telegram preview failed (%s)', type(exc).__name__)
+            send_message(chat_id, 'Поиск временно недоступен. Заявка не отправлена.',
+                reply_markup=inline_keyboard([
+                    [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
+                    [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
+                    [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
+
+
+def _alean_search(info: Dict[str, Any], *, cancelled=None) -> Optional[Any]:
     """Opt-in package search; keep contact data out of the supplier boundary."""
     settings = _alean.AleanSettings.from_env()
     order = os.getenv("TOUR_PROVIDER_ORDER", "").lower().split(",")
@@ -4383,7 +4531,8 @@ def _alean_search(info: Dict[str, Any]) -> Optional[Any]:
     # Telegram asks for nights separately unless the user supplied trip dates.
     query["dates_are_trip"] = _duration_from_dates(str(info.get("dates") or "")) is not None
     try:
-        return _alean.search_tours(settings, telegram_session, query, log=logger)
+        options = {'cancelled': cancelled} if cancelled else {}
+        return _alean.search_tours(settings, telegram_session, query, log=logger, **options)
     except Exception as exc:
         logger.warning("Alean Telegram search failed (%s)", type(exc).__name__)
         return None
@@ -5427,6 +5576,7 @@ def load_state() -> None:
             d = dict(row)
             chat_id = d.pop("chat_id")
             d["kids_ages"] = _ages_from_db(d.get("kids_ages"))
+            d['selected_tour'] = _decode_selected_package(d.get('selected_tour'))
             if d.get("direct_only") is not None:
                 d["direct_only"] = bool(d["direct_only"])
             user_data[chat_id] = d

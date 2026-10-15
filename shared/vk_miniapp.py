@@ -135,6 +135,12 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
     @bp.after_request
     def headers(response):
         response.headers["Cache-Control"] = "no-store"
+        # Only public, versioned code/styles may be reused. Signed launch data,
+        # API responses, legal configuration and the entry HTML stay private.
+        if (request.endpoint == 'vk_miniapp.asset' and response.status_code in (200, 304)
+                and (request.view_args or {}).get('name') in ('app.js', 'styles.css', 'vk-bridge.js', 'legal.js')
+                and set(request.args) == {'v'} and request.args.get('v')):
+            response.headers['Cache-Control'] = 'public, max-age=86400'
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Permissions-Policy"] = (
