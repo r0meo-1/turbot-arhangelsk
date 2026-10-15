@@ -15,6 +15,38 @@
   let effectiveLaunchParams = launchParams;
   let payload;
 
+  const applyVKConfig = (config = {}) => {
+    if (!config || typeof config !== 'object') return;
+    if (config.appearance === 'light' || config.appearance === 'dark') {
+      document.documentElement.dataset.appearance = config.appearance;
+    }
+    for (const side of ['top', 'bottom', 'left', 'right']) {
+      const value = config.insets?.[side];
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
+        document.documentElement.style.setProperty(`--vk-inset-${side}`, `${Math.min(value, 200)}px`);
+      }
+    }
+  };
+  if (bridge?.subscribe) {
+    try {
+      bridge.subscribe(({ detail } = {}) => {
+        if (detail?.type === 'VKWebAppUpdateConfig') applyVKConfig(detail.data);
+      });
+    } catch (_) {}
+  }
+
+  const setJourney = (reviewing) => {
+    $('step-parameters').removeAttribute('aria-current');
+    $('step-review').removeAttribute('aria-current');
+    (reviewing ? $('step-review') : $('step-parameters')).setAttribute('aria-current', 'step');
+  };
+  const updateGlance = () => {
+    const adults = Number($('adults').value) || 0;
+    const children = Number($('children').value) || 0;
+    const nights = Number($('nights').value) || 0;
+    $('trip-glance').textContent = `${adults} взр.${children ? ` · детей: ${children}` : ''} · ночей: ${nights} · до ${money($('budget').value)} на всех`;
+  };
+
   const DESTINATIONS = Object.freeze([
     'Таиланд', 'Пхукет, Таиланд', 'Паттайя, Таиланд',
     'Вьетнам', 'Нячанг, Вьетнам', 'Фукуок, Вьетнам',
@@ -31,7 +63,8 @@
     'Греция', 'Крит, Греция', 'Родос, Греция',
     'Кипр', 'Пафос, Кипр', 'Ларнака, Кипр',
     'Тунис', 'Монастир, Тунис', 'Хаммамет, Тунис',
-    'Доминикана', 'Пунта-Кана, Доминикана'
+    'Доминикана', 'Пунта-Кана, Доминикана',
+    'Сочи', 'Адлер', 'Кисловодск', 'Ессентуки', 'Пятигорск', 'Абхазия'
   ]);
 
   const installDestinationAutocomplete = () => {
@@ -77,6 +110,7 @@
   $('date').min = localDate(today);
   today.setDate(today.getDate() + 30);
   $('date').value = localDate(today);
+  const initialDate = $('date').value;
 
   // Native date inputs follow the device locale; keep the visible value Russian.
   const dateInput = $('date');
@@ -100,7 +134,20 @@
 
   $('budget').addEventListener('input', () => {
     $('budget-output').textContent = money($('budget').value);
+    $('budget-amount').value = $('budget').value;
   });
+  $('budget-amount').addEventListener('input', () => {
+    const input = $('budget-amount');
+    if (input.validity.valid && input.value) {
+      $('budget').value = input.value;
+      $('budget-output').textContent = money(input.value);
+    }
+  });
+  form.addEventListener('input', () => {
+    $('local-status').textContent = '';
+    updateGlance();
+  });
+  updateGlance();
 
   document.querySelectorAll('.chip').forEach((chip) => {
     chip.addEventListener('click', () => {
@@ -185,6 +232,7 @@
 
     form.hidden = true;
     $('review').hidden = false;
+    setJourney(true);
     $('status').textContent = inVK ? '' : 'Предпросмотр. Для сохранения откройте приложение из ВКонтакте.';
     $('save').disabled = !inVK;
     $('review-title').focus();
@@ -193,14 +241,47 @@
   $('edit').addEventListener('click', () => {
     $('review').hidden = true;
     form.hidden = false;
+    setJourney(false);
     destination.focus();
     form.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+
+  let clearOrigin;
+  const askToClear = (event) => {
+    clearOrigin = event.currentTarget;
+    $('clear-dialog').showModal();
+  };
+  $('clear-trip').addEventListener('click', askToClear);
+  $('cancel-trip').addEventListener('click', askToClear);
+  $('keep-trip').addEventListener('click', () => {
+    $('clear-dialog').close();
+    clearOrigin?.focus();
+  });
+  $('confirm-clear').addEventListener('click', () => {
+    $('clear-dialog').close();
+    form.reset();
+    dateInput.value = initialDate;
+    syncDateDisplay();
+    $('children-ages').replaceChildren();
+    $('children-ages-card').hidden = true;
+    $('budget-output').textContent = money($('budget').value);
+    $('summary').replaceChildren();
+    $('status').textContent = '';
+    $('error').textContent = '';
+    payload = undefined;
+    $('review').hidden = true;
+    form.hidden = false;
+    setJourney(false);
+    destination.dispatchEvent(new Event('input', { bubbles: true }));
+    $('local-status').textContent = 'Параметры очищены. Заявка не отправлена.';
+    destination.focus();
   });
 
   $('save').addEventListener('click', async () => {
     if (!inVK || !payload || $('save').disabled) return;
     $('save').disabled = true;
     $('edit').disabled = true;
+    $('cancel-trip').disabled = true;
     $('review').setAttribute('aria-busy', 'true');
     $('status').textContent = 'Сохраняем параметры…';
 
@@ -236,6 +317,7 @@
       $('chat').hidden = false;
       $('save').hidden = true;
       $('edit').hidden = true;
+      $('cancel-trip').hidden = true;
 
       const copyReviewCommand = () => {
         if (!bridge) return;
@@ -275,6 +357,7 @@
         : (error.message || 'Ошибка соединения. Повторите попытку.');
       $('save').disabled = false;
       $('edit').disabled = false;
+      $('cancel-trip').disabled = false;
     }
   });
 
@@ -309,6 +392,8 @@
 
   installDestinationAutocomplete();
   installDepartureAutocomplete();
+  form.dataset.ready = 'true';
+  $('submit').disabled = false;
 
   // Install the form before awaiting the bridge: ordinary browsers may never reply.
   if (!inVK && bridge) {
@@ -333,6 +418,9 @@
   }
 
   if (inVK && bridge) {
+    try {
+      Promise.resolve(bridge.send('VKWebAppGetConfig')).then(applyVKConfig).catch(() => {});
+    } catch (_) {}
     bridge.send('VKWebAppInit').catch(() => {
       $('welcome').textContent = 'Соберём параметры поездки. Если приложение работает некорректно, откройте его заново.';
     });
