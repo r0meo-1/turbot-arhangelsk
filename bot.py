@@ -3534,7 +3534,7 @@ def _offer_draft_resume(chat_id: int) -> bool:
     send_message(chat_id, draft_resume.PROMPT, reply_markup=inline_keyboard([
         [_inline_btn(draft_resume.CONTINUE, f'draft:continue:{token}')],
         [_inline_btn(draft_resume.RESTART, f'draft:restart:{token}')],
-        [_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)],
+        [_inline_btn(CANCEL_BUTTON_TEXT, f'draft:cancel:{token}')],
     ]))
     return True
 
@@ -3544,11 +3544,13 @@ def _resume_draft(chat_id: int, action: str, token: str) -> None:
     from shared import draft_resume
     info = user_data.get(chat_id)
     if (not info or not has_consent(chat_id) or info.get('_completing')
-            or action not in ('continue', 'restart')
+            or action not in ('continue', 'restart', 'cancel')
             or not draft_resume.consume(info, token)):
         send_message(chat_id, 'Эта кнопка устарела. Отправьте /start для продолжения.')
         return
-    if action == 'restart':
+    if action == 'cancel':
+        handle_cancel(chat_id)
+    elif action == 'restart':
         _begin_destination(chat_id)
     elif info.get('_package_searching'):
         send_message(chat_id, 'Поиск ещё выполняется. Дождитесь результата или отмените подбор.',

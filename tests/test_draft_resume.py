@@ -76,7 +76,8 @@ def test_explicit_restart_clears_draft_and_favorites_only_once(channel):
 
 
 @pytest.mark.parametrize('change', ['parameters', 'new_prompt', 'owner', 'cancel', 'consumed', 'consent'])
-def test_stale_restart_never_resets_current_trip(channel, monkeypatch, change):
+@pytest.mark.parametrize('action', ['restart', 'cancel'])
+def test_stale_choice_never_resets_current_trip(channel, monkeypatch, change, action):
     module, uid, info, sent, prompts = channel
     module.handle_start(uid)
     old_token = token(info)
@@ -93,9 +94,29 @@ def test_stale_restart_never_resets_current_trip(channel, monkeypatch, change):
     else:
         monkeypatch.setattr(module, 'has_consent', lambda owner: False)
     before = module.user_data.get(uid)
-    module._resume_draft(uid, 'restart', old_token)
+    module._resume_draft(uid, action, old_token)
     assert module.user_data.get(uid) is before
     assert 'устарела' in sent[-1][1]
+
+
+def test_restart_invalidates_only_own_miniapp_receipts(channel):
+    module, uid, info, sent, prompts = channel
+    table = 'miniapp_submissions' if module is tg else 'miniapp_handoffs'
+    column = 'submission_id' if module is tg else 'request_id'
+    with module._db_cursor(commit=True) as cur:
+        for owner in (uid, uid+1):
+            extra = ',updated_at' if module is tg else ''
+            values = ',0' if module is tg else ''
+            cur.execute(f"INSERT INTO {table}(user_id,{column},payload_hash,status{extra}) "
+                        f"VALUES (?, 'resume-receipt', 'hash', 'saved'{values})", (owner,))
+    module.handle_start(uid)
+    module._resume_draft(uid, 'restart', token(info))
+    with module._db_cursor(commit=True) as cur:
+        assert cur.execute(f'SELECT status FROM {table} WHERE user_id=? AND {column}=?',
+                           (uid, 'resume-receipt')).fetchone()[0] == 'invalidated'
+        assert cur.execute(f'SELECT status FROM {table} WHERE user_id=? AND {column}=?',
+                           (uid+1, 'resume-receipt')).fetchone()[0] == 'saved'
+        cur.execute(f'DELETE FROM {table} WHERE {column}=?', ('resume-receipt',))
 
 
 def test_partial_resume_and_inflight_operations_do_not_start_search(channel):

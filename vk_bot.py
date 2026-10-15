@@ -2384,7 +2384,7 @@ def _offer_draft_resume(user_id: int) -> bool:
     send_message(user_id, draft_resume.PROMPT, keyboard=_keyboard([
         [_btn(draft_resume.CONTINUE, 'primary', {'command': 'draft_continue', 'token': token})],
         [_btn(draft_resume.RESTART, 'secondary', {'command': 'draft_restart', 'token': token})],
-        [_btn(CANCEL_BUTTON_TEXT, 'negative')],
+        [_btn(CANCEL_BUTTON_TEXT, 'negative', {'command': 'draft_cancel', 'token': token})],
     ]))
     return True
 
@@ -2393,11 +2393,13 @@ def _resume_draft(user_id: int, action: str, token: str) -> None:
     from shared import draft_resume
     info = user_data.get(user_id)
     if (not info or not has_consent(user_id) or info.get('_completing')
-            or action not in ('continue', 'restart')
+            or action not in ('continue', 'restart', 'cancel')
             or not draft_resume.consume(info, token)):
         send_message(user_id, 'Эта кнопка устарела. Напишите «Начать» для продолжения.')
         return
-    if action == 'restart':
+    if action == 'cancel':
+        handle_cancel(user_id)
+    elif action == 'restart':
         _begin_destination(user_id)
     elif info.get('_tour_searching'):
         send_message(user_id, 'Поиск ещё выполняется. Дождитесь результата или отмените подбор.',
@@ -4664,7 +4666,7 @@ def _process_message_unlocked(message: Dict[str, Any]) -> None:
     if favorite_command:
         _favorite_action(user_id, button_payload)
         return
-    if button_payload.get('command') in ('draft_continue', 'draft_restart'):
+    if button_payload.get('command') in ('draft_continue', 'draft_restart', 'draft_cancel'):
         _resume_draft(user_id, button_payload['command'].removeprefix('draft_'),
                       button_payload.get('token', ''))
         return
