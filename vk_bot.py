@@ -2336,9 +2336,9 @@ def handle_start(
 def _begin_destination(
     user_id: int, first_name: str = "", source_tag: str = ""
 ) -> None:
-    _delete_miniapp_snapshot(user_id)
     source_tag = _first_touch_source_tag(user_id, source_tag)
     with _lock:
+        _delete_miniapp_snapshot(user_id)
         user_data[user_id] = {
             "state": STATE_DESTINATION,
             "source_tag": source_tag or None,
@@ -2357,13 +2357,14 @@ def _begin_destination(
 
 
 def handle_cancel(user_id: int) -> None:
-    snapshot_existed = _load_miniapp_snapshot(user_id) is not None
     with _lock:
+        snapshot_existed = _load_miniapp_snapshot(user_id) is not None
         existed = user_data.pop(user_id, None) is not None
-    _delete_miniapp_snapshot(user_id)
+        _delete_miniapp_snapshot(user_id)
+        if existed or snapshot_existed:
+            _mark_dirty(user_id)
+            delete_session(user_id)
     if existed or snapshot_existed:
-        _mark_dirty(user_id)
-        delete_session(user_id)
         send_message(
             user_id,
             "❌ Заявка отменена.\n\nКогда будете готовы — «Начать».",
@@ -4432,20 +4433,18 @@ def _process_app_payload(event: Dict[str, Any]) -> None:
         logger.info("VK app_payload ignored: unsupported command")
         return
 
-    snapshot = _load_miniapp_snapshot(user_id)
-    if snapshot is None:
-        logger.info("VK app_payload review ignored: snapshot_missing")
-        return
-
-    # New clients deliver review server-side. A late legacy Bridge event must
-    # neither duplicate that message nor restore its older snapshot over edits.
-    if snapshot.get("_handoff_id"):
-        return
-
     with _lock:
+        snapshot = _load_miniapp_snapshot(user_id)
+        if snapshot is None:
+            logger.info("VK app_payload review ignored: snapshot_missing")
+            return
+        # Read and restore under the same lock as server-side handoffs, so a
+        # late legacy event cannot overwrite a newer generation between them.
+        if snapshot.get("_handoff_id"):
+            return
         user_data[user_id] = snapshot
-    set_session(user_id, snapshot)
-    _ask_review(user_id)
+        set_session(user_id, snapshot)
+        _ask_review(user_id)
     logger.info("VK app_payload review restored")
 
 
