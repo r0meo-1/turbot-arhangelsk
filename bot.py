@@ -1248,6 +1248,8 @@ def session_exists(chat_id: int) -> bool:
 def delete_session(chat_id: int) -> None:
     """Remove a user's dialog session."""
     with _db_cursor(commit=True) as cur:
+        from shared import tour_favorites
+        tour_favorites.clear(cur, chat_id)
         # Also fence a crash after the draft committed but before its receipt.
         cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
             SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
@@ -1271,6 +1273,9 @@ def delete_session(chat_id: int) -> None:
 def clear_sessions() -> None:
     """Delete all active dialog sessions."""
     with _db_cursor(commit=True) as cur:
+        from shared import tour_favorites
+        tour_favorites._init(cur)
+        cur.execute('DELETE FROM tour_favorites')
         cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
             SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
             WHERE miniapp_submission_id IS NOT NULL""", (int(time.time()),))
@@ -3507,6 +3512,9 @@ def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> No
 
 def _begin_destination(chat_id: int, first_name: str = "", source_tag: str = "") -> None:
     """Enter the first data-collection step while preserving campaign attribution."""
+    from shared import tour_favorites
+    with _db_cursor(commit=True) as cur:
+        tour_favorites.clear(cur, chat_id)
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
         effective_source = normalise_source_tag(previous_source or source_tag)
@@ -4061,6 +4069,7 @@ def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
         reply_markup=inline_keyboard(([
             [_inline_btn("🔎 Посмотреть предложения", f"{CB_REVIEW_PREFIX}search:{token}")]
         ] if _package_preview_enabled() else []) + [
+            [_inline_btn('⭐ Избранное · сравнить', f'{CB_REVIEW_PREFIX}favorites:{token}')],
             [_inline_btn("✅ Отправить менеджеру", f"{CB_REVIEW_PREFIX}send:{token}")],
             [_inline_btn("✏️ Изменить", f"{CB_REVIEW_PREFIX}edit:{token}")],
             [_inline_btn(CANCEL_BUTTON_TEXT, f"{CB_REVIEW_PREFIX}cancel:{token}")],
@@ -4083,6 +4092,25 @@ def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict
     action = parts[1]
     if action == "search":
         _start_package_preview(chat_id, info)
+    elif action in ('favorites', 'compare') or action.startswith('unfav_'):
+        from shared import tour_favorites as favorites
+        if action.startswith('unfav_'):
+            favorites.change(_db_cursor, chat_id, info, remove=action[6:])
+        _show_package_favorites(chat_id, info, compare=action == 'compare')
+    elif action.startswith('fav_'):
+        from shared import tour_favorites as favorites
+        try:
+            index = int(action[4:])
+            offer = (info.get('_package_offers') or [])[index] if index >= 0 else None
+        except (ValueError, IndexError):
+            offer = None
+        if not offer or info.get('_package_searching'):
+            send_message(chat_id, 'Эта подборка недоступна. Повторите поиск.')
+            return
+        status = favorites.change(_db_cursor, chat_id, info, offer)
+        if status == 'full':
+            send_message(chat_id, 'В избранном уже 3 тура. Удалите один, чтобы добавить другой.')
+        _show_package_favorites(chat_id, info)
     elif action.startswith(("page_", "details_", "choose_")):
         try:
             kind, raw_index = action.split('_', 1)
@@ -4100,6 +4128,8 @@ def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict
             text = _tourvisor.format_client_message(_tourvisor.SearchResult(offers=[offer]))
             send_message(chat_id, text + '\n\nСостав: ' + _party_text(info) + '\nЗаявка менеджеру не отправлена.',
                 reply_markup=inline_keyboard([
+                    [_inline_btn('⭐ В избранное', f'{CB_REVIEW_PREFIX}fav_{index}:{parts[2]}')],
+                    [_inline_btn('⭐ Избранное · сравнить', f'{CB_REVIEW_PREFIX}favorites:{parts[2]}')],
                     [_inline_btn('Обсудить этот вариант', f'{CB_REVIEW_PREFIX}choose_{index}:{parts[2]}')],
                     [_inline_btn('◀️ К предложениям', f'{CB_REVIEW_PREFIX}page_{index // 3}:{parts[2]}')],
                     [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{parts[2]}')]]))
@@ -4506,10 +4536,27 @@ def _show_package_page(chat_id: int, info: Dict[str, Any], page: int = 0) -> Non
     if count > 1:
         buttons.append([_inline_btn('◀️ Предыдущие', f'{CB_REVIEW_PREFIX}page_{(page-1)%count}:{token}'),
                         _inline_btn('Следующие ▶️', f'{CB_REVIEW_PREFIX}page_{(page+1)%count}:{token}')])
-    buttons.extend([[_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
+    buttons.extend([[_inline_btn('⭐ Избранное · сравнить', f'{CB_REVIEW_PREFIX}favorites:{token}')],
+                    [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
                     [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
                     [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]])
     send_message(chat_id, text, reply_markup=inline_keyboard(buttons))
+
+
+def _show_package_favorites(chat_id, info, *, compare=False):
+    from shared import tour_favorites as favorites
+    offers = favorites.items(_db_cursor, chat_id, info)
+    token = info['review_token']
+    buttons = [[_inline_btn(f'Удалить №{i+1}',
+        f'{CB_REVIEW_PREFIX}unfav_{favorites.offer_key(offer)}:{token}')]
+        for i, offer in enumerate(offers)]
+    if len(offers) >= 2:
+        buttons.append([_inline_btn('⚖️ Сравнить 2–3 тура', f'{CB_REVIEW_PREFIX}compare:{token}')])
+    buttons.extend([
+        [_inline_btn('◀️ К предложениям', f'{CB_REVIEW_PREFIX}page_0:{token}')],
+        [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
+        [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]])
+    send_message(chat_id, favorites.render(offers, compare=compare), reply_markup=inline_keyboard(buttons))
 
 
 @_serialized_dialog
@@ -5504,6 +5551,9 @@ def _accept_miniapp_trip(
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
     info = validate_trip_request(payload)
+    from shared import tour_favorites
+    with _db_cursor(commit=True) as cur:
+        tour_favorites.clear(cur, chat_id)
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
     source_tag = normalise_source_tag(previous_source or trusted_source_tag)

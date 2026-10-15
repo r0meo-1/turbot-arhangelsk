@@ -913,6 +913,8 @@ def _erase_main_qui_quo_requests(request_ids: List[str]) -> None:
 def delete_session(chat_id: int) -> None:
     request_ids: List[str] = []
     with _db_cursor(commit=True) as cur:
+        from shared import tour_favorites
+        tour_favorites.clear(cur, chat_id)
         cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE user_id=?", (chat_id,))
         lead_ids = [
             int(row[0])
@@ -2007,6 +2009,7 @@ def _review_keyboard() -> str:
         _btn(TOUR_EDIT_DATES_TEXT, "secondary"),
         _btn(TOUR_EDIT_BUDGET_TEXT, "secondary"),
     ])
+    rows.append([_btn('⭐ Избранное', 'secondary', {'command': 'favorites'})])
     rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
@@ -2038,6 +2041,7 @@ def _tour_results_keyboard(
         _btn(TOUR_MORE_BUTTON_TEXT, "secondary"),
     ])
     send_label = TOUR_SEND_SELECTED_TEXT if selected else TOUR_SEND_MANAGER_TEXT
+    rows.append([_btn('⭐ Избранное', 'secondary', {'command': 'favorites'})])
     rows.append([_btn(send_label, "positive")])
     rows.append([
         _btn(BACK_BUTTON_TEXT, "secondary"),
@@ -2046,8 +2050,12 @@ def _tour_results_keyboard(
     return _keyboard(rows)
 
 
-def _selected_tour_keyboard() -> str:
-    return _keyboard([
+def _selected_tour_keyboard(info=None) -> str:
+    selected = (info or {}).get('selected_tour')
+    favorite_rows = [[_btn('⭐ В избранное', 'secondary', {'command': 'favorite_add',
+        'search_marker': _ensure_tour_marker(info), 'key': _tour_offer_key(selected)})]] if selected else []
+    return _keyboard(favorite_rows + [
+        [_btn('⭐ Избранное', 'secondary', {'command': 'favorites'})],
         [_btn(TOUR_SEND_SELECTED_TEXT, "positive")],
         [_btn(TOUR_HOTEL_INFO_TEXT, "primary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
@@ -2361,6 +2369,9 @@ def _begin_destination(
     user_id: int, first_name: str = "", source_tag: str = ""
 ) -> None:
     source_tag = _first_touch_source_tag(user_id, source_tag)
+    from shared import tour_favorites
+    with _db_cursor(commit=True) as cur:
+        tour_favorites.clear(cur, user_id)
     with _dialog_lock(user_id), _lock:
         _delete_miniapp_snapshot(user_id)
         user_data[user_id] = {
@@ -3364,7 +3375,7 @@ def _actualize_selected_tour_worker(
     send_message(
         user_id,
         message_text,
-        keyboard=_selected_tour_keyboard(),
+        keyboard=_selected_tour_keyboard(user_data.get(user_id)),
     )
 
 
@@ -3432,7 +3443,7 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
         f"{_client_tour_status(offer, actual)}\n\n"
         "Цена и наличие предварительные до проверки менеджером. "
         "Можно передать вариант Наталье 👇",
-        keyboard=_selected_tour_keyboard(),
+        keyboard=_selected_tour_keyboard(user_data.get(user_id)),
     )
 
 
@@ -3541,7 +3552,7 @@ def _show_similar_tours(user_id: int) -> None:
         abs(_offer_total_price(offer) - price),
     ))
     if not candidates:
-        send_message(user_id, "Похожих отелей в этой выдаче больше нет.", keyboard=_selected_tour_keyboard())
+        send_message(user_id, "Похожих отелей в этой выдаче больше нет.", keyboard=_selected_tour_keyboard(user_data.get(user_id)))
         return
     _show_tour_view(
         user_id,
@@ -3552,30 +3563,55 @@ def _show_similar_tours(user_id: int) -> None:
 
 
 def _compare_tours(user_id: int) -> None:
-    with _lock:
-        live = user_data.get(user_id) or {}
-        selected = live.get("selected_tour")
-        base = _base_tour_offers(live)
-    if not isinstance(selected, dict):
-        send_message(user_id, "Сначала выберите один из туров.", keyboard=_tour_results_keyboard())
+    _show_tour_favorites(user_id, compare=True)
+
+
+def _show_tour_favorites(user_id, *, compare=False):
+    from shared import tour_favorites as favorites
+    info = user_data.get(user_id) or {}
+    offers = favorites.items(_db_cursor, user_id, info)
+    marker = _ensure_tour_marker(info)
+    rows = [[_btn(f'Удалить №{i+1}', 'secondary', {'command': 'favorite_remove',
+        'key': favorites.offer_key(offer), 'scope': favorites.scope(info), 'search_marker': marker})]
+        for i, offer in enumerate(offers)]
+    if len(offers) >= 2:
+        rows.append([_btn('⚖️ Сравнить 2–3 тура', 'primary', {'command': 'favorite_compare'})])
+    rows.extend([[_btn('◀️ К предложениям', 'secondary', {'command': 'favorite_back'})],
+                 [_btn(CANCEL_BUTTON_TEXT, 'negative')]])
+    send_message(user_id, favorites.render(offers, compare=compare), keyboard=_keyboard(rows))
+
+
+def _favorite_action(user_id, payload):
+    from shared import tour_favorites as favorites
+    info = user_data.get(user_id)
+    if not info or info.get('state') != STATE_REVIEW or info.get('_tour_searching'):
+        send_message(user_id, 'Продолжите текущий шаг подбора.')
         return
-    selected_id = str(selected.get("tour_id") or "")
-    selected_hotel = str(selected.get("hotel") or "").casefold()
-    alternatives = [
-        offer for offer in base
-        if not (
-            (selected_id and str(offer.get("tour_id") or "") == selected_id)
-            or str(offer.get("hotel") or "").casefold() == selected_hotel
-        )
-    ]
-    alternatives.sort(key=_offer_total_price)
-    comparison = [dict(selected)] + alternatives[:2]
-    _show_tour_view(
-        user_id,
-        comparison,
-        "⚖️ Сравните выбранный тур с двумя доступными альтернативами.",
-        keep_selected=True,
-    )
+    command = payload.get('command')
+    if command == 'favorite_back':
+        if info.get('_tour_offers'):
+            _send_tour_results_page(user_id, int(info.get('_tour_page') or 0))
+        else:
+            _ask_review(user_id)
+        return
+    if command == 'favorite_add':
+        selected = info.get('selected_tour')
+        if (not isinstance(selected, dict) or not payload.get('search_marker')
+                or payload.get('search_marker') != info.get('_tour_search_marker')
+                or payload.get('key') != _tour_offer_key(selected)):
+            send_message(user_id, 'Эта кнопка устарела. Откройте текущий вариант.')
+            return
+        if favorites.change(_db_cursor, user_id, info, selected) == 'full':
+            send_message(user_id, 'В избранном уже 3 тура. Удалите один, чтобы добавить другой.')
+    elif command == 'favorite_remove':
+        if (not isinstance(payload.get('key'), str)
+                or not re.fullmatch(r'[0-9a-f]{24}', payload['key'])
+                or payload.get('scope') != favorites.scope(info)
+                or payload.get('search_marker') != info.get('_tour_search_marker')):
+            send_message(user_id, 'Эта кнопка относится к другому подбору.')
+            return
+        favorites.change(_db_cursor, user_id, info, remove=payload.get('key'))
+    _show_tour_favorites(user_id, compare=command == 'favorite_compare')
 
 
 def _show_hotel_info(user_id: int) -> None:
@@ -3615,7 +3651,7 @@ def _show_hotel_info(user_id: int) -> None:
         "\nПодробности о пляже, удобствах и отзывы уточнит менеджер по источнику.",
         "Зафиксировать этот отель в заявку менеджеру?",
     ])
-    send_message(user_id, "\n".join(lines), keyboard=_selected_tour_keyboard())
+    send_message(user_id, "\n".join(lines), keyboard=_selected_tour_keyboard(user_data.get(user_id)))
 
 
 @_serialized_dialog
@@ -4552,6 +4588,10 @@ def _process_message_unlocked(message: Dict[str, Any]) -> None:
         msg["_tour_select_payload"] = button_payload
     if button_payload.get("command") == "tour_select" and button_payload.get("number"):
         text = f"Выбрать №{button_payload['number']}"
+    favorite_command = button_payload.get('command') in (
+        'favorites', 'favorite_add', 'favorite_remove', 'favorite_compare', 'favorite_back')
+    if favorite_command and user_id not in user_data:
+        _restore_session_from_db(user_id)
     _remember_client_capabilities(user_id, message)
 
     # Fetch user name (cached in all_users)
@@ -4579,6 +4619,9 @@ def _process_message_unlocked(message: Dict[str, Any]) -> None:
 
     # Build augmented message with user name
     msg["_user_name"] = name
+    if favorite_command:
+        _favorite_action(user_id, button_payload)
+        return
 
     # Command recognition (case-insensitive, natural language)
     text_lower = text.lower()
@@ -4881,6 +4924,9 @@ def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
             info["source_tag"] = source_tag
 
         info["updated_at"] = int(time.time())
+        from shared import tour_favorites
+        with _db_cursor(commit=True) as cur:
+            tour_favorites.clear(cur, user_id)
         _save_miniapp_snapshot(user_id, info)
         set_session(user_id, info)
         user_data[user_id] = info
@@ -4917,6 +4963,8 @@ def _cancel_miniapp_continue(user_id: int, request_id: str) -> bool:
             # This is only a draft cancellation, not an erasure of historical
             # lead/CRM mappings for the same person.
             with _db_cursor(commit=True) as cur:
+                from shared import tour_favorites
+                tour_favorites.clear(cur, user_id)
                 cur.execute("DELETE FROM sessions WHERE chat_id=?", (user_id,))
         return True
 
