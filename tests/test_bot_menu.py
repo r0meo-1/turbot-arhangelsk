@@ -5,6 +5,21 @@ import pytest
 import bot
 
 
+@pytest.mark.parametrize('method,encoding', [('setChatMenuButton', 'data'), ('setMyName', 'json')])
+def test_menu_transport_uses_serialized_form_parameter(monkeypatch, method, encoding):
+    from types import SimpleNamespace
+    captured = []
+    monkeypatch.setattr(bot, 'BOT_TOKEN', 'test')
+    def post(url, **kwargs):
+        captured.append(kwargs)
+        return SimpleNamespace(status_code=200, json=lambda: {'ok': True})
+    monkeypatch.setattr(bot.telegram_session, 'post', post)
+    payload = {'menu_button': json.dumps({'type': 'commands'})} if method == 'setChatMenuButton' else {'name': 'Test'}
+    assert bot._tg_api_ok(method, payload)
+    assert captured[0][encoding] == payload
+    assert ('json' if encoding == 'data' else 'data') not in captured[0]
+
+
 @pytest.mark.parametrize('url', ['https://bot.example.test/tg/miniapp/', ''])
 def test_menu_is_serialized_and_updates_before_rate_limited_profile(monkeypatch, url):
     calls = []
