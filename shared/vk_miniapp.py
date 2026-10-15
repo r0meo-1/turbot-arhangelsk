@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import os
 import time
+from uuid import UUID
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode
 
@@ -127,7 +128,7 @@ def validate_vk_trip(payload):
     return info
 
 
-def create_blueprint(save_draft, settings):
+def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=None):
     bp = Blueprint("vk_miniapp", __name__)
     static = Path(__file__).resolve().parents[1] / "vk-miniapp"
 
@@ -252,5 +253,59 @@ def create_blueprint(save_draft, settings):
             metadata.get("vk_platform", "-"),
         )
         return jsonify(ok=True, state="review", groupId=group_id)
+
+    @bp.post("/vk/miniapp/continue")
+    def continue_in_bot():
+        secret, app_id, group_id = settings()
+        base = dict(draftSaved=False, reviewSent=False, retryable=False, groupId=group_id)
+        if not secret or not app_id or continue_draft is None:
+            return jsonify(dict(base, ok=False, error="Переход в бот ещё не подключён.")), 503
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify(dict(base, ok=False, error="Некорректные данные формы.")), 400
+        try:
+            uid = validate_launch_params(body.get("launchParams"), secret, app_id, group_id)
+        except MiniAppValidationError:
+            return jsonify(dict(base, ok=False, error="Откройте приложение заново из VK.")), 401
+        try:
+            info = validate_vk_trip(body.get("payload"))
+            request_id = body.get("requestId")
+            if not isinstance(request_id, str) or len(request_id) != 36:
+                raise ValueError("request id")
+            request_id = str(UUID(request_id))
+        except (MiniAppValidationError, ValueError, TypeError):
+            return jsonify(dict(base, ok=False, error="Проверьте параметры поездки.")), 400
+        info.update(_signed_launch_metadata(body["launchParams"]))
+        try:
+            outcome, status = continue_draft(uid, request_id, info)
+        except Exception:
+            # A transport failure may follow a durable save. Do not claim that
+            # nothing happened: the same requestId safely reconciles a retry.
+            current_app.logger.exception("vk_miniapp_continue status=failed")
+            return jsonify(dict(base, ok=False, retryable=True, error="Ответ задержался. Повторите переход.")), 503
+        return jsonify(dict(base, **outcome)), status
+
+    @bp.post("/vk/miniapp/continue/cancel")
+    def cancel_continuation():
+        secret, app_id, group_id = settings()
+        body = request.get_json(silent=True)
+        if not secret or not app_id or cancel_continue is None:
+            return jsonify(ok=False), 503
+        if not isinstance(body, dict):
+            return jsonify(ok=False), 400
+        try:
+            uid = validate_launch_params(body.get("launchParams"), secret, app_id, group_id)
+        except MiniAppValidationError:
+            return jsonify(ok=False, error="Откройте приложение заново из VK."), 401
+        try:
+            request_id = body.get("requestId")
+            if not isinstance(request_id, str) or len(request_id) != 36:
+                raise ValueError("request id")
+            request_id = str(UUID(request_id))
+        except (ValueError, TypeError):
+            return jsonify(ok=False), 400
+        if not cancel_continue(uid, request_id):
+            return jsonify(ok=False, error="Заявка уже отправляется. Подождите."), 409
+        return jsonify(ok=True)
 
     return bp

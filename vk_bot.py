@@ -575,6 +575,17 @@ def init_db() -> None:
         cur.execute("PRAGMA journal_mode=WAL")
         cur.fetchone()
     with _db_cursor(commit=True) as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS miniapp_handoffs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            request_id TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            draft_saved INTEGER NOT NULL DEFAULT 0,
+            attempt_at INTEGER NOT NULL DEFAULT 0,
+            message_id INTEGER,
+            UNIQUE(user_id, request_id)
+        )""")
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 chat_id INTEGER PRIMARY KEY,
@@ -887,6 +898,7 @@ def _erase_main_qui_quo_requests(request_ids: List[str]) -> None:
 def delete_session(chat_id: int) -> None:
     request_ids: List[str] = []
     with _db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE user_id=?", (chat_id,))
         lead_ids = [
             int(row[0])
             for row in cur.execute(
@@ -915,6 +927,7 @@ def delete_session(chat_id: int) -> None:
 
 
 _MINIAPP_SNAPSHOT_FIELDS = (
+    "_handoff_id",
     "destination", "origin", "dates", "nights", "dates_are_trip",
     "hotel_query", "people", "kids", "kids_ages", "infants",
     "budget", "budget_scope", "source", "source_tag", "vk_ref", "vk_platform",
@@ -926,6 +939,13 @@ def _save_miniapp_snapshot(chat_id: int, info: Dict[str, Any]) -> None:
     payload = {key: info.get(key) for key in _MINIAPP_SNAPSHOT_FIELDS}
     now = int(time.time())
     with _db_cursor(commit=True) as cur:
+        handoff_id = info.get("_handoff_id")
+        if handoff_id:
+            row = cur.execute("SELECT status FROM miniapp_handoffs WHERE id=? AND user_id=?", (handoff_id, chat_id)).fetchone()
+            if row is None or row[0] == "invalidated":
+                raise MiniAppValidationError("Draft replaced or cancelled")
+        cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE user_id=? AND id!=?",
+                    (chat_id, handoff_id or -1))
         cur.execute(
             """
             INSERT INTO miniapp_drafts (chat_id, payload, updated_at)
@@ -957,6 +977,7 @@ def _load_miniapp_snapshot(chat_id: int) -> Optional[Dict[str, Any]]:
 
 def _delete_miniapp_snapshot(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE user_id=?", (chat_id,))
         cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))
 
 
@@ -1568,7 +1589,7 @@ def _start_retention_worker() -> None:
 # VK API helpers
 # ---------------------------------------------------------------------------
 
-def _vk_api(method: str, **params: Any) -> Optional[Dict[str, Any]]:
+def _vk_api(method: str, *, _timeout=None, _return_error=False, **params: Any) -> Optional[Dict[str, Any]]:
     """Call a VK API method. Returns response['response'] or None on error."""
     if not VK_ACCESS_TOKEN:
         logger.error("VK_ACCESS_TOKEN not set — cannot call API")
@@ -1576,12 +1597,14 @@ def _vk_api(method: str, **params: Any) -> Optional[Dict[str, Any]]:
     params["access_token"] = VK_ACCESS_TOKEN
     params["v"] = VK_API_VERSION
     try:
-        resp = http_session.post(VK_API_BASE + method, data=params, timeout=HTTP_TIMEOUT)
+        resp = http_session.post(VK_API_BASE + method, data=params, timeout=HTTP_TIMEOUT if _timeout is None else _timeout)
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
             err = data["error"]
             logger.error("VK API %s error %s: %s", method, err.get("error_code"), err.get("error_msg"))
+            if _return_error:
+                return {"_vk_error": err.get("error_code")}
             return None
         return data.get("response")
     except Exception as exc:
@@ -2313,6 +2336,7 @@ def handle_start(
 def _begin_destination(
     user_id: int, first_name: str = "", source_tag: str = ""
 ) -> None:
+    _delete_miniapp_snapshot(user_id)
     source_tag = _first_touch_source_tag(user_id, source_tag)
     with _lock:
         user_data[user_id] = {
@@ -2845,7 +2869,7 @@ def _step_budget(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     _ask_review(user_id)
 
 
-def _ask_review(user_id: int) -> None:
+def _ask_review(user_id: int, *, delivery_id: Optional[int] = None):
     info = user_data.get(user_id, {})
     consultation = "\n💬 Нужна консультация по направлению." if info.get("needs_consultation") else ""
     budget_prefix = "от" if info.get("budget_open_ended") else "до"
@@ -2878,12 +2902,15 @@ def _ask_review(user_id: int) -> None:
         f"{consultation}\n\n"
         f"{action_hint}"
     )
-    response = send_message(
-        user_id,
-        summary,
-        keyboard=_review_keyboard(),
-    )
+    if delivery_id is None:
+        response = send_message(user_id, summary, keyboard=_review_keyboard())
+    else:
+        response = _vk_api("messages.send", user_id=user_id, message=summary,
+                           random_id=delivery_id,
+                           keyboard=_downgrade_if_needed(user_id, _review_keyboard()),
+                           _timeout=5, _return_error=True)
     info["_review_message_id"] = _message_id(response)
+    return response
 
 
 def _tour_search_wait_text(status: str) -> str:
@@ -4410,6 +4437,11 @@ def _process_app_payload(event: Dict[str, Any]) -> None:
         logger.info("VK app_payload review ignored: snapshot_missing")
         return
 
+    # New clients deliver review server-side. A late legacy Bridge event must
+    # neither duplicate that message nor restore its older snapshot over edits.
+    if snapshot.get("_handoff_id"):
+        return
+
     with _lock:
         user_data[user_id] = snapshot
     set_session(user_id, snapshot)
@@ -4772,10 +4804,114 @@ def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
         user_data[user_id] = info
 
 
+def _miniapp_trip_fingerprint(info: Dict[str, Any]) -> str:
+    # Ignore attribution and transient state; compare exactly the trip that the
+    # customer reviewed, including integer rubles and child ages.
+    keys = ("destination", "origin", "dates", "nights", "people", "budget", "budget_scope", "hotel_query")
+    value = {key: str(info.get(key) if info.get(key) is not None else "") for key in keys}
+    value["kids_ages"] = info.get("kids_ages") or []
+    value["direct_only"] = bool(info.get("direct_only"))
+    value["dates_are_trip"] = bool(info.get("dates_are_trip"))
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _cancel_miniapp_continue(user_id: int, request_id: str) -> bool:
+    with _lock:
+        if (user_data.get(user_id) or {}).get("_completing"):
+            return False
+        with _db_cursor(commit=True) as cur:
+            # A tombstone also fences a delayed first request that has not yet
+            # reached this server when the customer cancels the UI operation.
+            cur.execute("INSERT OR IGNORE INTO miniapp_handoffs(user_id,request_id,payload_hash,status) VALUES(?,?,'','invalidated')", (user_id, request_id))
+            row = cur.execute("SELECT id FROM miniapp_handoffs WHERE user_id=? AND request_id=?", (user_id, request_id)).fetchone()
+            cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE id=?", (row[0],))
+        snapshot = _load_miniapp_snapshot(user_id)
+        if snapshot and snapshot.get("_handoff_id") == row[0]:
+            user_data.pop(user_id, None)
+            _dirty_sessions.discard(user_id)
+            _delete_miniapp_snapshot(user_id)
+            # This is only a draft cancellation, not an erasure of historical
+            # lead/CRM mappings for the same person.
+            with _db_cursor(commit=True) as cur:
+                cur.execute("DELETE FROM sessions WHERE chat_id=?", (user_id,))
+        return True
+
+
+def _continue_miniapp_draft(user_id: int, request_id: str, info: Dict[str, Any]):
+    fingerprint = _miniapp_trip_fingerprint(info)
+    conflict = dict(ok=False, draftSaved=False, reviewSent=False, retryable=False,
+                    error="Черновик изменён или отменён. Откройте форму заново.")
+    # Serialize local message processing, cancellation and review delivery. No
+    # SQLite writer transaction is held over network I/O. A short durable lease
+    # also fences concurrent requests and permits recovery after a process crash.
+    with _lock:
+        now = int(time.time())
+        with _db_cursor(commit=True) as cur:
+            cur.execute("BEGIN IMMEDIATE")
+            cur.execute("INSERT OR IGNORE INTO miniapp_handoffs(user_id,request_id,payload_hash,status) VALUES(?,?,?,'pending')",
+                        (user_id, request_id, fingerprint))
+            row = dict(cur.execute("SELECT * FROM miniapp_handoffs WHERE user_id=? AND request_id=?",
+                                   (user_id, request_id)).fetchone())
+            if row["payload_hash"] != fingerprint or row["status"] == "invalidated":
+                return conflict, 409
+            if row["status"] in ("preparing", "sending") and now - row["attempt_at"] < 15:
+                return dict(ok=True, draftSaved=bool(row["draft_saved"]), reviewSent=False,
+                            retryable=True, error="Переход ещё выполняется. Повторите через несколько секунд."), 202
+            # The durable row id is this draft generation and its stable,
+            # globally unique VK random_id. Never allocate a new id on retry.
+            if row["id"] > 2**31 - 1:
+                return conflict, 409
+            if row["status"] != "sent":
+                cur.execute("UPDATE miniapp_handoffs SET status='preparing',attempt_at=? WHERE id=?", (now, row["id"]))
+
+        if not row["draft_saved"]:
+            try:
+                _save_miniapp_draft(user_id, dict(info, _handoff_id=row["id"]))
+            except MiniAppValidationError:
+                with _db_cursor(commit=True) as cur:
+                    cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE id=?", (row["id"],))
+                return conflict, 409
+            with _db_cursor(commit=True) as cur:
+                cur.execute("UPDATE miniapp_handoffs SET draft_saved=1 WHERE id=?", (row["id"],))
+
+        snapshot = _load_miniapp_snapshot(user_id)
+        live = user_data.get(user_id) or _restore_session_from_db(user_id)
+        if (not snapshot or snapshot.get("_handoff_id") != row["id"] or not live
+                or live.get("state") != STATE_REVIEW or live.get("_completing")
+                or _miniapp_trip_fingerprint(live) != fingerprint):
+            with _db_cursor(commit=True) as cur:
+                cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE id=?", (row["id"],))
+            return conflict, 409
+        if row["status"] == "sent" and row["message_id"]:
+            live["_review_message_id"] = row["message_id"]
+            return dict(ok=True, draftSaved=True, reviewSent=True, retryable=False), 200
+
+        with _db_cursor(commit=True) as cur:
+            cur.execute("UPDATE miniapp_handoffs SET status='sending',attempt_at=? WHERE id=? AND status!='invalidated'",
+                        (now, row["id"]))
+            if not cur.rowcount:
+                return conflict, 409
+        response = _ask_review(user_id, delivery_id=row["id"])
+        message_id = _message_id(response)
+        sent = type(message_id) is int and message_id > 0
+        denied = isinstance(response, dict) and response.get("_vk_error") in (900, 901, 902)
+        with _db_cursor(commit=True) as cur:
+            cur.execute("UPDATE miniapp_handoffs SET status=?,message_id=? WHERE id=? AND status!='invalidated'",
+                        ("sent" if sent else "pending", message_id if sent else None, row["id"]))
+        outcome = dict(ok=True, draftSaved=True, reviewSent=sent, retryable=not sent and not denied)
+        if not sent:
+            outcome.update(errorCode="messages_not_allowed" if denied else "delivery_unconfirmed",
+                           error="Разрешите сообщения сообщества, затем повторите переход." if denied
+                           else "Параметры сохранены, но доставка в чат не подтверждена. Повторите переход.")
+        return outcome, 200
+
+
 app = Flask(__name__)
 app.register_blueprint(create_blueprint(
     _save_miniapp_draft,
     lambda: (os.getenv("VK_MINI_APP_SECRET", ""), os.getenv("VK_MINI_APP_ID", ""), VK_GROUP_ID),
+    continue_draft=_continue_miniapp_draft,
+    cancel_continue=_cancel_miniapp_continue,
 ))
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MB — VK events are well under this
 

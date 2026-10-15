@@ -15,7 +15,14 @@ from werkzeug.serving import make_server
 playwright_sync = pytest.importorskip("playwright.sync_api", reason="VK Mini App browser E2E runs in Edge Bot CI")
 sync_playwright = playwright_sync.sync_playwright
 
-from shared.vk_miniapp import create_blueprint
+from shared.vk_miniapp import create_blueprint as _create_blueprint
+
+
+def create_blueprint(save_draft, settings):
+    def continuation(uid, request_id, info):
+        save_draft(uid, info)
+        return dict(ok=True, draftSaved=True, reviewSent=True, retryable=False), 200
+    return _create_blueprint(save_draft, settings, continuation, lambda *args: True)
 
 
 SECRET = "vk-miniapp-e2e-secret"
@@ -26,11 +33,11 @@ REVIEW_COMMAND = "Проверить заявку"
 REVIEW_PAYLOAD = {"command": "miniapp_review", "version": 1}
 
 
-def _signed_launch_params():
+def _signed_launch_params(platform="desktop_web"):
     params = {
         "vk_app_id": APP_ID,
         "vk_group_id": str(GROUP_ID),
-        "vk_platform": "desktop_web",
+        "vk_platform": platform,
         "vk_ts": str(int(time.time())),
         "vk_user_id": str(USER_ID),
     }
@@ -149,7 +156,7 @@ def test_search_preview_back_cancel_and_theme_never_submit(width, appearance, tm
         page = browser.new_page(viewport={'width': width, 'height': 850})
         errors, submissions = [], []
         page.on('pageerror', lambda error: errors.append(str(error)))
-        page.on('request', lambda request: submissions.append(request.url) if '/draft' in request.url else None)
+        page.on('request', lambda request: submissions.append(request.url) if '/draft' in request.url or '/continue' in request.url else None)
         page.route('**/vk-bridge.js', lambda route: route.fulfill(content_type='application/javascript', body='''
           window.vkBridge = {
             subscribe(callback) { window.deliverVKConfig = callback; },
@@ -242,7 +249,7 @@ def test_flight_date_uses_russian_display_and_iso_payload(locale, width, tmp_pat
 
 
 @pytest.mark.parametrize("width", [320, 390, 1280])
-def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallback(width):
+def test_vk_miniapp_browser_roundtrip_uses_server_review_without_bridge_payload(width):
     saved = []
 
     def save_draft(uid, info):
@@ -363,69 +370,12 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             )
 
             _fill_review_and_save(page)
-            page.wait_for_function(
-                "() => document.querySelector('#status').textContent.includes('если подбор не появился')"
-            )
-
-            assert page.locator("#status").inner_text().startswith("Параметры сохранены.")
-            assert REVIEW_COMMAND in page.locator("#status").inner_text()
-            assert 'нажмите «Начать»' in page.locator("#status").inner_text()
-            assert 'Бот уже подготовил' not in page.locator("#status").inner_text()
+            assert page.locator("#status").inner_text() == "Параметры отправлены в чат. Заявка менеджеру не отправлена."
             assert page.locator("#chat").get_attribute("href") == f"https://vk.ru/im?sel=-{GROUP_ID}"
-            send_payload_calls = page.evaluate(
-                "() => window.__vkBridgeCalls.filter((call) => call.method === 'VKWebAppSendPayload')"
-            )
-            assert send_payload_calls == [{
-                "method": "VKWebAppSendPayload",
-                "params": {"group_id": GROUP_ID, "payload": REVIEW_PAYLOAD},
-            }]
-            copy_calls = page.evaluate(
-                "() => window.__vkBridgeCalls.filter((call) => call.method === 'VKWebAppCopyText')"
-            )
-            assert copy_calls == []
+            calls = page.evaluate("() => window.__vkBridgeCalls")
+            assert not any(call['method'] in ('VKWebAppSendPayload', 'VKWebAppCopyText') for call in calls)
 
-            # app_payload is the preferred automatic handoff. If that Bridge
-            # command is unavailable on a client, the already-saved draft must
-            # stay successful and fall back to copying the review command.
-            fallback_page = context.new_page()
-            _mock_bridge(fallback_page)
-            fallback_page.goto(url, wait_until="domcontentloaded")
-            fallback_page.locator('#trip-form[data-ready="true"]').wait_for()
-            fallback_page.evaluate(
-                """
-                () => {
-                  window.__vkBridgeCalls = [];
-                  window.vkBridge.send = (method, params) => {
-                    window.__vkBridgeCalls.push({ method, params });
-                    if (method === 'VKWebAppSendPayload') {
-                      return Promise.reject(new Error('payload unavailable'));
-                    }
-                    return Promise.resolve({ result: true });
-                  };
-                }
-                """
-            )
-            _fill_review_and_save(fallback_page)
-            fallback_page.wait_for_function(
-                "() => document.querySelector('#status').textContent.includes('скопирована')"
-            )
-
-            fallback_status = fallback_page.locator("#status").inner_text()
-            assert REVIEW_COMMAND in fallback_status
-            assert "скопирована" in fallback_status
-            assert fallback_page.locator("#chat").get_attribute("href") == f"https://vk.ru/im?sel=-{GROUP_ID}"
-            fallback_calls = fallback_page.evaluate("() => window.__vkBridgeCalls")
-            assert [call["method"] for call in fallback_calls] == [
-                "VKWebAppSendPayload",
-                "VKWebAppCopyText",
-            ]
-            assert fallback_calls[0]["params"] == {
-                "group_id": GROUP_ID,
-                "payload": REVIEW_PAYLOAD,
-            }
-            assert fallback_calls[1]["params"] == {"text": REVIEW_COMMAND}
-
-    assert len(saved) == 2
+    assert len(saved) == 1
     uid, info = saved[0]
     assert uid == USER_ID
     assert info["destination"] == "Пхукет, Таиланд"
@@ -489,6 +439,89 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
                 assert len(saved) == 1
 
 
+@pytest.mark.parametrize('platform,close_result', [
+    ('desktop_app_messenger', 'success'), ('desktop_app_messenger', 'rejected'),
+    ('desktop_app_messenger', 'pending'), ('mobile_android', 'success'), ('mobile_iphone', 'success')])
+def test_server_delivery_and_native_return_never_need_a_manual_command(platform, close_result):
+    saved = []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda uid, info: saved.append(info), lambda: (SECRET, APP_ID, GROUP_ID)))
+    server = make_server('127.0.0.1', 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page(viewport={'width': 390, 'height': 844})
+        _mock_bridge(page)
+        page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params(platform)}#bot')
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.evaluate('''result => {
+          window.calls = [];
+          window.vkBridge.send = (method, params) => {
+            window.calls.push({method,params});
+            if (method !== 'VKWebAppClose') return Promise.resolve({});
+            if (result === 'pending') return new Promise(() => {});
+            if (result === 'rejected') return Promise.reject(new Error('unsupported'));
+            return Promise.resolve({result:true});
+          };
+        }''', close_result)
+        page.locator('#destination').fill('Сочи')
+        page.locator('#budget-amount').fill('270123')
+        page.locator('#consent').check()
+        page.locator('#terms-accepted').check()
+        page.locator('#submit').click()
+        page.locator('#save').click()
+        playwright_sync.expect(page.locator('#status')).to_have_text('Параметры отправлены в чат. Заявка менеджеру не отправлена.')
+        assert len(saved) == 1 and saved[0]['budget'] == 270123
+        if platform == 'desktop_app_messenger':
+            page.locator('#return-chat').click()
+            if close_result != 'success':
+                playwright_sync.expect(page.locator('#status')).to_contain_text('крестиком', timeout=5000)
+            assert page.locator('#chat').is_hidden()
+            assert page.evaluate("window.calls.filter(c => c.method === 'VKWebAppClose')") == [
+                {'method': 'VKWebAppClose', 'params': {'status': 'success'}}]
+        else:
+            assert page.locator('#chat').is_visible()
+            assert page.locator('#return-chat').is_hidden()
+        assert not page.evaluate("window.calls.some(c => ['VKWebAppSendPayload','VKWebAppCopyText'].includes(c.method))")
+
+
+@pytest.mark.parametrize('denied', [True, False])
+def test_saved_but_undelivered_draft_shows_retry_and_keeps_operation_identity(denied):
+    saved, attempts = [], []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *a: saved.append(a), lambda: (SECRET, APP_ID, GROUP_ID)))
+    server = make_server('127.0.0.1', 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page()
+        _mock_bridge(page)
+        def reply(route, request):
+            attempts.append(request.post_data_json)
+            if len(attempts) == 1:
+                import json
+                route.fulfill(content_type='application/json', body=json.dumps(dict(
+                    ok=True, draftSaved=True, reviewSent=False, retryable=not denied, groupId=GROUP_ID,
+                    error='Разрешите сообщения сообщества.' if denied else 'Доставка не подтверждена.')))
+            else:
+                route.continue_()
+        page.route('**/vk/miniapp/continue', reply)
+        page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}')
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.locator('#destination').fill('Сочи')
+        page.locator('#consent').check()
+        page.locator('#terms-accepted').check()
+        page.locator('#submit').click()
+        page.locator('#save').click()
+        playwright_sync.expect(page.locator('#save')).to_have_text('Повторить переход')
+        assert page.locator('#chat').is_hidden()
+        assert 'отправлены в чат' not in page.locator('#status').inner_text()
+        page.locator('#save').click()
+        _wait_for_chat(page)
+        assert attempts[0]['requestId'] == attempts[1]['requestId']
+        assert len(saved) == 1
+
+
 @pytest.mark.parametrize("failure", ["network", "http_500", "invalid_json"])
 def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
     saved = []
@@ -517,7 +550,7 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
                     content_type="application/json",
                     body='{"ok":false}' if failure == "http_500" else "not json",
                 )
-        page.route("**/vk/miniapp/draft", submit)
+        page.route("**/vk/miniapp/continue", submit)
         page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
         page.locator('#trip-form[data-ready="true"]').wait_for()
         page.locator("#destination").fill("Пхукет, Таиланд")
@@ -541,3 +574,27 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
         assert len(attempts) == 2
         assert attempts[0] == attempts[1]
         assert len(saved) == 1
+
+
+def test_clear_after_reload_cancels_the_durable_pending_operation():
+    from uuid import uuid4
+    rid, cancelled = str(uuid4()), []
+    app = Flask(__name__)
+    app.register_blueprint(_create_blueprint(lambda *a: None, lambda: (SECRET, APP_ID, GROUP_ID),
+        cancel_continue=lambda uid, request_id: cancelled.append((uid, request_id)) or True))
+    server = make_server('127.0.0.1', 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page()
+        _mock_bridge(page)
+        page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}')
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.evaluate('rid => { const p=new URLSearchParams(location.search); sessionStorage.setItem(`vk-miniapp-continue:${p.get("vk_app_id")}:${p.get("vk_user_id")}`, JSON.stringify({id:rid,hash:"pending",created:0})); }', rid)
+        page.reload()
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.locator('#clear-trip').click()
+        page.locator('#confirm-clear').click()
+        playwright_sync.expect(page.locator('#local-status')).to_contain_text('Параметры очищены')
+        assert len(cancelled) == 1 and cancelled[0][1] == rid
+        assert page.evaluate('sessionStorage.length') == 0
