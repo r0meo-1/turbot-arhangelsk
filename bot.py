@@ -1790,6 +1790,15 @@ def ensure_bot_profile() -> None:
     """Name, short/long description and menu for search + first open in Telegram."""
     if not BOT_TOKEN:
         return
+    # Menu navigation must update before rate-limited cosmetic profile calls.
+    # Bot API expects a JSON-serialized MenuButton, not a nested object.
+    menu_button = (
+        {"type": "web_app", "text": "🌐 Открыть приложение",
+         "web_app": {"url": _miniapp_release_url()}}
+        if MINI_APP_URL else {"type": "commands"}
+    )
+    if not _tg_api_ok("setChatMenuButton", {"menu_button": json.dumps(menu_button, ensure_ascii=False)}):
+        _tg_api_ok("setChatMenuButton", {"menu_button": json.dumps({"type": "commands"})})
     if BOT_DISPLAY_NAME and _tg_api_ok("setMyName", {"name": BOT_DISPLAY_NAME}):
         logger.info("Bot name set: %s", BOT_DISPLAY_NAME)
     if BOT_SHORT_DESCRIPTION and _tg_api_ok(
@@ -1800,19 +1809,6 @@ def ensure_bot_profile() -> None:
         "setMyDescription", {"description": BOT_DESCRIPTION},
     ):
         logger.info("Bot description set (%s chars)", len(BOT_DESCRIPTION))
-    # Open the deployed Mini App from the Telegram chat menu. Keep the
-    # commands fallback for environments that intentionally omit MINI_APP_URL.
-    menu_button = (
-        {
-            "type": "web_app",
-            "text": "🌐 Открыть приложение",
-            "web_app": {"url": _miniapp_release_url()},
-        }
-        if MINI_APP_URL
-        else {"type": "commands"}
-    )
-    if not _tg_api_ok("setChatMenuButton", {"menu_button": menu_button}):
-        _tg_api_ok("setChatMenuButton", {"menu_button": {"type": "commands"}})
     ensure_bot_commands()
 
 
