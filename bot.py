@@ -3984,10 +3984,13 @@ def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
     token = info["review_token"]
     budget = f"{int(info['budget']):,}".replace(",", " ")
     raw_dates = info.get("dates", "?")
-    depart, ret = _tutu.resolve_dates(raw_dates)
-    # Preserve an exact ISO date (including its year) from Mini App drafts;
-    # expand chat phrases such as "через месяц" just as the date-step reply does.
-    dates_text = _human_dates(depart, ret) if depart and raw_dates != depart else raw_dates
+    dates_text = raw_dates
+    # Expand only fuzzy presets; exact chat text and Mini App ISO dates retain
+    # their explicitly entered year and date-range wording.
+    if str(raw_dates).strip().casefold() in {value.casefold() for _, value in DATE_PRESETS}:
+        depart, ret = _tutu.resolve_dates(raw_dates)
+        if depart:
+            dates_text = f"{_human_dates(depart, ret)} {depart[:4]}"
     send_message(
         chat_id,
         "📝 <b>Проверьте заявку</b>\n\n"
