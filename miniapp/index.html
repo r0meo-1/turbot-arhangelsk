@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b1220">
   <title>TurBot — подбор тура</title>
   <link rel="stylesheet" href="./styles.css?v=20261015-2">
-  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script src="./vendor/telegram-web-app.js?v=124bdff7"></script>
 </head>
 <body>
   <main class="shell">
@@ -112,6 +112,19 @@
       <p class="privacy-note">Параметры сохранятся только после «Сохранить и продолжить». Если закрыть приложение раньше, ничего не сохранится и форму нужно будет заполнить заново.</p>
     </form>
 
+    <section id="review" class="card review-card" hidden aria-labelledby="review-title">
+      <p class="review-kicker">Почти готово</p>
+      <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
+      <p class="review-note">Менеджеру пока ничего не отправлено.</p>
+      <dl id="summary" class="review-summary"></dl>
+      <div class="review-actions">
+        <button id="edit" class="secondary" type="button">Изменить</button>
+        <button id="save" class="primary" type="button">Сохранить и продолжить</button>
+      </div>
+      <p id="status" class="review-status" role="status" aria-live="polite"></p>
+      <button class="secondary" type="button" data-clear-trip>Отменить подбор</button>
+    </section>
+
     <section class="card" aria-labelledby="apreltour-site-title" style="margin-top:12px">
       <div class="section-row">
         <div>
@@ -169,18 +182,7 @@
 
     <p id="partner-status" class="review-status" role="status" aria-live="polite"></p>
 
-    <section id="review" class="card review-card" hidden aria-labelledby="review-title">
-      <p class="review-kicker">Почти готово</p>
-      <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
-      <p class="review-note">Менеджеру пока ничего не отправлено.</p>
-      <dl id="summary" class="review-summary"></dl>
-      <div class="review-actions">
-        <button id="edit" class="secondary" type="button">Изменить</button>
-        <button id="save" class="primary" type="button">Сохранить и продолжить</button>
-      </div>
-      <p id="status" class="review-status" role="status" aria-live="polite"></p>
-      <button class="secondary" type="button" data-clear-trip>Отменить подбор</button>
-    </section>
+
     <dialog id="clear-dialog" aria-labelledby="clear-title" aria-describedby="clear-description">
       <h2 id="clear-title">Очистить параметры?</h2>
       <p id="clear-description">Введённые параметры будут удалены только из этой формы. Менеджеру ничего не отправится.</p>

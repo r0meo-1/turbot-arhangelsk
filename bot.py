@@ -3983,12 +3983,17 @@ def _trip_details_text(info: Dict[str, Any], *, html: bool = True) -> str:
 def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
     token = info["review_token"]
     budget = f"{int(info['budget']):,}".replace(",", " ")
+    raw_dates = info.get("dates", "?")
+    depart, ret = _tutu.resolve_dates(raw_dates)
+    # Preserve an exact ISO date (including its year) from Mini App drafts;
+    # expand chat phrases such as "через месяц" just as the date-step reply does.
+    dates_text = _human_dates(depart, ret) if depart and raw_dates != depart else raw_dates
     send_message(
         chat_id,
         "📝 <b>Проверьте заявку</b>\n\n"
         f"📍 Направление: {_esc(info.get('destination', '?'))}\n"
         f"🛫 Откуда: {_esc(info.get('origin', '?'))}\n"
-        f"📅 Даты: {_esc(info.get('dates', '?'))}\n"
+        f"📅 Даты: {_esc(dates_text)}\n"
         f"{_trip_details_text(info)}"
         f"👥 Состав: {_esc(_party_text(info))}\n"
         f"💰 Бюджет: {'от' if info.get('budget_open_ended') else 'до'} {budget} ₽ {_budget_scope_text(info)}\n"

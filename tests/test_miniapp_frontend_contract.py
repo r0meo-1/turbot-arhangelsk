@@ -1,9 +1,16 @@
 from pathlib import Path
+import hashlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = (ROOT / "miniapp" / "index.html").read_text(encoding="utf-8")
 APP = (ROOT / "miniapp" / "app.js").read_text(encoding="utf-8")
+
+
+def test_vendored_telegram_sdk_matches_recorded_official_asset():
+    vendor = ROOT / "miniapp" / "vendor"
+    assert hashlib.sha256((vendor / "telegram-web-app.js").read_bytes()).hexdigest() == "124bdff7ba3fe86c8ba5143467afec21e020405e74abdb92cfdda6c0ee3b5908"
+    assert "Copyright (c) 2022 Telegram Messenger" in (vendor / "LICENSE").read_text(encoding="utf-8")
 
 
 def test_miniapp_frontend_matches_production_v2_contract():
@@ -28,7 +35,8 @@ def test_miniapp_frontend_matches_production_v2_contract():
     ):
         assert field in APP
 
-    assert "https://telegram.org/js/telegram-web-app.js" in INDEX
+    assert './vendor/telegram-web-app.js?v=124bdff7' in INDEX
+    assert 'src="https://telegram.org/' not in INDEX
     assert 'id="trip-form"' in INDEX
     assert 'id="children-ages"' in INDEX
     assert 'name="departure"' in INDEX

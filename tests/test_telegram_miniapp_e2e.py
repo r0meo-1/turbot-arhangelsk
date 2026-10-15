@@ -25,13 +25,44 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 
 @pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
+def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asset_dir):
+    from urllib.parse import urlencode
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset_dir)))
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel="msedge", headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page(viewport={"width": 390, "height": 850})
+        page.add_init_script("""window.__nativeEvents = [];
+            window.TelegramWebviewProxy = {postEvent(type, data) { window.__nativeEvents.push(type); }};""")
+        external, submissions = [], []
+        page.route("https://telegram.org/**", lambda route: (external.append(route.request.url), route.abort()))
+        page.route(API_URL, lambda route: (submissions.append(route.request.post_data_json), route.fulfill(status=200, content_type="application/json", body='{"ok":true}', headers={"Access-Control-Allow-Origin": "*"})))
+        fragment = urlencode({"tgWebAppData": INIT_DATA, "tgWebAppVersion": "8.0", "tgWebAppPlatform": "tdesktop"})
+        page.goto(f"http://127.0.0.1:{server.server_port}/index.html#{fragment}", wait_until="domcontentloaded")
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        assert page.evaluate("Telegram.WebApp.initData") == INIT_DATA
+        page.locator("#destination").fill("Сочи, Россия")
+        page.locator("#consent").check()
+        page.locator("#submit").click()
+        page.locator("#review").wait_for(state="visible")
+        assert page.locator("#review").evaluate("el => el.getBoundingClientRect().top < document.querySelector('[aria-labelledby=apreltour-site-title]').getBoundingClientRect().top")
+        assert submissions == []
+        page.locator("#save").click()
+        page.wait_for_function("window.__nativeEvents.includes('web_app_close')")
+        assert len(submissions) == 1
+        assert submissions[0]["initData"] == INIT_DATA
+        assert external == []
+
+
+@pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
 def test_telegram_form_cannot_submit_before_handlers_load(asset_dir):
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset_dir)))
     with local_server(server), sync_playwright() as pw, ExitStack() as resources:
         browser = pw.chromium.launch(channel="msedge", headless=True)
         resources.callback(browser.close)
         page = browser.new_page()
-        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        page.route("**/vendor/telegram-web-app.js*", lambda route: route.abort())
         scripts, navigations, submissions = [], [], []
         page.route("**/app.js*", lambda route: scripts.append(route))
         page.route(API_URL, lambda route: (submissions.append(route.request.url), route.abort()))
@@ -96,7 +127,7 @@ def test_telegram_budget_back_and_cancel_never_submit(width, asset_dir):
         browser = pw.chromium.launch(channel="msedge", headless=True)
         resources.callback(browser.close)
         page = browser.new_page(viewport={"width": width, "height": 850})
-        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        page.route("**/vendor/telegram-web-app.js*", lambda route: route.abort())
         submissions = []
         page.route(API_URL, lambda route: (submissions.append(route.request.url), route.abort()))
         page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
@@ -187,7 +218,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
             page = context.new_page()
 
             # Keep the test deterministic and independent from telegram.org.
-            page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+            page.route("**/vendor/telegram-web-app.js*", lambda route: route.abort())
 
             def accept_submit(route, request):
                 captured.append(request.post_data_json)
@@ -355,7 +386,7 @@ def test_cancel_is_disabled_during_pending_save_and_recovers_after_error():
             initData: 'synthetic-only', ready() {}, expand() {},
             BackButton: {show() {}, hide() {}, onClick(fn) { window.__back = fn; }}
         }};""")
-        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        page.route("**/vendor/telegram-web-app.js*", lambda route: route.abort())
         pending = []
         page.route(API_URL, lambda route: pending.append(route))
         page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
@@ -398,7 +429,7 @@ def test_failed_submit_preserves_review_and_retries_same_submission(failure):
             }};
         """)
         page = context.new_page()
-        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        page.route("**/vendor/telegram-web-app.js*", lambda route: route.abort())
         def submit(route, request):
             attempts.append(request.post_data_json)
             if len(attempts) == 1 and failure == "network":
