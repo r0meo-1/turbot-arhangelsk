@@ -153,6 +153,23 @@ def _allowed_resort_ids(rows, resort, country):
     return allowed
 
 
+def _resolve_destination(countries, resorts, destination):
+    country = _named(countries, destination)
+    resort = None if country else _named(resorts, destination)
+    if resort:
+        country = next((row for row in countries if row.get('id') == resort.get('countryId')), None)
+    if country or resort:
+        return country, resort
+    parts = [part.strip() for part in str(destination or '').split(',')]
+    if len(parts) != 2 or not all(parts):
+        return None, None
+    country = _named(countries, parts[1])
+    if not country:
+        return None, None
+    resort = _named([row for row in resorts if row.get('countryId') == country.get('id')], parts[0])
+    return (country, resort) if resort else (None, None)
+
+
 def search_tours(settings, session, info, *, log=None, cancelled=None):
     log = log or logging.getLogger(__name__)
     if not settings.enabled or not settings.username or not settings.password:
@@ -204,10 +221,7 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
             return _catalog(settings, session, action, account=account)
         countries = catalog("GetCountries")
         resorts = catalog("GetResorts")
-        country = _named(countries, info.get("destination"))
-        resort = None if country else _named(resorts, info.get("destination"))
-        if resort:
-            country = next((r for r in countries if r.get("id") == resort.get("countryId")), None)
+        country, resort = _resolve_destination(countries, resorts, info.get("destination"))
         departure = _named(catalog("GetDepartCities"), info.get("origin"))
         if not country or not country.get("cid") or not departure or not departure.get("cid"):
             return tv.SearchResult(error="Направление или город вылета не найден в Alean")
