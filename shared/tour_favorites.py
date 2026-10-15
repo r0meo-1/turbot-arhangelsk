@@ -15,6 +15,7 @@ def scope(info):
     values['kids_ages'] = list(ages) if isinstance(ages, (list, tuple)) else ages_from_db(ages)
     values['direct_only'] = bool(info.get('direct_only'))
     values['dates_are_trip'] = bool(info.get('dates_are_trip'))
+    values['budget_open_ended'] = bool(info.get('budget_open_ended'))
     return hashlib.sha256(json.dumps(values,
         sort_keys=True, ensure_ascii=False, default=str).encode()).hexdigest()
 

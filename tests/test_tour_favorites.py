@@ -117,6 +117,14 @@ def test_actualization_metadata_does_not_break_comparison_or_duplicate_offer(cha
     assert 'Отель 0' in favorites.render(favorites.items(module._db_cursor, uid, info))
 
 
+def test_same_budget_amount_with_different_constraint_has_separate_shortlist(channel):
+    module, uid, info, offers, sent = channel
+    info['budget_open_ended'] = True
+    favorites.change(module._db_cursor, uid, info, offers[0])
+    assert favorites.items(module._db_cursor, uid, info)
+    assert favorites.items(module._db_cursor, uid, dict(info, budget_open_ended=False)) == []
+
+
 def test_vk_card_binds_add_to_exact_offer_and_generation():
     offer = asdict(TourOffer('Отель', 3, 'Сочи', '2027-01-01', 7, 'BB', 'Номер', 'Оператор', 100000))
     keyboard = json.loads(vk._selected_tour_keyboard({'selected_tour': offer, '_tour_search_marker': 'current'}))
