@@ -97,8 +97,12 @@ to Telegram/VK users.
 - Passes actual child ages, including ages 12–17, to hotel search.
 - Preserves total-budget versus per-person-budget semantics. No contact,
   customer name, phone number or messenger ID is sent to Alean.
-- Rejects unsupported direct-flight conditions and date/night ranges wider
-  than four values. SAPI would otherwise silently narrow those ranges.
+- Rejects unsupported direct-flight conditions. Departure ranges up to 31 days
+  and durations from 1 to 28 nights are split into non-overlapping windows of
+  at most four dates and four durations, then combined and deduplicated.
+- Range searches stop scheduling on cancellation, time-budget exhaustion or
+  permanent/rate-limit HTTP errors. Partial coverage is explicitly labelled;
+  an incomplete empty result never means that no matching tours exist.
 - Filters malformed, stopped, hotel-only, out-of-range and over-budget rows.
   Alean outages fall through to the next configured provider.
 - Catalog network requests do not hold the shared cache lock. A completed empty

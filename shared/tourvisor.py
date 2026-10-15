@@ -108,6 +108,10 @@ class SearchResult:
     error: str = ""
     search_id: Optional[int] = None
     error_code: str = ""
+    partial: bool = False
+    completed_windows: int = 0
+    total_windows: int = 0
+    warning: str = ""
 
 
 def _next_saturday(today: date) -> date:
@@ -1377,6 +1381,8 @@ def format_client_message(
     if not result.offers:
         return ""
     lines = ["🔎 Нашёл лучшие варианты по вашей заявке:", ""]
+    if result.partial:
+        lines.insert(0, "⚠️ " + (result.warning or "Результаты неполные: часть диапазона не проверена.") + "\n")
     for index, offer in enumerate(result.offers, start_index):
         stars = f" {offer.category}★" if offer.category else ""
         place = f" · {offer.region}" if offer.region else ""

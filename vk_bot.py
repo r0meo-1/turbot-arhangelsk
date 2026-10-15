@@ -2989,7 +2989,15 @@ def _tour_search_worker(
     origins = origins or [str(snapshot.get("origin") or "")]
     results = []
     provider_names: List[str] = []
+    def cancelled():
+        with _lock:
+            live = user_data.get(user_id)
+            if live and live.get("_tour_search_marker") == marker and live.get("state") != STATE_REVIEW:
+                live.pop("_tour_searching", None)
+            return not live or live.get("state") != STATE_REVIEW or live.get("_tour_search_marker") != marker
     for origin in origins[:2]:
+        if cancelled():
+            return
         origin_snapshot = dict(snapshot)
         origin_snapshot["origin"] = origin
         provider_result, provider_name = _tour_providers.search_tours(
@@ -2997,6 +3005,7 @@ def _tour_search_worker(
             on_outcome=lambda provider, outcome: _record_ops_metric(
                 "provider", provider, outcome
             ),
+            cancelled=cancelled,
         )
         results.append(provider_result)
         if provider_name:
@@ -3017,14 +3026,19 @@ def _tour_search_worker(
         error="; ".join(result.error for result in results if result.error),
         search_id=next((result.search_id for result in results if result.search_id), None),
         error_code="search_window" if all(not item.error or item.error_code == "search_window" for item in results) else "",
+        partial=any(item.partial or item.error for item in results),
+        warning=" ".join(item.warning for item in results if item.warning),
     )
     search_failed = bool(result.error) and not result.offers
-    if search_failed and result.error_code == "search_window":
+    if search_failed and result.warning:
+        failure_title = "⚠️ Диапазон проверен не полностью."
+        failure_text = result.warning + " Нельзя утверждать, что подходящих туров нет."
+    elif search_failed and result.error_code == "search_window":
         failure_title = "📅 Поиск не выполнен: уточните даты и длительность. Наличие туров пока не проверено."
         failure_text = (
             "📅 Не удалось выполнить поиск с выбранным диапазоном дат или ночей. Наличие туров пока не проверено.\n\n"
-            "Нажмите «📅 Даты»: укажите точную дату вылета или диапазон до 4 дней, "
-            "затем длительность с разбросом не более 3 ночей (например, 7–10)."
+            "Нажмите «📅 Даты»: укажите точную дату вылета или диапазон до 31 дня "
+            "и длительность от 1 до 28 ночей."
         )
     else:
         failure_title = "⚠️ Поиск временно недоступен. Наличие туров пока не проверено."
@@ -3043,6 +3057,8 @@ def _tour_search_worker(
         # Retain the generation after completion. A new search or parameter
         # edit invalidates it; REVIEW alone cannot identify this result after I/O.
         final_text = (
+            f"⚠️ Неполная подборка — найдено вариантов: {len(result.offers)}. Часть диапазона не проверена."
+            if result.offers and result.partial else
             f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
             if result.offers else failure_title if search_failed else
             "🔎 Поиск завершён. Готовых вариантов по заданным параметрам не нашлось."
@@ -3065,6 +3081,7 @@ def _tour_search_worker(
             live["_tour_offers"] = list(offers)
             live["_tour_provider"] = ",".join(dict.fromkeys(provider_names))
             live["_tour_page"] = 0
+            live["_tour_partial_notice"] = (result.warning or "Результаты неполные: часть поиска недоступна. Повторите поиск.") if result.partial else ""
             live.pop("selected_tour", None)
         if snapshot.get("_show_over_budget"):
             send_message(
@@ -3138,6 +3155,8 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         offers=[_tourvisor.TourOffer(**offer) for offer in offers]
     )
     header = f"📄 Страница {page + 1} из {page_count} (варианты {offset + 1}–{offset + len(offers)} из {len(pool)}):\n\n"
+    if live.get("_tour_partial_notice"):
+        header = "⚠️ " + live["_tour_partial_notice"] + "\n\n" + header
     content = _tourvisor.format_client_message(result, start_index=offset + 1)
     send_message(
         user_id,

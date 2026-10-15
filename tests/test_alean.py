@@ -93,6 +93,101 @@ class SochiDistricts(Session):
         return super().get(url, **kwargs)
 
 
+def test_wide_search_covers_every_requested_date_and_night_once():
+    session = Session()
+    query = info(dates="Даты гибкие", nights="5-10")
+    result = alean.search_tours(settings(), session, query)
+    window = tv.resolve_search_window(query['dates'], nights_raw=query['nights'])
+    expected = {(date.fromisoformat(window.date_from) + timedelta(days=i), n)
+                for i in range((date.fromisoformat(window.date_to)-date.fromisoformat(window.date_from)).days+1)
+                for n in range(5, 11)}
+    actual = []
+    for _, kwargs in session.calls:
+        p = kwargs['params']
+        if p['action'] != 'GetTours':
+            continue
+        from datetime import datetime
+        start = datetime.strptime(p['dateFrom'], '%d.%m.%Y').date()
+        end = datetime.strptime(p['dateTo'], '%d.%m.%Y').date()
+        assert (end-start).days <= 3 and p['nightsMax']-p['nightsMin'] <= 3
+        actual.extend((start+timedelta(days=i), n) for i in range((end-start).days+1)
+                      for n in range(p['nightsMin'], p['nightsMax']+1))
+        assert p['adults'] == 2 and p['kidsAges'] == '0,15' and p['priceMax'] == 100000
+    assert set(actual) == expected and len(actual) == len(expected)
+    assert not result.error and not result.partial
+    assert result.completed_windows == result.total_windows == 12
+    assert len({o.tour_id for o in result.offers}) == len(result.offers)
+
+
+@pytest.mark.parametrize('all_failed', [False, True])
+def test_partial_ranges_never_claim_complete_or_empty_inventory(monkeypatch, all_failed):
+    original, count = alean._request, []
+    def request(config, session, action, params=None):
+        if action == 'GetTours':
+            count.append(1)
+            if all_failed or len(count) == 2:
+                raise requests.Timeout('private-secret')
+        return original(config, session, action, params)
+    monkeypatch.setattr(alean, '_request', request)
+    result = alean.search_tours(settings(), Session(), info(dates='Даты гибкие', nights='7'))
+    assert result.partial and result.warning and result.total_windows == 6
+    assert result.completed_windows == (0 if all_failed else 5)
+    assert bool(result.error) is all_failed and bool(result.offers) is not all_failed
+    assert 'private-secret' not in result.warning + result.error
+
+
+def test_range_cancellation_stops_before_another_supplier_window():
+    session = Session()
+    def cancelled():
+        return any(k['params']['action'] == 'GetTours' for _, k in session.calls)
+    result = alean.search_tours(settings(), session, info(dates='Даты гибкие'), cancelled=cancelled)
+    assert result.error_code == 'cancelled'
+    assert sum(k['params']['action'] == 'GetTours' for _, k in session.calls) == 1
+
+
+@pytest.mark.parametrize('status', [401, 403, 429])
+def test_range_does_not_repeat_permanent_or_rate_limit_errors(status):
+    session = Session(bad={'GetTours': Response('', status=status)})
+    result = alean.search_tours(settings(), session, info(dates='Даты гибкие'))
+    assert result.partial and result.error and result.completed_windows == 0
+    assert sum(k['params']['action'] == 'GetTours' for _, k in session.calls) == 1
+
+
+def test_cancel_during_cold_catalog_stops_the_next_catalog():
+    session = Session()
+    result = alean.search_tours(settings(), session, info(), cancelled=lambda: bool(session.calls))
+    assert result.error_code == 'cancelled'
+    assert [k['params']['action'] for _, k in session.calls] == ['GetCountries']
+
+
+def test_range_connect_and_read_timeouts_fit_remaining_budget(monkeypatch):
+    original, clock, limits = alean._request, [0], []
+    monkeypatch.setattr(alean.time, 'monotonic', lambda: clock[0])
+    def request(config, session, action, params=None):
+        if action == 'GetTours':
+            limits.append((config.timeout, config.search_timeout))
+            if len(limits) == 1:
+                clock[0] = 29.8
+        return original(config, session, action, params)
+    monkeypatch.setattr(alean, '_request', request)
+    alean.search_tours(settings(), Session(), info(dates='Даты гибкие'))
+    assert all(connect + read <= .201 for connect, read in limits[1:])
+
+
+def test_range_deadline_returns_partial_even_if_remaining_windows_are_empty(monkeypatch):
+    original = alean._request
+    clock = [0]
+    monkeypatch.setattr(alean.time, 'monotonic', lambda: clock[0])
+    def request(config, session, action, params=None):
+        result = original(config, session, action, params)
+        if action == 'GetTours':
+            clock[0] = 31
+        return result
+    monkeypatch.setattr(alean, '_request', request)
+    result = alean.search_tours(settings(), Session(), info(dates='Даты гибкие'))
+    assert result.partial and result.completed_windows == 1 and result.total_windows == 6
+
+
 @pytest.mark.parametrize("resort_id,region", [("3", "Сочи"), ("6", "Адлер"),
     ("7", "Лазаревское"), ("8", "Мамайка"), ("9", "Сочи центр")])
 def test_sochi_accepts_only_verified_catalog_members(resort_id, region):
@@ -281,8 +376,8 @@ def test_vk_price_sorting_and_fuel_charge_preserve_kopecks():
 
 
 @pytest.mark.parametrize("updates", [dict(direct_only=True),dict(people=0),dict(kids_ages=[18]),
-    dict(kids_ages=[True]),dict(nights="5-10"),dict(nights="50"),dict(nights=0),dict(nights="10-7"),
-    dict(budget=-1),dict(budget=2147483648),dict(dates="Даты гибкие")])
+    dict(kids_ages=[True]),dict(nights="50"),dict(nights=0),dict(nights="10-7"),
+    dict(budget=-1),dict(budget=2147483648),dict(dates="неизвестные даты")])
 def test_unsupported_or_invalid_request_never_calls_supplier(updates):
     session = Session()
     assert alean.search_tours(settings(),session,info(**updates)).error
