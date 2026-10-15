@@ -4391,7 +4391,7 @@ def _alean_search(info: Dict[str, Any]) -> Optional[Any]:
 
 def _send_alean_results(chat_id: int, result: Any, client_name: Optional[str]) -> None:
     """Send indicative package offers as plain text, with a manager handoff."""
-    shown = _tourvisor.SearchResult(offers=result.offers[:3])
+    shown = _tourvisor.SearchResult(offers=result.offers[:3], partial=result.partial, warning=result.warning)
     text = _tourvisor.format_client_message(shown, max_len=3000)
     # Always retain this notice even when unusually long supplier fields truncate.
     text += "\n\nАлеан: отель и авиабилеты; трансфер не включён. Цена и наличие требуют проверки менеджером. Менеджер свяжется с вами по заявке."

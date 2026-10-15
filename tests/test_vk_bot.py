@@ -1434,12 +1434,12 @@ def test_vk_fallback_sends_text_and_buttons_together(monkeypatch):
 
 
 @pytest.mark.parametrize("source", ["vk_chat", "vk_mini_app"])
-def test_vk_wide_window_failure_is_not_empty_inventory(monkeypatch, source):
+def test_vk_invalid_window_failure_is_not_empty_inventory(monkeypatch, source):
     from shared.alean import AleanSettings
     from shared.tour_providers import ProviderSettings
 
     uid, marker = 9577, "wide-window"
-    info = dict(destination="Сочи", origin="Москва", dates="следующий месяц",
+    info = dict(destination="Сочи", origin="Москва", dates="неизвестные даты",
                 nights="7", people="2", kids_ages=[], budget=270123,
                 budget_scope="total", source=source)
     if source == "vk_mini_app":
@@ -1463,12 +1463,31 @@ def test_vk_wide_window_failure_is_not_empty_inventory(monkeypatch, source):
     for text in [sent[0][0], *edited, live["_tour_wait_final_text"]]:
         assert "Наличие туров пока не проверено" in text
         assert "не нашлось" not in text and "не найдено" not in text
-    assert "диапазон до 4 дней" in sent[0][0]
-    assert live["dates"] == "следующий месяц" and live["budget"] == 270123
+    assert "диапазон до 31 дня" in sent[0][0]
+    assert live["dates"] == "неизвестные даты" and live["budget"] == 270123
     assert not live.get("_tour_searching")
     keyboard = [button["action"]["label"] for row in json.loads(sent[0][1]["keyboard"])["buttons"] for button in row]
     assert bot.TOUR_EDIT_DATES_TEXT in keyboard
     assert bot.CANCEL_BUTTON_TEXT in keyboard
+
+
+@pytest.mark.parametrize('has_offers', [False, True])
+def test_partial_range_notice_survives_vk_result_rendering(monkeypatch, has_offers):
+    offer = bot._tourvisor.TourOffer('Отель', 4, 'Сочи', '2027-01-01', 7, 'HB', 'Стандарт', 'Алеан', 80000)
+    result = bot._tourvisor.SearchResult(offers=[offer] if has_offers else [], partial=True,
+        warning='Проверена часть диапазона: 1 из 6 окон.', error='' if has_offers else 'Неполная проверка')
+    bot.user_data[42] = dict(state=bot.STATE_REVIEW, _tour_search_marker='range', _tour_searching=True)
+    monkeypatch.setattr(bot._tour_providers, 'search_tours', lambda *a, **k: (result, 'alean'))
+    monkeypatch.setattr(bot, 'DEMO_MODE', False)
+    sent = []
+    monkeypatch.setattr(bot, 'send_message', lambda uid, text, **kw: sent.append(text))
+    monkeypatch.setattr(bot, 'edit_message', lambda *a, **k: True)
+    monkeypatch.setattr(bot, 'save_lead', lambda *a, **k: pytest.fail('not a lead'))
+    bot._tour_search_worker(42, 'range', {'origin': 'Москва'})
+    assert any('Проверена часть диапазона' in text for text in sent)
+    assert all('не нашлось' not in text for text in sent)
+    if has_offers:
+        assert 'Неполная подборка' in bot.user_data[42]['_tour_wait_final_text']
     assert bot.TOUR_SHOW_OVER_BUDGET_TEXT not in keyboard
 
 
@@ -2382,6 +2401,7 @@ def test_vk_direct_intent_reaches_each_origin_search(monkeypatch):
     monkeypatch.setattr(bot._tour_providers, "search_tours", search)
     monkeypatch.setattr(bot, "DEMO_MODE", True)
     monkeypatch.setattr(bot._tourvisor, "get_hot_tours", lambda *a, **kw: pytest.fail("no demo fallback for direct intent"))
+    bot.user_data[978] = dict(state=bot.STATE_REVIEW, _tour_search_marker="stale", _tour_searching=True)
     bot._tour_search_worker(978, "stale", {"origin": "Москва / Казань", "direct_only": True})
     assert [info["origin"] for info in seen] == ["Москва", "Казань"]
     assert all(info["direct_only"] is True for info in seen)

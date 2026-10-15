@@ -98,6 +98,7 @@ def search_tours(
     *,
     log: Optional[logging.Logger] = None,
     on_outcome: Optional[Callable[[str, str], None]] = None,
+    cancelled: Optional[Callable[[], bool]] = None,
 ) -> Tuple[_tourvisor.SearchResult, str]:
     """Try configured providers in order and return the first useful result.
 
@@ -110,9 +111,12 @@ def search_tours(
     error_codes: List[str] = []
     attempted = False
     last_search_id = None
+    partial_results = []
 
     failed_before_success = False
     for name in settings.enabled_names():
+        if cancelled and cancelled():
+            return _tourvisor.SearchResult(error="Поиск отменён", error_code="cancelled"), ""
         # Travelata's current adapter has no verified direct-flight filter.
         # Falling back to it would silently drop an explicit customer condition.
         if info.get("direct_only") and name == "travelata":
@@ -120,7 +124,8 @@ def search_tours(
             continue
         attempted = True
         if name == "alean":
-            result = _alean.search_tours(settings.alean, session, info, log=log)
+            options = {"cancelled": cancelled} if cancelled else {}
+            result = _alean.search_tours(settings.alean, session, info, log=log, **options)
         elif name == "sletat":
             result = _sletat.search_tours(
                 settings.sletat,
@@ -144,6 +149,8 @@ def search_tours(
 
         if result.search_id is not None:
             last_search_id = result.search_id
+        if result.partial:
+            partial_results.append(result)
         if result.offers:
             _emit_outcome(on_outcome, name, "success", log)
             if failed_before_success:
@@ -176,6 +183,10 @@ def search_tours(
         error="; ".join(errors),
         search_id=last_search_id,
         error_code="search_window" if error_codes and all(code == "search_window" for code in error_codes) else "",
+        partial=bool(partial_results),
+        completed_windows=sum(item.completed_windows for item in partial_results),
+        total_windows=sum(item.total_windows for item in partial_results),
+        warning=" ".join(item.warning for item in partial_results),
     ), ""
 
 
