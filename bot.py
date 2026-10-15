@@ -1754,14 +1754,9 @@ def _tg_api_ok(method: str, payload: Dict[str, Any]) -> bool:
     if not BOT_TOKEN:
         return False
     try:
-        # Explicit form serialization is accepted by the deployed Bot API path;
-        # verify menu changes with getChatMenuButton during release QA.
-        options = ({'data': {key: json.dumps(value) if isinstance(value, (dict, list)) else value
-                             for key, value in payload.items()}}
-                   if method == 'setChatMenuButton' else {'json': payload})
         resp = telegram_session.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/{method}",
-            **options,
+            json=payload,
             timeout=HTTP_TIMEOUT,
         )
         if resp.status_code == 200 and resp.json().get("ok"):
