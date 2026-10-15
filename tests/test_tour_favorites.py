@@ -108,6 +108,15 @@ def test_stale_buttons_and_inflight_search_cannot_add(channel):
     assert favorites.items(module._db_cursor, uid, info) == []
 
 
+def test_actualization_metadata_does_not_break_comparison_or_duplicate_offer(channel):
+    module, uid, info, offers, sent = channel
+    refreshed = dict(offers[0], actualization_status='unknown', actualized_at='now',
+                     actualization_confirmed=False)
+    assert favorites.change(module._db_cursor, uid, info, refreshed) == 'added'
+    assert favorites.change(module._db_cursor, uid, info, offers[0]) == 'exists'
+    assert 'Отель 0' in favorites.render(favorites.items(module._db_cursor, uid, info))
+
+
 def test_vk_card_binds_add_to_exact_offer_and_generation():
     offer = asdict(TourOffer('Отель', 3, 'Сочи', '2027-01-01', 7, 'BB', 'Номер', 'Оператор', 100000))
     keyboard = json.loads(vk._selected_tour_keyboard({'selected_tour': offer, '_tour_search_marker': 'current'}))
