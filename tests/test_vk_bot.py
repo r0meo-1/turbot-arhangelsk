@@ -194,6 +194,19 @@ def test_cancel_before_first_delivery_and_modified_request_are_fenced(monkeypatc
     assert bot.get_session(42)["budget"] == 270123
 
 
+def test_crash_before_saved_flag_cannot_replay_snapshot_over_chat_edits(monkeypatch):
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: None)
+    rid, info = str(uuid4()), _handoff_info()
+    bot._continue_miniapp_draft(42, rid, info)
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_handoffs SET draft_saved=0,attempt_at=0,status='preparing'")
+    bot.user_data[42]["dates"] = "2035-12-01"
+    bot.set_session(42, bot.user_data[42])
+    bot.user_data.clear()
+    assert bot._continue_miniapp_draft(42, rid, info)[1] == 409
+    assert bot.get_session(42)["dates"] == "2035-12-01"
+
+
 def test_cancel_pending_handoff_erases_only_its_draft_not_historical_crm(monkeypatch):
     monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: None)
     monkeypatch.setattr(bot._travel_crm_store, "delete_for_lead_ids", lambda *a, **k: pytest.fail("draft cancellation touched CRM"))

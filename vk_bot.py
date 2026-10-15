@@ -4866,7 +4866,11 @@ def _continue_miniapp_draft(user_id: int, request_id: str, info: Dict[str, Any])
 
         if not row["draft_saved"]:
             try:
-                _save_miniapp_draft(user_id, dict(info, _handoff_id=row["id"]))
+                existing = _load_miniapp_snapshot(user_id)
+                # A crash can occur after saving the snapshot but before the
+                # receipt flag commits. Never replay that save over chat edits.
+                if not existing or existing.get("_handoff_id") != row["id"]:
+                    _save_miniapp_draft(user_id, dict(info, _handoff_id=row["id"]))
             except MiniAppValidationError:
                 with _db_cursor(commit=True) as cur:
                     cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE id=?", (row["id"],))
