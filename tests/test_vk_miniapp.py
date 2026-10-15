@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import logging
 import time
+from uuid import uuid4
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
@@ -61,6 +62,28 @@ def test_reject_auth(case):
 def test_reject_trip(change):
     with pytest.raises(MiniAppValidationError):
         validate_vk_trip(dict(payload(), **change))
+
+
+def test_continue_api_auth_validation_and_owner_binding():
+    seen = []
+    def deliver(uid, rid, info):
+        seen.append((uid, rid, info))
+        return dict(ok=True, draftSaved=True, reviewSent=False, retryable=True), 200
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *a: None, lambda: (SECRET, '123', 999),
+                                            deliver, lambda uid, rid: seen.append((uid, rid)) or True))
+    client = app.test_client()
+    rid = str(uuid4())
+    body = dict(launchParams=signed(), payload=payload(), requestId=rid, userId=777)
+    assert client.post('/vk/miniapp/continue', json=dict(body, launchParams='tampered')).status_code == 401
+    assert client.post('/vk/miniapp/continue', json=dict(body, requestId='invalid')).status_code == 400
+    assert client.post('/vk/miniapp/continue', json=dict(body, payload={})).status_code == 400
+    assert seen == []
+    response = client.post('/vk/miniapp/continue', json=body)
+    assert response.json == dict(ok=True, draftSaved=True, reviewSent=False, retryable=True, groupId=999)
+    assert seen[0][0] == 42 and seen[0][1] == rid
+    assert client.post('/vk/miniapp/continue/cancel', json=dict(launchParams=signed(), requestId=rid)).json == dict(ok=True)
+    assert seen[-1] == (42, rid)
 
 
 def test_draft_api_and_static():

@@ -3,8 +3,6 @@
   const form = $('trip-form');
   const destination = $('destination');
   const departure = $('departure');
-  const REVIEW_COMMAND = 'Проверить заявку';
-  const REVIEW_PAYLOAD = { command: 'miniapp_review', version: 1 };
   const REQUEST_TIMEOUT_MS = 15000;
   const launchParams = location.search.slice(1);
   const params = new URLSearchParams(launchParams);
@@ -14,6 +12,43 @@
   const bridge = window.vkBridge;
   let effectiveLaunchParams = launchParams;
   let payload;
+  let continuation;
+  const operationKey = () => {
+    const identity = new URLSearchParams(effectiveLaunchParams);
+    return `vk-miniapp-continue:${identity.get('vk_app_id')}:${identity.get('vk_user_id')}`;
+  };
+  const restoreOperation = () => {
+    if (continuation) return;
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(operationKey()));
+      if (stored && typeof stored.id === 'string' && typeof stored.hash === 'string') continuation = stored;
+    } catch (_) {}
+  };
+  const forgetOperation = () => {
+    try { sessionStorage.removeItem(operationKey()); } catch (_) {}
+  };
+  const cancelOperation = async () => {
+    restoreOperation();
+    if (!continuation) return;
+    const response = await fetch('./continue/cancel', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ launchParams: effectiveLaunchParams, requestId: continuation.id }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok !== true) throw new Error(result.error || 'Не удалось отменить переход. Повторите попытку.');
+    continuation = undefined;
+    forgetOperation();
+  };
+  const operationForPayload = async () => {
+    const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(payload)));
+    const hash = Array.from(new Uint8Array(bytes), (b) => b.toString(16).padStart(2, '0')).join('');
+    restoreOperation();
+    if (continuation && continuation.hash !== hash) await cancelOperation();
+    if (!continuation) continuation = { id: crypto.randomUUID(), hash, created: Date.now() };
+    try { sessionStorage.setItem(operationKey(), JSON.stringify(continuation)); } catch (_) {}
+    return continuation.id;
+  };
 
   const applyVKConfig = (config = {}) => {
     if (!config || typeof config !== 'object') return;
@@ -238,7 +273,8 @@
     $('review-title').focus();
   });
 
-  $('edit').addEventListener('click', () => {
+  $('edit').addEventListener('click', async () => {
+    try { await cancelOperation(); } catch (error) { $('status').textContent = error.message; return; }
     $('review').hidden = true;
     form.hidden = false;
     setJourney(false);
@@ -257,7 +293,15 @@
     $('clear-dialog').close();
     clearOrigin?.focus();
   });
-  $('confirm-clear').addEventListener('click', () => {
+  $('confirm-clear').addEventListener('click', async () => {
+    $('confirm-clear').disabled = true;
+    try { await cancelOperation(); } catch (error) {
+      $('status').textContent = error.message;
+      $('clear-dialog').close();
+      $('confirm-clear').disabled = false;
+      return;
+    }
+    $('confirm-clear').disabled = false;
     $('clear-dialog').close();
     form.reset();
     dateInput.value = initialDate;
@@ -283,7 +327,8 @@
     $('edit').disabled = true;
     $('cancel-trip').disabled = true;
     $('review').setAttribute('aria-busy', 'true');
-    $('status').textContent = 'Сохраняем параметры…';
+    $('status').textContent = 'Сохраняем параметры и готовим проверку в чате…';
+    let terminalConflict = false;
 
     try {
       if (navigator.onLine === false) {
@@ -293,11 +338,11 @@
       const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       let response;
       try {
-        response = await fetch('./draft', {
+        response = await fetch('./continue', {
           method: 'POST',
           signal: controller.signal,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ launchParams: effectiveLaunchParams, payload })
+          body: JSON.stringify({ launchParams: effectiveLaunchParams, payload, requestId: await operationForPayload() })
         });
       } finally {
         clearTimeout(timer);
@@ -305,6 +350,7 @@
 
       const result = await response.json().catch(() => ({}));
       if (!response.ok || result.ok !== true) {
+        if (response.status === 409) { terminalConflict = true; forgetOperation(); }
         throw new Error(result.authReason ? `${result.error} [${result.authReason}]` : (result.error || 'Не удалось сохранить параметры.'));
       }
 
@@ -312,52 +358,54 @@
       const groupId = Number(result.groupId);
       if (!Number.isSafeInteger(groupId) || groupId <= 0) throw new Error('Не удалось открыть сообщество.');
 
-      $('status').textContent = `Параметры сохранены. Откройте чат и напишите «${REVIEW_COMMAND}»: бот покажет ваш подбор. Заявка менеджеру ещё не отправлена.`;
+      if (result.reviewSent !== true) {
+        $('status').textContent = result.error || (result.draftSaved
+          ? 'Параметры сохранены, но доставка в чат не подтверждена. Повторите переход.'
+          : 'Переход ещё выполняется. Повторите через несколько секунд.');
+        $('save').textContent = 'Повторить переход';
+        $('save').disabled = false;
+        $('edit').disabled = false;
+        $('cancel-trip').disabled = false;
+        return;
+      }
+      forgetOperation();
+      $('status').textContent = 'Параметры отправлены в чат. Заявка менеджеру не отправлена.';
       $('chat').href = `https://vk.ru/im?sel=-${groupId}`;
       $('chat').hidden = false;
       $('save').hidden = true;
       $('edit').hidden = true;
       $('cancel-trip').hidden = true;
 
-      const copyReviewCommand = () => {
-        if (!bridge) return;
-        try {
-          Promise.resolve(bridge.send('VKWebAppCopyText', { text: REVIEW_COMMAND }))
-            .then(() => {
-              if (!$('chat').hidden) {
-                $('status').textContent = `Параметры сохранены. Команда «${REVIEW_COMMAND}» скопирована. Откройте чат и вставьте её: бот покажет ваш подбор. Заявка менеджеру ещё не отправлена.`;
-              }
-            })
-            .catch(() => {});
-        } catch (_) {}
-      };
-
-      if (bridge) {
-        try {
-          Promise.resolve(bridge.send('VKWebAppSendPayload', {
-            group_id: groupId,
-            payload: REVIEW_PAYLOAD
-          }))
-            .then(() => {
-              if (!$('chat').hidden) {
-                $('status').textContent = `Параметры сохранены. Откройте чат: если подбор не появился, нажмите «Начать» или напишите «${REVIEW_COMMAND}». Заявка менеджеру ещё не отправлена.`;
-              }
-            })
-            .catch(copyReviewCommand);
-        } catch (_) {
-          copyReviewCommand();
-        }
-      } else {
-        copyReviewCommand();
+      if (new URLSearchParams(effectiveLaunchParams).get('vk_platform') === 'desktop_app_messenger' && location.hash === '#bot') {
+        $('chat').hidden = true;
+        $('return-chat').hidden = false;
       }
     } catch (error) {
       $('review').setAttribute('aria-busy', 'false');
       $('status').textContent = error.name === 'AbortError'
         ? 'Ответ задержался. Повторите попытку: одинаковые параметры не создадут дубль.'
         : (error.message || 'Ошибка соединения. Повторите попытку.');
-      $('save').disabled = false;
+      $('save').disabled = terminalConflict;
+      $('save').textContent = 'Повторить переход';
       $('edit').disabled = false;
       $('cancel-trip').disabled = false;
+    }
+  });
+
+  $('return-chat').addEventListener('click', async () => {
+    $('return-chat').disabled = true;
+    let timer;
+    try {
+      if (!bridge) throw new Error('unavailable');
+      await Promise.race([
+        bridge.send('VKWebAppClose', { status: 'success' }),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), 3000); })
+      ]);
+    } catch (_) {
+      $('status').textContent = 'Проверка параметров уже в чате. Закройте это окно крестиком, чтобы вернуться в бот. Заявка менеджеру не отправлена.';
+    } finally {
+      clearTimeout(timer);
+      $('return-chat').disabled = false;
     }
   });
 

@@ -140,7 +140,7 @@ def test_vk_miniapp_uses_separate_same_origin_legal_documents():
 
 def test_vk_miniapp_keeps_signed_draft_crm_handoff():
     assert "source: 'vk_mini_app'" in VK_APP_JS
-    assert "fetch('./draft'" in VK_APP_JS
+    assert "fetch('./continue'" in VK_APP_JS
     assert "launchParams: effectiveLaunchParams" in VK_APP_JS
-    assert "REVIEW_PAYLOAD" in VK_APP_JS
+    assert "result.reviewSent !== true" in VK_APP_JS
     assert 'https://vk.ru/im?sel=-' in VK_APP_JS

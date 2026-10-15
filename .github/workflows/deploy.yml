@@ -108,8 +108,8 @@ jobs:
               if grep -q 'trip-form' <<<"$html" && \
                  grep -q "budgetScope: 'total'" <<<"$js" && \
                  grep -q "source: 'vk_mini_app'" <<<"$js" && \
-                 grep -q "VKWebAppSendPayload" <<<"$js" && \
-                 grep -q "miniapp_review" <<<"$js"; then
+                 grep -q "requestId" <<<"$js" && \
+                 grep -q "reviewSent" <<<"$js"; then
                 break
               fi
             fi

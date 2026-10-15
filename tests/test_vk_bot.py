@@ -4,6 +4,7 @@ import os
 import json
 import time
 import sqlite3
+from uuid import uuid4
 
 # Configure the VK bot before it is imported.
 os.environ.setdefault("VK_ACCESS_TOKEN", "dummy-token")
@@ -40,6 +41,7 @@ def clean_state(monkeypatch):
     with bot._db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM sessions")
         cur.execute("DELETE FROM miniapp_drafts")
+        cur.execute("DELETE FROM miniapp_handoffs")
         cur.execute("DELETE FROM users")
         cur.execute("DELETE FROM leads")
         cur.execute("DELETE FROM ops_metric_events")
@@ -111,6 +113,191 @@ def test_miniapp_persists_review_without_lead_or_messages(monkeypatch):
     monkeypatch.setattr(bot, "_ask_review", lambda uid: reviews.append(uid))
     bot.handle_dialog(42, "Проверить заявку", {})
     assert reviews == [42]
+
+
+def _handoff_info(**updates):
+    from datetime import date, timedelta
+    from shared.vk_miniapp import validate_vk_trip
+    raw = dict(type="trip_request", version=2, destination="Сочи", departure="Москва",
+               date=(date.today() + timedelta(days=30)).isoformat(), nights=7, adults=2,
+               children=2, childrenAges=[0, 14], budgetMaxRub=270123, consent=True, termsAccepted=True)
+    raw.update(updates)
+    return validate_vk_trip(raw)
+
+
+def test_continue_delivers_once_and_survives_process_cache_loss(monkeypatch):
+    calls = []
+    monkeypatch.setattr(bot, "_vk_api", lambda method, **kw: calls.append((method, kw)) or 451)
+    monkeypatch.setattr(bot, "save_lead", lambda *a, **k: pytest.fail("not a lead"))
+    monkeypatch.setattr(bot, "_start_tour_search", lambda *a, **k: pytest.fail("not an automatic search"))
+    rid, info = str(uuid4()), _handoff_info()
+    first, status = bot._continue_miniapp_draft(42, rid, info)
+    assert status == 200 and first["draftSaved"] and first["reviewSent"]
+    snapshot = bot._load_miniapp_snapshot(42)
+    assert snapshot["budget"] == 270123 and snapshot["kids_ages"] == [0, 14]
+    bot.user_data.clear()  # durable receipt and session, not an in-memory dedupe
+    again, status = bot._continue_miniapp_draft(42, rid, info)
+    assert status == 200 and again["reviewSent"]
+    assert len(calls) == 1
+    assert calls[0][0] == "messages.send" and calls[0][1]["user_id"] == 42
+    assert calls[0][1]["random_id"] == snapshot["_handoff_id"]
+    assert calls[0][1]["_timeout"] == 5
+    assert "270 123" in calls[0][1]["message"]
+    assert bot.user_data[42]["_review_message_id"] == 451
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT count(*) FROM leads").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("failure", [None, {"_vk_error": 901}])
+def test_continue_delivery_failure_preserves_draft_and_random_id(monkeypatch, failure):
+    calls = []
+    replies = iter([failure, 452])
+    monkeypatch.setattr(bot, "_vk_api", lambda method, **kw: calls.append(kw) or next(replies))
+    rid, info = str(uuid4()), _handoff_info()
+    outcome, status = bot._continue_miniapp_draft(42, rid, info)
+    assert status == 200 and outcome["draftSaved"] and not outcome["reviewSent"]
+    assert outcome["retryable"] is (failure is None)
+    if failure:
+        assert outcome["errorCode"] == "messages_not_allowed"
+    assert bot._continue_miniapp_draft(42, rid, info)[0]["reviewSent"]
+    assert len(calls) == 2 and calls[0]["random_id"] == calls[1]["random_id"]
+
+
+@pytest.mark.parametrize("replacement", ["cancel", "legacy", "new", "edit"])
+def test_old_continuation_cannot_restore_replaced_or_cancelled_trip(monkeypatch, replacement):
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: 453)
+    rid, info = str(uuid4()), _handoff_info()
+    assert bot._continue_miniapp_draft(42, rid, info)[0]["reviewSent"]
+    if replacement == "cancel":
+        bot.handle_cancel(42)
+    elif replacement == "legacy":
+        bot._save_miniapp_draft(42, _handoff_info(destination="Турция"))
+    elif replacement == "new":
+        bot._continue_miniapp_draft(42, str(uuid4()), _handoff_info(destination="Египет"))
+    else:
+        bot.user_data[42]["dates"] = "2035-12-01"
+        bot.set_session(42, bot.user_data[42])
+    before = bot.get_session(42)
+    assert bot._continue_miniapp_draft(42, rid, info)[1] == 409
+    assert bot.get_session(42) == before
+
+
+def test_cancel_before_first_delivery_and_modified_request_are_fenced(monkeypatch):
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: 454)
+    rid, info = str(uuid4()), _handoff_info()
+    assert bot._cancel_miniapp_continue(42, rid)
+    assert bot._continue_miniapp_draft(42, rid, info)[1] == 409
+    assert bot.get_session(42) is None
+    rid = str(uuid4())
+    bot._continue_miniapp_draft(42, rid, info)
+    assert bot._continue_miniapp_draft(42, rid, _handoff_info(budgetMaxRub=350001))[1] == 409
+    assert bot.get_session(42)["budget"] == 270123
+
+
+def test_crash_before_saved_flag_cannot_replay_snapshot_over_chat_edits(monkeypatch):
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: None)
+    rid, info = str(uuid4()), _handoff_info()
+    bot._continue_miniapp_draft(42, rid, info)
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_handoffs SET draft_saved=0,attempt_at=0,status='preparing'")
+    bot.user_data[42]["dates"] = "2035-12-01"
+    bot.set_session(42, bot.user_data[42])
+    bot.user_data.clear()
+    assert bot._continue_miniapp_draft(42, rid, info)[1] == 409
+    assert bot.get_session(42)["dates"] == "2035-12-01"
+
+
+def test_cancel_pending_handoff_erases_only_its_draft_not_historical_crm(monkeypatch):
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: None)
+    monkeypatch.setattr(bot._travel_crm_store, "delete_for_lead_ids", lambda *a, **k: pytest.fail("draft cancellation touched CRM"))
+    rid, info = str(uuid4()), _handoff_info()
+    bot._continue_miniapp_draft(42, rid, info)
+    assert bot._cancel_miniapp_continue(42, rid)
+    assert bot.get_session(42) is None and bot._load_miniapp_snapshot(42) is None
+    assert bot._continue_miniapp_draft(42, rid, info)[1] == 409
+
+
+def test_sent_handoff_cancel_requires_reconciliation_and_personal_erasure_removes_receipt(monkeypatch):
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: 789)
+    rid, info = str(uuid4()), _handoff_info()
+    bot._continue_miniapp_draft(42, rid, info)
+    assert not bot._cancel_miniapp_continue(42, rid)
+    assert bot.get_session(42) is not None
+    assert bot._continue_miniapp_draft(42, rid, info)[0]["reviewSent"]
+    bot.delete_user_data(42)
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT count(*) FROM miniapp_handoffs WHERE user_id=42").fetchone()[0] == 0
+
+
+def test_slow_handoff_does_not_block_another_user_or_global_state(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered, release = Event(), Event()
+    def send(method, **kw):
+        if kw["user_id"] == 42:
+            entered.set()
+            assert release.wait(5)
+        return 790
+    monkeypatch.setattr(bot, "_vk_api", send)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(bot._continue_miniapp_draft, 42, str(uuid4()), _handoff_info())
+        assert entered.wait(5)
+        try:
+            assert bot._lock.acquire(timeout=1)
+            bot._lock.release()
+            second = pool.submit(bot._continue_miniapp_draft, 43, str(uuid4()), _handoff_info())
+            assert second.result(timeout=2)[0]["reviewSent"]
+        finally:
+            release.set()
+        assert first.result()[0]["reviewSent"]
+
+
+def test_concurrent_handoffs_share_one_confirmed_message(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered, release = Event(), Event()
+    calls = []
+    def send(method, **kw):
+        calls.append(kw)
+        entered.set()
+        assert release.wait(5)
+        return 456
+    monkeypatch.setattr(bot, "_vk_api", send)
+    rid, info = str(uuid4()), _handoff_info()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(bot._continue_miniapp_draft, 42, rid, info)
+        assert entered.wait(5)
+        second = pool.submit(bot._continue_miniapp_draft, 42, rid, info)
+        release.set()
+        assert first.result()[0]["reviewSent"] and second.result()[0]["reviewSent"]
+    assert len(calls) == 1
+
+
+def test_unknown_delivery_outcome_uses_lease_and_same_vk_identity(monkeypatch):
+    ids = []
+    monkeypatch.setattr(bot, "_vk_api", lambda method, **kw: ids.append(kw["random_id"]) or None)
+    rid, info = str(uuid4()), _handoff_info()
+    bot._continue_miniapp_draft(42, rid, info)
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_handoffs SET status='sending',attempt_at=?", (int(time.time()),))
+    assert bot._continue_miniapp_draft(42, rid, info)[1] == 202
+    assert len(ids) == 1
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_handoffs SET attempt_at=0")
+    bot.user_data.clear()
+    bot._continue_miniapp_draft(42, rid, info)
+    assert len(ids) == 2 and ids[0] == ids[1]
+
+
+def test_late_legacy_event_cannot_duplicate_server_review_or_overwrite_edits(monkeypatch):
+    monkeypatch.setenv("VK_MINI_APP_ID", "123")
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: 455)
+    bot._continue_miniapp_draft(42, str(uuid4()), _handoff_info())
+    bot.user_data[42]["state"] = bot.STATE_DATES
+    monkeypatch.setattr(bot, "_ask_review", lambda *a, **k: pytest.fail("duplicate review"))
+    bot._process_app_payload(dict(group_id=999, object=dict(user_id=42, app_id=123,
+        payload=dict(command="miniapp_review", version=1))))
+    assert bot.user_data[42]["state"] == bot.STATE_DATES
 
 
 def test_miniapp_attribution_survives_session_and_lead():
