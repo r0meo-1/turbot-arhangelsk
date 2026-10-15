@@ -345,6 +345,40 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
     assert payload["date"]
 
 
+def test_cancel_is_disabled_during_pending_save_and_recovers_after_error():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(MINIAPP_DIR)))
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel="msedge", headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page()
+        page.add_init_script("""window.Telegram = {WebApp: {
+            initData: 'synthetic-only', ready() {}, expand() {},
+            BackButton: {show() {}, hide() {}, onClick(fn) { window.__back = fn; }}
+        }};""")
+        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        pending = []
+        page.route(API_URL, lambda route: pending.append(route))
+        page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.locator("#destination").fill("Сочи, Россия")
+        page.locator("#consent").check()
+        page.locator("#submit").click()
+        with page.expect_request(API_URL):
+            page.locator("#save").click()
+        assert all(button.is_disabled() for button in page.locator('[data-clear-trip]').all())
+        assert len(pending) == 1
+        page.evaluate("window.__back()")
+        assert page.locator("#review").is_visible()
+        assert not page.locator("#clear-dialog").is_visible()
+        pending[0].fulfill(status=500, content_type="application/json", body='{"ok":false}', headers={"Access-Control-Allow-Origin": "*"})
+        playwright_sync.expect(page.locator('#review [data-clear-trip]')).to_be_enabled()
+        page.get_by_role("button", name="Отменить подбор", exact=True).click()
+        page.locator("#confirm-clear").click()
+        assert page.locator("#trip-form").is_visible()
+        assert page.locator("#destination").input_value() == ""
+        assert len(pending) == 1
+
+
 @pytest.mark.parametrize("failure", ["network", "http_500", "invalid_json"])
 def test_failed_submit_preserves_review_and_retries_same_submission(failure):
     handler = partial(_QuietHandler, directory=str(MINIAPP_DIR))
