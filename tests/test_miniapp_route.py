@@ -24,6 +24,40 @@ def finish_miniapp_notifications_before_restoring_mocks(monkeypatch):
             assert not worker.is_alive()
 
 
+def test_save_state_defers_busy_dialog_without_restoring_cancelled_draft(monkeypatch):
+    uid = 88991
+    locked = threading.Event()
+    release = threading.Event()
+    writes = []
+    monkeypatch.setattr(bot, 'set_session', lambda cid, info: writes.append(('save', cid)))
+    monkeypatch.setattr(bot, 'delete_session', lambda cid: writes.append(('delete', cid)))
+    bot.user_data[uid] = {'state': bot.STATE_CONTACT}
+    with bot._lock:
+        bot._dirty_sessions.clear()
+        bot._dirty_users.clear()
+        bot._dirty_sessions.add(uid)
+
+    def cancel_while_locked():
+        with bot._dialog_locks[uid % len(bot._dialog_locks)]:
+            locked.set()
+            assert release.wait(5)
+            bot.user_data.pop(uid, None)
+
+    worker = threading.Thread(target=cancel_while_locked)
+    worker.start()
+    try:
+        assert locked.wait(3)
+        bot.save_state()
+        assert writes == []
+        assert uid in bot._dirty_sessions
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    bot.save_state()
+    assert writes == [('delete', uid)]
+
+
 def _signed_init_data(user_id=88001, start_param=None):
     fields = {
         "auth_date": str(int(time.time())),
@@ -65,6 +99,7 @@ def test_menu_miniapp_submission_creates_contact_step(monkeypatch):
         sent.append((cid, text))
         if "Как удобнее связаться" in text:
             contact_sent.set()
+        return {'ok': True, 'result': {'message_id': len(sent)}}
 
     monkeypatch.setattr(bot, "BOT_TOKEN", BOT_TOKEN)
     monkeypatch.setattr(bot, "MINI_APP_ORIGIN", ORIGIN)
@@ -287,6 +322,52 @@ def test_menu_miniapp_rejects_invalid_submission_id(monkeypatch):
     assert chat_id not in bot.user_data
 
 
+@pytest.mark.parametrize('outcome', ['before_send','contact_missing','already_delivered','cancel_before_recovery'])
+def test_restart_recovers_only_unconfirmed_miniapp_prompts(monkeypatch, outcome):
+    uid = 88291
+    monkeypatch.setattr(bot, 'BOT_TOKEN', BOT_TOKEN)
+    monkeypatch.setattr(bot, 'MINI_APP_ORIGIN', ORIGIN)
+    monkeypatch.setattr(bot, 'save_lead', lambda *a, **k: pytest.fail('notification recovery created a lead'))
+    queue = bot._queue_miniapp_contact
+    monkeypatch.setattr(bot, '_queue_miniapp_contact', lambda *a: None)
+    sent, delivered = [], threading.Event()
+    def send(cid, text, **kwargs):
+        if 'Параметры поездки получены' in text or 'Как удобнее связаться' in text:
+            sent.append(text)
+            if outcome == 'contact_missing' and len(sent) == 2:
+                return None
+            if 'Как удобнее связаться' in text:
+                delivered.set()
+        return {'ok':True,'result':{'message_id':len(sent)+100}}
+    monkeypatch.setattr(bot, 'send_message', send)
+    bot.user_data.pop(uid,None)
+    with bot._db_cursor(commit=True) as db:
+        db.execute('DELETE FROM sessions WHERE chat_id=?',(uid,))
+    body = dict(initData=_signed_init_data(uid), payload=_payload(), submissionId='recover-contact-notification')
+    assert bot.app.test_client().post('/miniapp/submit',json=body,headers={'Origin':ORIGIN}).status_code == 200
+    if outcome in ('contact_missing','already_delivered'):
+        bot._notify_miniapp_contact(uid,bot.user_data[uid])
+    if outcome == 'cancel_before_recovery':
+        bot.handle_cancel(uid)
+    else:
+        bot.user_data.pop(uid)
+        restored = bot.get_session(uid)
+        restored['kids_ages'] = bot._ages_from_db(restored.get('kids_ages'))
+        bot.user_data[uid] = restored
+    monkeypatch.setattr(bot,'_queue_miniapp_contact',queue)
+    bot._recover_miniapp_notifications()
+    if outcome != 'cancel_before_recovery':
+        assert delivered.wait(3)
+        for worker in threading.enumerate():
+            if worker.name.startswith('miniapp-contact-'):
+                worker.join(timeout=3)
+        with bot._db_cursor() as db:
+            row = db.execute('SELECT notice_id,contact_id FROM miniapp_submissions WHERE user_id=?',(uid,)).fetchone()
+            assert row['notice_id'] and row['contact_id']
+    assert len(sent) == (3 if outcome == 'contact_missing' else 0 if outcome == 'cancel_before_recovery' else 2)
+    bot.delete_user_data(uid)
+
+
 @pytest.mark.parametrize('action', ['restart', 'cancel', 'replace', 'change_payload', 'edit_in_bot', 'receipt_crash_restart', 'receipt_crash_cancel'])
 def test_durable_miniapp_receipt_reconciles_restart_and_fences_old_trips(monkeypatch, action):
     uid = 88191
@@ -337,6 +418,7 @@ def test_concurrent_miniapp_retry_waits_for_first_durable_save(monkeypatch):
     responses = []
     persisted = []
     sent = []
+    notification_done = threading.Event()
 
     def slow_save():
         save_started.set()
@@ -349,7 +431,12 @@ def test_concurrent_miniapp_retry_waits_for_first_durable_save(monkeypatch):
     monkeypatch.setattr(bot, "set_consent", lambda *args, **kwargs: None)
     monkeypatch.setattr(bot, "_mark_dirty", lambda *args, **kwargs: None)
     monkeypatch.setattr(bot, "save_state", slow_save)
-    monkeypatch.setattr(bot, "send_message", lambda cid, text, **kwargs: sent.append((cid, text)))
+    def confirmed_message(cid, text, **kwargs):
+        sent.append((cid,text))
+        if 'Как удобнее связаться' in text:
+            notification_done.set()
+        return {'ok': True, 'result': {'message_id': len(sent)}}
+    monkeypatch.setattr(bot, "send_message", confirmed_message)
     bot.user_data.pop(chat_id, None)
     request_body = {
         "initData": _signed_init_data(chat_id),
@@ -374,6 +461,7 @@ def test_concurrent_miniapp_retry_waits_for_first_durable_save(monkeypatch):
         release_save.set()
         first.join(timeout=5)
         second.join(timeout=5)
+        assert notification_done.wait(3)
         bot.user_data.pop(chat_id, None)
 
     assert not first.is_alive()
