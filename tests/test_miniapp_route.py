@@ -66,6 +66,19 @@ def test_miniapp_link_updates_release_and_preserves_campaign_and_fragment(monkey
     assert bot._miniapp_release_url() == ''
 
 
+def test_menu_api_serializes_nested_button_as_form_json(monkeypatch):
+    button = {'type':'web_app','text':'Открыть','web_app':{'url':'https://example.com/?rev=abc1234'}}
+    captured = {}
+    def post(url, **kwargs):
+        captured.update(kwargs)
+        return type('Reply', (), {'status_code':200,'json':lambda self:{'ok':True,'result':True}})()
+    monkeypatch.setattr(bot, 'BOT_TOKEN', BOT_TOKEN)
+    monkeypatch.setattr(bot.telegram_session, 'post', post)
+    assert bot._tg_api_ok('setChatMenuButton', {'menu_button':button})
+    assert json.loads(captured['data']['menu_button']) == button
+    assert 'json' not in captured
+
+
 def _signed_init_data(user_id=88001, start_param=None):
     fields = {
         "auth_date": str(int(time.time())),
