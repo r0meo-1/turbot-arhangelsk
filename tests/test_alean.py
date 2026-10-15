@@ -94,6 +94,26 @@ class SochiDistricts(Session):
         return super().get(url, **kwargs)
 
 
+@pytest.mark.parametrize('destination,expected', [('Сочи, Россия', True), (' Сочи , россия ', True),
+    ('Сочи, Турция', False), ('Неизвестный, Россия', False), ('Сочи, Россия, Турция', False)])
+def test_miniapp_qualified_destination_stays_within_named_country(destination, expected):
+    session = Session()
+    result = alean.search_tours(settings(), session, info(destination=destination))
+    calls = [kwargs['params'] for _, kwargs in session.calls if kwargs['params']['action'] == 'GetTours']
+    assert bool(result.offers) is expected
+    assert bool(calls) is expected
+    if expected:
+        assert calls[0]['resortCIDs'] == 'SOCHI-CID'
+        assert calls[0]['countryCID'] == 'RU-CID'
+
+
+def test_qualified_destination_resolves_duplicate_resort_names_only_inside_country():
+    countries = [{'id':'1','name':'Россия'},{'id':'2','name':'Другая страна'}]
+    resorts = [{'id':'3','countryId':'1','name':'Курорт'},{'id':'4','countryId':'2','name':'Курорт'}]
+    assert alean._resolve_destination(countries, resorts, 'Курорт, Россия') == (countries[0],resorts[0])
+    assert alean._resolve_destination(countries, resorts + [dict(resorts[0],id='5')], 'Курорт, Россия') == (None,None)
+
+
 def test_wide_search_covers_every_requested_date_and_night_once():
     session = Session()
     query = info(dates="Даты гибкие", nights="5-10")
