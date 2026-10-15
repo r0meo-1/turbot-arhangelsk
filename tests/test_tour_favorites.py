@@ -154,10 +154,11 @@ def test_vk_windows_navigation_fits_five_visible_keyboard_rows(channel):
         assert any(button['action']['label'] == module.CANCEL_BUTTON_TEXT for button in rows[-1])
 
 
-def test_restored_telegram_shortlist_returns_to_actionable_review(channel):
+def test_restored_telegram_shortlist_returns_to_actionable_review(channel, monkeypatch):
     module, uid, info, offers, sent = channel
     if module is not tg:
         return
+    monkeypatch.setattr(module, '_package_preview_enabled', lambda: True)
     favorites.change(module._db_cursor, uid, info, offers[0])
     info.pop('_package_offers')  # transient search pool is absent after restart
     module._process_review(uid, 'rv:page_0:test', {}, info)
