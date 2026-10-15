@@ -80,6 +80,14 @@ Requests timeouts bound connection/read inactivity, not the entire funnel or
 the cumulative time for all catalogs. A timeout still falls through to the next
 provider and does not mark a search as completed.
 
+Broad departure/duration searches use at most three independent HTTP workers.
+Each worker owns its Session and does not inherit the bot's automatic HTTP
+retries; permanent errors and rate limits stop scheduling further windows.
+`ALEAN_RANGE_TIMEOUT_SECONDS` bounds new range work (default 60, accepted 30–120
+seconds), separately from the per-request read timeout. Requests use the remaining
+total connection/read budget. Cancellation stops new work and discards late results;
+already in-flight requests are drained before their connections are closed.
+
 The read-only smoke check on 12 October then passed using these application
 defaults, without a diagnostic timeout override: all five catalogs and `GetTours`
 returned HTTP 200, with 15 accepted Sochi offers in 5.74 seconds overall.
