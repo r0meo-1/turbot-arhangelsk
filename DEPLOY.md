@@ -471,3 +471,29 @@ appears in `ps`.
 Add `INSTALL_VK=1` at install time and the VK bot gets its own timer. There the
 check is weaker by nature — VK is inbound, so there is no heartbeat to age —
 but it still catches a wedged gunicorn that stopped answering HTTP.
+
+### Telegram-only outbound proxy
+
+When the VPS cannot reach Telegram directly, set `TELEGRAM_PROXY_URL` to an
+existing trusted HTTP CONNECT proxy. Only `https://api.telegram.org/` uses this
+proxy, including polling and sending replies. Supplier API requests that share
+the session continue to use their normal connection. TLS verification and the
+existing retry policy remain enabled. An empty setting preserves direct access.
+
+On systemd hosts, keep the credential outside the deployment directory in
+`/etc/turbot/telegram-proxy.env` (root-owned, mode 0600, parent directory 0700).
+The file contains `TELEGRAM_PROXY_URL=http://user:password@host:port`; percent-encode
+special characters in the username/password. Do not put real values in Git,
+command arguments, screenshots, or diagnostic output. Load it through
+`/etc/systemd/system/turbot.service.d/telegram-proxy.conf`:
+
+```ini
+[Service]
+EnvironmentFile=/etc/turbot/telegram-proxy.env
+```
+
+After `systemctl daemon-reload` and restarting `turbot`, verify an authenticated
+`getMe` request without printing its token, then observe `/health` across several
+long-poll intervals: `seconds_since_poll_ok` must reset, rather than simply
+reflecting the startup heartbeat. Re-run the external uptime monitor. Check the
+proxy account's bandwidth cap; a free quota is not an unlimited service.

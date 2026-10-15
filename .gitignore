@@ -56,3 +56,5 @@ bot_state.json
 # repo is what makes the picture reviewable instead of taken on trust.
 demo_page.html
 build_demo_page.py
+# Host-local Telegram proxy credentials and recovery backups.
+.telegram-proxy/
