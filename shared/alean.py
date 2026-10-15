@@ -15,11 +15,13 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 import requests
+from urllib3.util import Timeout
 
 from shared import tourvisor as tv
 
@@ -45,6 +47,8 @@ class AleanSettings:
     timeout: float = 10
     max_offers: int = 15
     search_timeout: float = 30
+    range_timeout: float = 60
+    total_timeout: float | None = field(default=None, repr=False)
 
     @classmethod
     def from_env(cls):
@@ -54,12 +58,19 @@ class AleanSettings:
             search_timeout = 30
         if not math.isfinite(search_timeout) or not 10 <= search_timeout <= 60:
             search_timeout = 30
+        try:
+            range_timeout = float(os.getenv('ALEAN_RANGE_TIMEOUT_SECONDS', '60'))
+        except ValueError:
+            range_timeout = 60
+        if not math.isfinite(range_timeout) or not 30 <= range_timeout <= 120:
+            range_timeout = 60
         # Credentials alone never activate a new supplier in production.
         return cls(
             enabled=os.getenv("ALEAN_ENABLED", "false").lower() in ("true", "1", "yes"),
             username=os.getenv("ALEAN_USERNAME", "").strip(),
             password=os.getenv("ALEAN_PASSWORD", ""),
             search_timeout=search_timeout,
+            range_timeout=range_timeout,
         )
 
 
@@ -72,7 +83,9 @@ def _request(settings, session, action, params=None):
         headers={"Accept": "application/xml"},
         # GetTours has taken >14 seconds in authenticated checks. Keep the
         # connection/catalog limit short while allowing the search to respond.
-        timeout=(settings.timeout, settings.search_timeout) if action == "GetTours" else settings.timeout,
+        timeout=(Timeout(total=settings.total_timeout, connect=min(settings.timeout, settings.total_timeout),
+                         read=min(settings.search_timeout, settings.total_timeout)) if settings.total_timeout is not None
+                 else (settings.timeout, settings.search_timeout)) if action == "GetTours" else settings.timeout,
         allow_redirects=False, stream=True,
     ) as response:
         response.raise_for_status()
@@ -231,29 +244,72 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
                    for low in range(window.nights_from, window.nights_to + 1, 4)]
         root = ET.Element("getToursResult")
         completed = 0
-        deadline = time.monotonic() + settings.search_timeout
-        for day_from, day_to, night_from, night_to in windows:
+        deadline = time.monotonic() + settings.range_timeout
+        local = threading.local()
+        transports, transports_lock = [], threading.Lock()
+        def run_window(bounds):
             if cancelled and cancelled():
-                return tv.SearchResult(error="Поиск отменён", error_code="cancelled")
+                raise InterruptedError('Search cancelled')
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                break
-            query = dict(params, dateFrom=day_from.strftime("%d.%m.%Y"), dateTo=day_to.strftime("%d.%m.%Y"),
+                raise requests.Timeout('Range budget exhausted')
+            day_from, day_to, night_from, night_to = bounds
+            query = dict(params, dateFrom=day_from.strftime('%d.%m.%Y'), dateTo=day_to.strftime('%d.%m.%Y'),
                          nightsMin=night_from, nightsMax=night_to)
+            transport = session
+            if len(windows) > 1 and isinstance(session, requests.Session):
+                # Separate Session per worker: share no mutable cookies or retry
+                # adapters. Preserve routing/TLS configuration and never mutate
+                # the process-wide Telegram/VK HTTP session.
+                if not hasattr(local, 'session'):
+                    transport = requests.Session()
+                    transport.headers.update(session.headers)
+                    transport.proxies.update(session.proxies)
+                    transport.verify, transport.cert, transport.trust_env = session.verify, session.cert, session.trust_env
+                    local.session = transport
+                    with transports_lock:
+                        transports.append(transport)
+                transport = local.session
+            config = settings if len(windows) == 1 else replace(settings, total_timeout=remaining)
+            return _request(config, transport, 'GetTours', query)
+        if len(windows) == 1:
+            root.extend(run_window(windows[0]).findall('tour'))
+            completed = 1
+        else:
+            pending = set()
+            next_index, stopped = 0, False
             try:
-                # Preserve the existing exact-search timeout contract; for a
-                # range, each later call gets only the remaining time budget.
-                config = settings if len(windows) == 1 else replace(settings,
-                    timeout=min(settings.timeout, remaining / 2), search_timeout=remaining / 2)
-                batch = _request(config, session, "GetTours", query)
-                root.extend(batch.findall("tour"))
-                completed += 1
-            except Exception as exc:
-                if len(windows) == 1:
-                    raise
-                log.warning("Alean range window failed (%s)", type(exc).__name__)
-                if isinstance(exc, requests.HTTPError) and exc.response is not None and 400 <= exc.response.status_code < 500:
-                    break
+                with ThreadPoolExecutor(max_workers=3, thread_name_prefix='alean-range') as pool:
+                    while pending or next_index < len(windows):
+                        if (cancelled and cancelled()) or time.monotonic() >= deadline:
+                            stopped = True
+                        while not stopped and len(pending) < 3 and next_index < len(windows):
+                            pending.add(pool.submit(run_window, windows[next_index]))
+                            next_index += 1
+                        if not pending:
+                            break
+                        done, pending = wait(pending, timeout=.25, return_when=FIRST_COMPLETED)
+                        for future in done:
+                            try:
+                                root.extend(future.result().findall('tour'))
+                                completed += 1
+                            except Exception as exc:
+                                log.warning('Alean range window failed (%s)', type(exc).__name__)
+                                if isinstance(exc, InterruptedError) or (isinstance(exc, requests.HTTPError)
+                                        and exc.response is not None and 400 <= exc.response.status_code < 500):
+                                    stopped = True
+                        if stopped:
+                            for future in pending:
+                                future.cancel()
+                            # Drain already in-flight requests before closing
+                            # their worker-owned connections; no new work starts.
+                            if not pending:
+                                break
+            finally:
+                for transport in transports:
+                    transport.close()
+            if cancelled and cancelled():
+                return tv.SearchResult(error='Поиск отменён', error_code='cancelled')
         offers, seen = [], set()
         for node in root.findall("tour"):
             row = node.attrib

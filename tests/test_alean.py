@@ -2,6 +2,7 @@ from dataclasses import asdict
 from datetime import date, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
+from threading import Lock
 import xml.etree.ElementTree as ET
 import json
 
@@ -121,11 +122,13 @@ def test_wide_search_covers_every_requested_date_and_night_once():
 
 @pytest.mark.parametrize('all_failed', [False, True])
 def test_partial_ranges_never_claim_complete_or_empty_inventory(monkeypatch, all_failed):
-    original, count = alean._request, []
+    original, count, gate = alean._request, [], Lock()
     def request(config, session, action, params=None):
         if action == 'GetTours':
-            count.append(1)
-            if all_failed or len(count) == 2:
+            with gate:
+                count.append(1)
+                fail = all_failed or len(count) == 2
+            if fail:
                 raise requests.Timeout('private-secret')
         return original(config, session, action, params)
     monkeypatch.setattr(alean, '_request', request)
@@ -142,7 +145,7 @@ def test_range_cancellation_stops_before_another_supplier_window():
         return any(k['params']['action'] == 'GetTours' for _, k in session.calls)
     result = alean.search_tours(settings(), session, info(dates='Даты гибкие'), cancelled=cancelled)
     assert result.error_code == 'cancelled'
-    assert sum(k['params']['action'] == 'GetTours' for _, k in session.calls) == 1
+    assert 1 <= sum(k['params']['action'] == 'GetTours' for _, k in session.calls) <= 3
 
 
 @pytest.mark.parametrize('status', [401, 403, 429])
@@ -150,7 +153,7 @@ def test_range_does_not_repeat_permanent_or_rate_limit_errors(status):
     session = Session(bad={'GetTours': Response('', status=status)})
     result = alean.search_tours(settings(), session, info(dates='Даты гибкие'))
     assert result.partial and result.error and result.completed_windows == 0
-    assert sum(k['params']['action'] == 'GetTours' for _, k in session.calls) == 1
+    assert 1 <= sum(k['params']['action'] == 'GetTours' for _, k in session.calls) <= 3
 
 
 def test_cancel_during_cold_catalog_stops_the_next_catalog():
@@ -165,13 +168,13 @@ def test_range_connect_and_read_timeouts_fit_remaining_budget(monkeypatch):
     monkeypatch.setattr(alean.time, 'monotonic', lambda: clock[0])
     def request(config, session, action, params=None):
         if action == 'GetTours':
-            limits.append((config.timeout, config.search_timeout))
+            limits.append(config.total_timeout)
             if len(limits) == 1:
-                clock[0] = 29.8
+                clock[0] = 59.8
         return original(config, session, action, params)
     monkeypatch.setattr(alean, '_request', request)
     alean.search_tours(settings(), Session(), info(dates='Даты гибкие'))
-    assert all(connect + read <= .201 for connect, read in limits[1:])
+    assert all(total <= .201 for total in limits[1:])
 
 
 def test_range_deadline_returns_partial_even_if_remaining_windows_are_empty(monkeypatch):
@@ -181,11 +184,70 @@ def test_range_deadline_returns_partial_even_if_remaining_windows_are_empty(monk
     def request(config, session, action, params=None):
         result = original(config, session, action, params)
         if action == 'GetTours':
-            clock[0] = 31
+            clock[0] = 61
         return result
     monkeypatch.setattr(alean, '_request', request)
     result = alean.search_tours(settings(), Session(), info(dates='Даты гибкие'))
     assert result.partial and result.completed_windows == 1 and result.total_windows == 6
+
+
+def test_range_parallelism_is_bounded_and_covers_the_second_wave():
+    entered, release, gate = Event(), Event(), Lock()
+    active, peak = [0], [0]
+    class DelayedSession(Session):
+        def get(self, url, **kwargs):
+            if kwargs['params']['action'] != 'GetTours':
+                return super().get(url, **kwargs)
+            with gate:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+                if active[0] == 3:
+                    entered.set()
+            try:
+                assert release.wait(5)
+                return super().get(url, **kwargs)
+            finally:
+                with gate:
+                    active[0] -= 1
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        task = pool.submit(alean.search_tours, settings(), DelayedSession(), info(dates='Даты гибкие'))
+        try:
+            assert entered.wait(3), 'supplier windows still run sequentially'
+        finally:
+            release.set()
+        result = task.result(timeout=5)
+    assert peak[0] == 3 and result.completed_windows == result.total_windows == 6
+
+
+@pytest.mark.parametrize('raw,expected', [('60',60),('120',120),('29',60),('nan',60),('bad',60)])
+def test_range_timeout_setting_is_bounded(monkeypatch, raw, expected):
+    monkeypatch.setenv('ALEAN_RANGE_TIMEOUT_SECONDS', raw)
+    assert alean.AleanSettings.from_env().range_timeout == expected
+
+
+def test_parallel_workers_own_and_close_sessions_without_changing_bot_transport(monkeypatch):
+    closed, used = [], []
+    class TrackedSession(requests.Session):
+        def close(self):
+            closed.append(id(self))
+            super().close()
+    monkeypatch.setattr(alean.requests, 'Session', TrackedSession)
+    def request(config, transport, action, params=None):
+        if action == 'GetTours':
+            used.append(id(transport))
+            assert transport.headers['X-Test'] == 'fixture'
+            assert transport.proxies['https'] == 'http://proxy.invalid'
+            assert transport.adapters['https://'].max_retries.total == 0
+            assert config.total_timeout is not None
+        return ET.fromstring(Session().get('fixture', params=dict(action=action, **(params or {}))).content)
+    monkeypatch.setattr(alean, '_request', request)
+    with TrackedSession() as original:
+        original.headers['X-Test'] = 'fixture'
+        original.proxies['https'] = 'http://proxy.invalid'
+        result = alean.search_tours(settings(), original, info(dates='Даты гибкие'))
+        assert result.completed_windows == 6
+        assert used and id(original) not in used
+        assert set(used) <= set(closed) and id(original) not in closed
 
 
 @pytest.mark.parametrize("resort_id,region", [("3", "Сочи"), ("6", "Адлер"),
