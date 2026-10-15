@@ -205,6 +205,21 @@ def test_vk_blueprint_security_headers():
     assert "frame-ancestors" not in csp
 
 
+def test_only_versioned_public_assets_are_cacheable():
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *_: None, lambda: (SECRET, '123', 999)))
+    client = app.test_client()
+    for path in ['/vk/miniapp/', '/vk/miniapp/legal.json?v=1', '/vk/miniapp/app.js',
+                 '/vk/miniapp/app.js?v=1&sign=private', '/vk/miniapp/privacy.html?v=1']:
+        with client.get(path) as response:
+            assert response.headers['Cache-Control'] == 'no-store'
+    with client.get('/vk/miniapp/app.js?v=test') as response:
+        assert response.headers['Cache-Control'] == 'public, max-age=86400'
+        etag = response.headers['ETag']
+    with client.get('/vk/miniapp/app.js?v=test', headers={'If-None-Match': etag}) as response:
+        assert response.status_code == 304 and not response.data
+
+
 def test_manager_entry_is_hidden_until_signed_probe_succeeds():
     app = Flask(__name__)
     app.register_blueprint(

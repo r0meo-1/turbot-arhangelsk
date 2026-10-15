@@ -110,7 +110,7 @@ def _mock_bridge(page):
     page.add_init_script('window.vkBridge={send(){return Promise.resolve({});},subscribe(){}};')
     page.on('requestfailed', lambda request: print('Browser transport failure:', request.failure, request.url.split('?')[0]))
     page.on('pageerror', lambda error: print('Browser script failure:', str(error)))
-    page.route('**/vk-bridge.js', lambda route: route.fulfill(
+    page.route('**/vk-bridge.js*', lambda route: route.fulfill(
         content_type='application/javascript',
         body='/* Bridge transport is installed before document scripts. */',
     ))
@@ -157,7 +157,7 @@ def test_search_preview_back_cancel_and_theme_never_submit(width, appearance, tm
         errors, submissions = [], []
         page.on('pageerror', lambda error: errors.append(str(error)))
         page.on('request', lambda request: submissions.append(request.url) if '/draft' in request.url or '/continue' in request.url else None)
-        page.route('**/vk-bridge.js', lambda route: route.fulfill(content_type='application/javascript', body='''
+        page.route('**/vk-bridge.js*', lambda route: route.fulfill(content_type='application/javascript', body='''
           window.vkBridge = {
             subscribe(callback) { window.deliverVKConfig = callback; },
             send() { return Promise.reject(new Error('unsigned preview')); }
@@ -400,7 +400,7 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
             browser = pw.chromium.launch(channel='msedge', headless=True)
             resources.callback(browser.close)
             page = browser.new_page()
-            page.route('**/vk-bridge.js', lambda route: route.fulfill(
+            page.route('**/vk-bridge.js*', lambda route: route.fulfill(
                 content_type='application/javascript',
                 body='''window.vkBridge = {send(method) {
                   if (method === 'VKWebAppGetLaunchParams') {
