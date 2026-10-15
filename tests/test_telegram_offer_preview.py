@@ -93,3 +93,47 @@ def test_old_offer_buttons_cannot_select_from_new_search(monkeypatch, preview):
     bot._start_package_preview(42, info)
     bot._process_review(42, f'rv:choose_0:{previous}', {}, info)
     assert 'устарела' in sent[-1][1] and not info.get('selected_tour')
+
+
+def test_cancel_between_supplier_completion_and_publication_suppresses_result(monkeypatch, preview):
+    info, sent = preview
+    publish = bot._publish_package_preview
+    def cancel_first(*args):
+        bot.user_data.pop(42)
+        publish(*args)
+    monkeypatch.setattr(bot, '_publish_package_preview', cancel_first)
+    monkeypatch.setattr(bot, '_alean_search', lambda *a, **k: tv.SearchResult(offers=offers()))
+    bot._start_package_preview(42, info)
+    assert len(sent) == 1
+
+
+def test_unavailable_preview_keeps_review_actions(monkeypatch, preview):
+    info, sent = preview
+    monkeypatch.setattr(bot, '_package_preview_enabled', lambda: False)
+    bot._start_package_preview(42, info)
+    labels = str(json.loads(sent[-1][2]['reply_markup']))
+    assert 'Отправить менеджеру' in labels and 'Изменить' in labels and 'Отмена' in labels
+
+
+def test_selection_and_new_search_cannot_interleave(monkeypatch, preview):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    info, sent = preview
+    entered, release = Event(), Event()
+    info['_package_offers'] = [asdict(row) for row in offers()]
+    def review(*a):
+        entered.set()
+        assert release.wait(5)
+    monkeypatch.setattr(bot, '_ask_review', review)
+    monkeypatch.setattr(bot, '_alean_search', lambda *a, **k: tv.SearchResult(offers=offers()))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(bot._process_review, 42, 'rv:choose_0:old', {}, info)
+        assert entered.wait(5)
+        second = pool.submit(bot._start_package_preview, 42, info)
+        try:
+            assert info['review_token'] == 'old'
+        finally:
+            release.set()
+        first.result(timeout=5)
+        second.result(timeout=5)
+    assert info['review_token'] != 'old' and not info.get('selected_tour')

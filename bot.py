@@ -12,6 +12,7 @@ import threading
 import secrets
 from collections import OrderedDict
 from contextlib import contextmanager
+from functools import wraps
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -669,6 +670,15 @@ user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}
 _lock = threading.Lock()
 _miniapp_submit_lock = threading.Lock()
+_dialog_locks = tuple(threading.RLock() for _ in range(256))
+
+
+def _serialized_dialog(function):
+    @wraps(function)
+    def guarded(chat_id, *args, **kwargs):
+        with _dialog_locks[int(chat_id) % len(_dialog_locks)]:
+            return function(chat_id, *args, **kwargs)
+    return guarded
 
 # chat_ids whose in-memory session/user record changed since the last
 # save_state(). Guarded by _lock. Lets save_state() flush only what changed
@@ -3416,6 +3426,7 @@ def _strip_emoji_prefix(text: str, options: Optional[List[str]] = None) -> str:
     return text
 
 
+@_serialized_dialog
 def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> None:
     """Begin the tour-selection dialog and retain a validated campaign source."""
     with _lock:
@@ -3481,6 +3492,7 @@ def _begin_destination(chat_id: int, first_name: str = "", source_tag: str = "")
     )
 
 
+@_serialized_dialog
 def handle_cancel(chat_id: int) -> None:
     """Abort the current dialog flow."""
     with _lock:
@@ -4026,9 +4038,10 @@ def _step_review(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
     _ask_review(chat_id, info)
 
 
+@_serialized_dialog
 def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
     parts = data.split(":")
-    if (len(parts) != 3 or info.get("state") != STATE_REVIEW
+    if (user_data.get(chat_id) is not info or len(parts) != 3 or info.get("state") != STATE_REVIEW
             or not info.get("review_token") or parts[2] != info["review_token"]):
         send_message(chat_id, "Эта кнопка устарела. Продолжите текущий шаг заявки.")
         return
@@ -4165,6 +4178,7 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
         )
 
 
+@_serialized_dialog
 def _go_back(chat_id: int) -> None:
     """Move the user one step back in the dialog."""
     info = user_data.get(chat_id, {})
@@ -4463,9 +4477,11 @@ def _show_package_page(chat_id: int, info: Dict[str, Any], page: int = 0) -> Non
     send_message(chat_id, text, reply_markup=inline_keyboard(buttons))
 
 
+@_serialized_dialog
 def _start_package_preview(chat_id: int, info: Dict[str, Any]) -> None:
     if not _package_preview_enabled():
         send_message(chat_id, 'Поиск предложений сейчас недоступен. Заявка не отправлена.')
+        _ask_review(chat_id, info)
         return
     with _lock:
         if user_data.get(chat_id) is not info or info.get('_package_searching'):
@@ -4484,6 +4500,29 @@ def _start_package_preview(chat_id: int, info: Dict[str, Any]) -> None:
                          name='telegram-package-preview').start()
 
 
+@_serialized_dialog
+def _publish_package_preview(chat_id: int, owner: Dict[str, Any], token: str, result) -> None:
+    # Publication and cancellation use the same per-user lock. The shared
+    # state lock is released before Telegram I/O; other users remain free.
+    with _lock:
+        live = user_data.get(chat_id)
+        if live is not owner or live.get('state') != STATE_REVIEW or live.get('review_token') != token:
+            return
+        owner.pop('_package_searching', None)
+        owner['_package_offers'] = [offer.__dict__.copy() for offer in result.offers] if result else []
+        owner['_package_warning'] = result.warning if result else ''
+    if result and result.offers:
+        _show_package_page(chat_id, owner)
+        return
+    text = (('⚠️ ' + result.warning) if result and result.partial else
+            '⚠️ Поиск не выполнен. Наличие туров не проверено.' if not result or result.error else
+            'Поиск завершён. По этим параметрам вариантов не нашлось.')
+    send_message(chat_id, text + '\nЗаявка менеджеру не отправлена.', reply_markup=inline_keyboard([
+        [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
+        [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
+        [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
+
+
 def _package_preview_worker(chat_id: int, owner: Dict[str, Any], token: str, snapshot: Dict[str, Any]) -> None:
     def cancelled():
         with _lock:
@@ -4491,31 +4530,13 @@ def _package_preview_worker(chat_id: int, owner: Dict[str, Any], token: str, sna
             return live is not owner or live.get('state') != STATE_REVIEW or live.get('review_token') != token
     try:
         result = _alean_search(snapshot, cancelled=cancelled)
-        if cancelled():
-            return
-        with _lock:
-            owner.pop('_package_searching', None)
-            owner['_package_offers'] = [offer.__dict__.copy() for offer in result.offers] if result else []
-            owner['_package_warning'] = result.warning if result else ''
-        if result and result.offers:
-            _show_package_page(chat_id, owner)
-        else:
-            text = (('⚠️ ' + result.warning) if result and result.partial else
-                    '⚠️ Поиск не выполнен. Наличие туров не проверено.' if not result or result.error else
-                    'Поиск завершён. По этим параметрам вариантов не нашлось.')
-            send_message(chat_id, text + '\nЗаявка менеджеру не отправлена.', reply_markup=inline_keyboard([
-                [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
-                [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
-                [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
     except Exception as exc:
-        if not cancelled():
-            owner.pop('_package_searching', None)
-            logger.warning('Telegram preview failed (%s)', type(exc).__name__)
-            send_message(chat_id, 'Поиск временно недоступен. Заявка не отправлена.',
-                reply_markup=inline_keyboard([
-                    [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
-                    [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
-                    [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
+        logger.warning('Telegram preview failed (%s)', type(exc).__name__)
+        result = None
+    try:
+        _publish_package_preview(chat_id, owner, token, result)
+    except Exception as exc:
+        logger.warning('Telegram preview delivery failed (%s)', type(exc).__name__)
 
 
 def _alean_search(info: Dict[str, Any], *, cancelled=None) -> Optional[Any]:
@@ -5309,6 +5330,7 @@ def _notify_miniapp_contact(chat_id: int, info: Dict[str, Any]) -> None:
         )
 
 
+@_serialized_dialog
 def _accept_miniapp_trip(
     chat_id: int,
     from_info: Dict[str, Any],
