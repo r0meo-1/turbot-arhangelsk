@@ -99,6 +99,7 @@ def search_tours(
     log: Optional[logging.Logger] = None,
     on_outcome: Optional[Callable[[str, str], None]] = None,
     cancelled: Optional[Callable[[], bool]] = None,
+    on_progress: Optional[Callable[[_tourvisor.SearchResult], None]] = None,
 ) -> Tuple[_tourvisor.SearchResult, str]:
     """Try configured providers in order and return the first useful result.
 
@@ -125,6 +126,8 @@ def search_tours(
         attempted = True
         if name == "alean":
             options = {"cancelled": cancelled} if cancelled else {}
+            if on_progress:
+                options['on_progress'] = on_progress
             result = _alean.search_tours(settings.alean, session, info, log=log, **options)
         elif name == "sletat":
             result = _sletat.search_tours(

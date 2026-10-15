@@ -64,6 +64,7 @@ from shared import tutu as _tutu
 from shared import alean as _alean
 from shared import tourvisor as _tourvisor
 from shared import version as _version
+from shared.search_progress import format_search_progress
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared.ai_provider import build_selection_provider
 from shared.ai_chat import generate_ai_chat_reply as _generate_ai_chat_reply
@@ -4525,13 +4526,54 @@ def _start_package_preview(chat_id: int, info: Dict[str, Any]) -> None:
         info.pop('selected_tour', None)
         info.pop('_package_offers', None)
         snapshot = dict(info)
-    send_message(chat_id, '🔎 Ищу предложения. Можно отменить подбор; заявка менеджеру не отправлена.',
+    info.pop('_package_progress_result', None)
+    info.pop('_package_progress_text', None)
+    response = send_message(chat_id, '🔎 Ищу предложения. Можно отменить подбор; заявка менеджеру не отправлена.',
         reply_markup=inline_keyboard([[_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
+    info['_package_wait_message_id'] = _telegram_message_id(response)
     if SYNC_COMPLETION:
         _package_preview_worker(chat_id, info, token, snapshot)
     else:
+        if info['_package_wait_message_id']:
+            threading.Thread(target=_package_progress_loop, args=(chat_id, info, token), daemon=True,
+                             name='telegram-package-progress').start()
         threading.Thread(target=_package_preview_worker, args=(chat_id, info, token, snapshot), daemon=True,
                          name='telegram-package-preview').start()
+
+
+def _edit_package_wait(chat_id, message_id, text, reply_markup):
+    if not message_id:
+        return
+    try:
+        telegram_session.post(f'https://api.telegram.org/bot{BOT_TOKEN}/editMessageText',
+            json={'chat_id':chat_id,'message_id':message_id,'text':text,'reply_markup':json.loads(reply_markup)}, timeout=3)
+    except requests.RequestException as exc:
+        logger.warning('Telegram progress edit failed (%s)', type(exc).__name__)
+
+
+@_serialized_dialog
+def _publish_package_progress(chat_id, owner, token):
+    with _lock:
+        if (user_data.get(chat_id) is not owner or owner.get('state') != STATE_REVIEW
+                or owner.get('review_token') != token or not owner.get('_package_searching')):
+            return False
+        progress = owner.get('_package_progress_result')
+        text = format_search_progress(progress, origin=owner.get('origin') or '') if progress else ''
+        if not text or owner.get('_package_progress_text') == text:
+            return True
+        owner['_package_progress_text'] = text
+        message_id = owner.get('_package_wait_message_id')
+    _edit_package_wait(chat_id, message_id, text,
+        inline_keyboard([[_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
+    return True
+
+
+def _package_progress_loop(chat_id, owner, token):
+    # UI I/O never blocks supplier requests. Coalesce updates into one message.
+    for _ in range(75):
+        time.sleep(2)
+        if not _publish_package_progress(chat_id, owner, token):
+            return
 
 
 @_serialized_dialog
@@ -4543,8 +4585,12 @@ def _publish_package_preview(chat_id: int, owner: Dict[str, Any], token: str, re
         if live is not owner or live.get('state') != STATE_REVIEW or live.get('review_token') != token:
             return
         owner.pop('_package_searching', None)
+        owner.pop('_package_progress_result', None)
         owner['_package_offers'] = [offer.__dict__.copy() for offer in result.offers] if result else []
         owner['_package_warning'] = result.warning if result else ''
+    _edit_package_wait(chat_id, owner.get('_package_wait_message_id'),
+        '✅ Поиск завершён. Результат ниже.' if result and not result.error and not result.partial else
+        '⚠️ Поиск завершён не полностью. Подробности ниже.', inline_keyboard([]))
     if result and result.offers:
         _show_package_page(chat_id, owner)
         return
@@ -4562,8 +4608,13 @@ def _package_preview_worker(chat_id: int, owner: Dict[str, Any], token: str, sna
         with _lock:
             live = user_data.get(chat_id)
             return live is not owner or live.get('state') != STATE_REVIEW or live.get('review_token') != token
+    def progress(result):
+        with _lock:
+            if (user_data.get(chat_id) is owner and owner.get('state') == STATE_REVIEW
+                    and owner.get('review_token') == token and owner.get('_package_searching')):
+                owner['_package_progress_result'] = result
     try:
-        result = _alean_search(snapshot, cancelled=cancelled)
+        result = _alean_search(snapshot, cancelled=cancelled, on_progress=progress)
     except Exception as exc:
         logger.warning('Telegram preview failed (%s)', type(exc).__name__)
         result = None
@@ -4573,7 +4624,7 @@ def _package_preview_worker(chat_id: int, owner: Dict[str, Any], token: str, sna
         logger.warning('Telegram preview delivery failed (%s)', type(exc).__name__)
 
 
-def _alean_search(info: Dict[str, Any], *, cancelled=None) -> Optional[Any]:
+def _alean_search(info: Dict[str, Any], *, cancelled=None, on_progress=None) -> Optional[Any]:
     """Opt-in package search; keep contact data out of the supplier boundary."""
     settings = _alean.AleanSettings.from_env()
     order = os.getenv("TOUR_PROVIDER_ORDER", "").lower().split(",")
@@ -4587,6 +4638,8 @@ def _alean_search(info: Dict[str, Any], *, cancelled=None) -> Optional[Any]:
     query["dates_are_trip"] = _duration_from_dates(str(info.get("dates") or "")) is not None
     try:
         options = {'cancelled': cancelled} if cancelled else {}
+        if on_progress:
+            options['on_progress'] = on_progress
         return _alean.search_tours(settings, telegram_session, query, log=logger, **options)
     except Exception as exc:
         logger.warning("Alean Telegram search failed (%s)", type(exc).__name__)

@@ -239,6 +239,45 @@ def test_range_parallelism_is_bounded_and_covers_the_second_wave():
     assert peak[0] == 3 and result.completed_windows == result.total_windows == 6
 
 
+@pytest.mark.parametrize('over_budget', [False, True])
+def test_progress_exposes_validated_offers_before_remaining_windows_finish(over_budget):
+    first, release, gate = Event(), Event(), Lock()
+    started, snapshots = [0], []
+    class Delayed(Session):
+        def get(self, url, **kwargs):
+            if kwargs['params']['action'] == 'GetTours':
+                with gate:
+                    started[0] += 1
+                    number = started[0]
+                if number > 1:
+                    assert release.wait(5)
+            return super().get(url, **kwargs)
+    def progress(result):
+        snapshots.append(result)
+        first.set()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        task = pool.submit(alean.search_tours, settings(), Delayed(change={'price':'200000'} if over_budget else {}),
+                           info(dates='Даты гибкие'), on_progress=progress)
+        try:
+            assert first.wait(3)
+            assert not task.done()
+            assert snapshots[0].completed_windows == 1 and snapshots[0].total_windows == 6
+            assert bool(snapshots[0].offers) is (not over_budget)
+            assert snapshots[0].partial
+        finally:
+            release.set()
+        result = task.result(timeout=5)
+    assert not result.partial and result.completed_windows == 6
+    assert snapshots[0].completed_windows == 1  # immutable earlier snapshot
+
+
+def test_progress_consumer_failure_cannot_fail_supplier_search():
+    def broken(result):
+        raise RuntimeError('fixture-secret')
+    result = alean.search_tours(settings(), Session(), info(dates='Даты гибкие'), on_progress=broken)
+    assert result.offers and not result.error and result.completed_windows == 6
+
+
 @pytest.mark.parametrize('raw,expected', [('60',60),('120',120),('29',60),('nan',60),('bad',60)])
 def test_range_timeout_setting_is_bounded(monkeypatch, raw, expected):
     monkeypatch.setenv('ALEAN_RANGE_TIMEOUT_SECONDS', raw)
