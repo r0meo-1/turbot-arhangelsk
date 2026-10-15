@@ -34,13 +34,15 @@ class PageResult:
     lcp_ms: Optional[int] = None
     transfer_kb: Optional[int] = None
     resource_count: Optional[int] = None
+    connection_ms: Optional[int] = None
+    ttfb_ms: Optional[int] = None
     error: str = ""
 
 
 PAGES = (
     PageSpec(
         "telegram_miniapp",
-        "https://r0meo-1.github.io/turbot-arhangelsk/miniapp/",
+        "https://bot.r0meo1.ru/tg/miniapp/",
         "owned",
         8000,
         5000,
@@ -158,6 +160,8 @@ def probe_page(spec: PageSpec, browser, profile: dict) -> PageResult:
                 lcp: window.__turbotLcp || 0,
                 bytes,
                 resources: resources.length,
+                connection: nav ? nav.connectEnd - nav.fetchStart : 0,
+                ttfb: nav ? nav.responseStart - nav.requestStart : 0,
               };
             }
             """
@@ -175,6 +179,8 @@ def probe_page(spec: PageSpec, browser, profile: dict) -> PageResult:
             lcp_ms=round(metrics["lcp"]) if metrics["lcp"] else None,
             transfer_kb=round(metrics["bytes"] / 1024),
             resource_count=int(metrics["resources"]),
+            connection_ms=round(metrics.get("connection", 0)),
+            ttfb_ms=round(metrics.get("ttfb", 0)),
         )
         result.within_budget = _within_budget(spec, result)
         return result
