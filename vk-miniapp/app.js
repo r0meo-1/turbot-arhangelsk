@@ -35,7 +35,8 @@
       body: JSON.stringify({ launchParams: effectiveLaunchParams, requestId: continuation.id }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
-    if (!response.ok || (await response.json()).ok !== true) throw new Error('Не удалось отменить переход. Повторите попытку.');
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || result.ok !== true) throw new Error(result.error || 'Не удалось отменить переход. Повторите попытку.');
     continuation = undefined;
     forgetOperation();
   };

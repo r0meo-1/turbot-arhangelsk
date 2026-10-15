@@ -541,6 +541,11 @@ _db_lock = threading.Lock()
 # owns the state lock (for example Mini App draft save -> wrapped set_session).
 # RLock preserves cross-thread exclusion while preventing same-thread deadlocks.
 _lock = threading.RLock()
+_dialog_locks = tuple(threading.RLock() for _ in range(256))
+
+
+def _dialog_lock(user_id: int):
+    return _dialog_locks[int(user_id) % len(_dialog_locks)]
 
 user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}
@@ -1486,6 +1491,11 @@ def set_consent(chat_id: int) -> None:
 
 
 def delete_user_data(chat_id: int) -> None:
+    with _dialog_lock(chat_id):
+        _delete_user_data_unlocked(chat_id)
+
+
+def _delete_user_data_unlocked(chat_id: int) -> None:
     with _lock:
         user_data.pop(chat_id, None)
         all_users.pop(chat_id, None)
@@ -1498,6 +1508,7 @@ def delete_user_data(chat_id: int) -> None:
         cur.execute("DELETE FROM miniapp_drafts WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))
+        cur.execute("DELETE FROM miniapp_handoffs WHERE user_id = ?", (chat_id,))
 
 
 def cleanup_expired_data() -> int:
@@ -1510,6 +1521,9 @@ def cleanup_expired_data() -> int:
         expired = [row[0] for row in cur.fetchall()]
     for cid in expired:
         delete_user_data(cid)
+    # Includes cancellation tombstones created before any user/session row.
+    with _db_cursor(commit=True) as cur:
+        cur.execute("DELETE FROM miniapp_handoffs WHERE attempt_at < ?", (cutoff,))
     if expired:
         logger.info("Retention cleanup erased %d expired user(s)", len(expired))
     return len(expired)
@@ -2337,7 +2351,7 @@ def _begin_destination(
     user_id: int, first_name: str = "", source_tag: str = ""
 ) -> None:
     source_tag = _first_touch_source_tag(user_id, source_tag)
-    with _lock:
+    with _dialog_lock(user_id), _lock:
         _delete_miniapp_snapshot(user_id)
         user_data[user_id] = {
             "state": STATE_DESTINATION,
@@ -2357,7 +2371,7 @@ def _begin_destination(
 
 
 def handle_cancel(user_id: int) -> None:
-    with _lock:
+    with _dialog_lock(user_id), _lock:
         snapshot_existed = _load_miniapp_snapshot(user_id) is not None
         existed = user_data.pop(user_id, None) is not None
         _delete_miniapp_snapshot(user_id)
@@ -4433,7 +4447,7 @@ def _process_app_payload(event: Dict[str, Any]) -> None:
         logger.info("VK app_payload ignored: unsupported command")
         return
 
-    with _lock:
+    with _dialog_lock(user_id):
         snapshot = _load_miniapp_snapshot(user_id)
         if snapshot is None:
             logger.info("VK app_payload review ignored: snapshot_missing")
@@ -4449,6 +4463,14 @@ def _process_app_payload(event: Dict[str, Any]) -> None:
 
 
 def _process_message(message: Dict[str, Any]) -> None:
+    msg = message.get("object", {}).get("message", message.get("message", {}))
+    user_id = msg.get("from_id") or msg.get("peer_id")
+    if user_id:
+        with _dialog_lock(user_id):
+            _process_message_unlocked(message)
+
+
+def _process_message_unlocked(message: Dict[str, Any]) -> None:
     """Process one VK message_new event."""
     msg = message.get("object", {}).get("message", message.get("message", {}))
     user_id = msg.get("from_id") or msg.get("peer_id")
@@ -4786,7 +4808,7 @@ def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
     _, info["kids"], info["infants"] = party_bands(info)
     info["state"] = STATE_REVIEW
     set_consent(user_id)
-    with _lock:
+    with _dialog_lock(user_id), _lock:
         previous = user_data.get(user_id)
         if previous and previous.get("_completing"):
             raise MiniAppValidationError("Draft completion in progress")
@@ -4815,14 +4837,16 @@ def _miniapp_trip_fingerprint(info: Dict[str, Any]) -> str:
 
 
 def _cancel_miniapp_continue(user_id: int, request_id: str) -> bool:
-    with _lock:
+    with _dialog_lock(user_id):
         if (user_data.get(user_id) or {}).get("_completing"):
             return False
         with _db_cursor(commit=True) as cur:
             # A tombstone also fences a delayed first request that has not yet
             # reached this server when the customer cancels the UI operation.
-            cur.execute("INSERT OR IGNORE INTO miniapp_handoffs(user_id,request_id,payload_hash,status) VALUES(?,?,'','invalidated')", (user_id, request_id))
-            row = cur.execute("SELECT id FROM miniapp_handoffs WHERE user_id=? AND request_id=?", (user_id, request_id)).fetchone()
+            cur.execute("INSERT OR IGNORE INTO miniapp_handoffs(user_id,request_id,payload_hash,status,attempt_at) VALUES(?,?,'','invalidated',?)", (user_id, request_id, int(time.time())))
+            row = cur.execute("SELECT id,status FROM miniapp_handoffs WHERE user_id=? AND request_id=?", (user_id, request_id)).fetchone()
+            if row[1] == "sent":
+                return False
             cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE id=?", (row[0],))
         snapshot = _load_miniapp_snapshot(user_id)
         if snapshot and snapshot.get("_handoff_id") == row[0]:
@@ -4840,10 +4864,10 @@ def _continue_miniapp_draft(user_id: int, request_id: str, info: Dict[str, Any])
     fingerprint = _miniapp_trip_fingerprint(info)
     conflict = dict(ok=False, draftSaved=False, reviewSent=False, retryable=False,
                     error="Черновик изменён или отменён. Откройте форму заново.")
-    # Serialize local message processing, cancellation and review delivery. No
+    # Serialize this user's message processing, cancellation and delivery. No
     # SQLite writer transaction is held over network I/O. A short durable lease
     # also fences concurrent requests and permits recovery after a process crash.
-    with _lock:
+    with _dialog_lock(user_id):
         now = int(time.time())
         with _db_cursor(commit=True) as cur:
             cur.execute("BEGIN IMMEDIATE")

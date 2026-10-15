@@ -217,6 +217,41 @@ def test_cancel_pending_handoff_erases_only_its_draft_not_historical_crm(monkeyp
     assert bot._continue_miniapp_draft(42, rid, info)[1] == 409
 
 
+def test_sent_handoff_cancel_requires_reconciliation_and_personal_erasure_removes_receipt(monkeypatch):
+    monkeypatch.setattr(bot, "_vk_api", lambda *a, **k: 789)
+    rid, info = str(uuid4()), _handoff_info()
+    bot._continue_miniapp_draft(42, rid, info)
+    assert not bot._cancel_miniapp_continue(42, rid)
+    assert bot.get_session(42) is not None
+    assert bot._continue_miniapp_draft(42, rid, info)[0]["reviewSent"]
+    bot.delete_user_data(42)
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT count(*) FROM miniapp_handoffs WHERE user_id=42").fetchone()[0] == 0
+
+
+def test_slow_handoff_does_not_block_another_user_or_global_state(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered, release = Event(), Event()
+    def send(method, **kw):
+        if kw["user_id"] == 42:
+            entered.set()
+            assert release.wait(5)
+        return 790
+    monkeypatch.setattr(bot, "_vk_api", send)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(bot._continue_miniapp_draft, 42, str(uuid4()), _handoff_info())
+        assert entered.wait(5)
+        try:
+            assert bot._lock.acquire(timeout=1)
+            bot._lock.release()
+            second = pool.submit(bot._continue_miniapp_draft, 43, str(uuid4()), _handoff_info())
+            assert second.result(timeout=2)[0]["reviewSent"]
+        finally:
+            release.set()
+        assert first.result()[0]["reviewSent"]
+
+
 def test_concurrent_handoffs_share_one_confirmed_message(monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event

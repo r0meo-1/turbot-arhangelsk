@@ -305,7 +305,7 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
         except (ValueError, TypeError):
             return jsonify(ok=False), 400
         if not cancel_continue(uid, request_id):
-            return jsonify(ok=False, error="Заявка уже отправляется. Подождите."), 409
+            return jsonify(ok=False, error="Переход уже подтверждён или завершается. Повторите переход, затем измените или отмените параметры в чате."), 409
         return jsonify(ok=True)
 
     return bp

@@ -576,7 +576,8 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
         assert len(saved) == 1
 
 
-def test_clear_after_reload_cancels_the_durable_pending_operation():
+@pytest.mark.parametrize('expired', [False, True])
+def test_clear_after_reload_cancels_the_durable_pending_operation(expired):
     from uuid import uuid4
     rid, cancelled = str(uuid4()), []
     app = Flask(__name__)
@@ -593,8 +594,15 @@ def test_clear_after_reload_cancels_the_durable_pending_operation():
         page.evaluate('rid => { const p=new URLSearchParams(location.search); sessionStorage.setItem(`vk-miniapp-continue:${p.get("vk_app_id")}:${p.get("vk_user_id")}`, JSON.stringify({id:rid,hash:"pending",created:0})); }', rid)
         page.reload()
         page.locator('#trip-form[data-ready="true"]').wait_for()
+        if expired:
+            page.route('**/vk/miniapp/continue/cancel', lambda route: route.fulfill(
+                status=401, content_type='application/json', body='{"ok":false,"error":"Откройте приложение заново из VK."}'))
         page.locator('#clear-trip').click()
         page.locator('#confirm-clear').click()
+        if expired:
+            playwright_sync.expect(page.locator('#status')).to_contain_text('Откройте приложение заново из VK.')
+            assert not cancelled and page.evaluate('sessionStorage.length') == 1
+            return
         playwright_sync.expect(page.locator('#local-status')).to_contain_text('Параметры очищены')
         assert len(cancelled) == 1 and cancelled[0][1] == rid
         assert page.evaluate('sessionStorage.length') == 0
