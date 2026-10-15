@@ -139,6 +139,21 @@ def test_vk_card_binds_add_to_exact_offer_and_generation():
     assert add_payload['search_marker'] == 'current' and add_payload['key'] == vk._tour_offer_key(offer)
 
 
+def test_vk_windows_navigation_fits_five_visible_keyboard_rows(channel):
+    module, uid, info, offers, sent = channel
+    if module is not vk:
+        return
+    for offer in offers[:3]:
+        favorites.change(module._db_cursor, uid, info, offer)
+    module._show_tour_favorites(uid)
+    for keyboard in [sent[-1][2]['keyboard'],
+                     module._tour_results_keyboard([1, 2, 3]),
+                     module._selected_tour_keyboard(info)]:
+        rows = json.loads(keyboard)['buttons']
+        assert len(rows) <= 5
+        assert any(button['action']['label'] == module.CANCEL_BUTTON_TEXT for button in rows[-1])
+
+
 def test_concurrent_adds_still_obey_three_tour_limit(channel):
     from concurrent.futures import ThreadPoolExecutor
     module, uid, info, offers, sent = channel

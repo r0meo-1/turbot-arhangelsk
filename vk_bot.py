@@ -2041,8 +2041,8 @@ def _tour_results_keyboard(
         _btn(TOUR_MORE_BUTTON_TEXT, "secondary"),
     ])
     send_label = TOUR_SEND_SELECTED_TEXT if selected else TOUR_SEND_MANAGER_TEXT
-    rows.append([_btn('⭐ Избранное', 'secondary', {'command': 'favorites'})])
-    rows.append([_btn(send_label, "positive")])
+    rows.append([_btn('⭐ Избранное', 'secondary', {'command': 'favorites'}),
+                 _btn(send_label, "positive")])
     rows.append([
         _btn(BACK_BUTTON_TEXT, "secondary"),
         _btn(CANCEL_BUTTON_TEXT, "negative"),
@@ -3576,8 +3576,8 @@ def _show_tour_favorites(user_id, *, compare=False):
         for i, offer in enumerate(offers)]
     if len(offers) >= 2:
         rows.append([_btn('⚖️ Сравнить 2–3 тура', 'primary', {'command': 'favorite_compare'})])
-    rows.extend([[_btn('◀️ К предложениям', 'secondary', {'command': 'favorite_back'})],
-                 [_btn(CANCEL_BUTTON_TEXT, 'negative')]])
+    rows.append([_btn('◀️ К предложениям', 'secondary', {'command': 'favorite_back'}),
+                 _btn(CANCEL_BUTTON_TEXT, 'negative')])
     send_message(user_id, favorites.render(offers, compare=compare), keyboard=_keyboard(rows))
 
 
