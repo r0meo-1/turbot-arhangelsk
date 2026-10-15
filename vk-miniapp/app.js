@@ -196,7 +196,7 @@
       adults: Number($('adults').value),
       children: Number($('children').value),
       childrenAges: Array.from($('children-ages').querySelectorAll('input'), (i) => Number(i.value)),
-      budgetMaxRub: Number($('budget').value),
+      budgetMaxRub: Number($('budget-amount').value),
       budgetScope: 'total',
       consent: $('consent').checked,
       termsAccepted: $('terms-accepted').checked,
