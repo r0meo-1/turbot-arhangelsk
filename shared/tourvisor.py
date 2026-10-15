@@ -107,6 +107,7 @@ class SearchResult:
     offers: List[TourOffer] = field(default_factory=list)
     error: str = ""
     search_id: Optional[int] = None
+    error_code: str = ""
 
 
 def _next_saturday(today: date) -> date:
@@ -415,7 +416,7 @@ def search_tours(
             ]
         offers = offers[:settings.max_offers]
         if not offers:
-            return SearchResult(error="Подходящих туров пока не найдено", search_id=search_id)
+            return SearchResult(search_id=search_id)
         return SearchResult(offers=offers, search_id=search_id)
     except Exception as exc:
         log.error("Tourvisor search failed: %s", exc)

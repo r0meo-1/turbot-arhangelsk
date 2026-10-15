@@ -2974,7 +2974,22 @@ def _tour_search_worker(
         offers=combined[:TOUR_SEARCH_MAX_OFFERS],
         error="; ".join(result.error for result in results if result.error),
         search_id=next((result.search_id for result in results if result.search_id), None),
+        error_code="search_window" if all(not item.error or item.error_code == "search_window" for item in results) else "",
     )
+    search_failed = bool(result.error) and not result.offers
+    if search_failed and result.error_code == "search_window":
+        failure_title = "📅 Поиск не выполнен: уточните даты и длительность. Наличие туров пока не проверено."
+        failure_text = (
+            "📅 Не удалось выполнить поиск с выбранным диапазоном дат или ночей. Наличие туров пока не проверено.\n\n"
+            "Нажмите «📅 Даты»: укажите точную дату вылета или диапазон до 4 дней, "
+            "затем длительность с разбросом не более 3 ночей (например, 7–10)."
+        )
+    else:
+        failure_title = "⚠️ Поиск временно недоступен. Наличие туров пока не проверено."
+        failure_text = (
+            "⚠️ Поиск временно недоступен. Наличие туров пока не проверено.\n\n"
+            "Повторите поиск позже или измените параметры."
+        )
     with _lock:
         live = user_data.get(user_id)
         if live is None or live.get("_tour_search_marker") != marker:
@@ -2987,7 +3002,7 @@ def _tour_search_worker(
         # edit invalidates it; REVIEW alone cannot identify this result after I/O.
         final_text = (
             f"✅ Подборка готова — найдено вариантов: {len(result.offers)}."
-            if result.offers else
+            if result.offers else failure_title if search_failed else
             "🔎 Поиск завершён. Готовых вариантов по заданным параметрам не нашлось."
         )
         live["_tour_wait_final_text"] = final_text
@@ -3034,10 +3049,12 @@ def _tour_search_worker(
         if live is None or live.get("_tour_search_marker") != marker or live.get("state") != STATE_REVIEW:
             return
     can_show_over = bool(
-        result.search_id and snapshot.get("budget")
+        not search_failed and result.search_id and snapshot.get("budget")
         and not snapshot.get("budget_open_ended")
     )
-    if can_show_over:
+    if search_failed:
+        message_text = failure_text
+    elif can_show_over:
         message_text = (
             f"До {_budget_summary(snapshot).replace('до ', '', 1)} вариантов не нашлось.\n\n"
             "Могу отдельно показать ближайшие предложения дороже бюджета."

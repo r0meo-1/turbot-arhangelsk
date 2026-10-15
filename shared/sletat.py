@@ -317,7 +317,7 @@ def search_tours(
             offers = [offer for offer in offers if offer.price <= total_cap]
         if not offers:
             return _tourvisor.SearchResult(
-                error="Подходящих туров пока не найдено", search_id=search_id
+                search_id=search_id
             )
         return _tourvisor.SearchResult(offers=offers, search_id=search_id)
     except requests.HTTPError as exc:
