@@ -87,6 +87,58 @@ def _assert_zoom_and_default_contrast(page):
     assert ratios["body"] >= 4.5
     assert ratios["muted"] >= 4.5
 
+
+@pytest.mark.parametrize("width", [320, 390])
+@pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
+def test_telegram_budget_back_and_cancel_never_submit(width, asset_dir):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset_dir)))
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel="msedge", headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page(viewport={"width": width, "height": 850})
+        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        submissions = []
+        page.route(API_URL, lambda route: (submissions.append(route.request.url), route.abort()))
+        page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.get_by_role("button", name="Сочи", exact=True).click()
+        page.locator("#budget-amount").fill("270123")
+        assert page.locator("#budget").input_value() == "270123"
+        assert "270" in page.locator("#budget-output").inner_text()
+        page.locator("#children").fill("1")
+        page.locator("#children-ages input").fill("0")
+        page.locator("#consent").check()
+        page.locator("#submit").click()
+        page.locator("#review").wait_for(state="visible")
+        assert "Сочи, Россия" in page.locator("#summary").inner_text()
+        assert "270 123" in page.locator("#summary").inner_text().replace("\u00a0", " ")
+        assert "0 лет" in page.locator("#summary").inner_text()
+        page.locator("#edit").click()
+        assert page.locator("#budget-amount").input_value() == "270123"
+        assert page.locator("#children-ages input").input_value() == "0"
+        page.get_by_role("button", name="Очистить параметры", exact=True).click()
+        playwright_sync.expect(page.locator("#keep-trip")).to_be_focused()
+        page.locator("#keep-trip").click()
+        assert page.locator("#destination").input_value() == "Сочи, Россия"
+        page.locator("#budget-amount").fill("99999")
+        page.locator("#submit").click()
+        assert page.locator("#review").is_hidden()
+        page.locator("#budget-amount").fill("350001")
+        page.locator("#submit").click()
+        page.locator("#review").wait_for(state="visible")
+        page.get_by_role("button", name="Отменить подбор", exact=True).click()
+        page.locator("#confirm-clear").click()
+        assert page.locator("#review").is_hidden()
+        assert page.locator("#destination").input_value() == ""
+        assert page.locator("#budget-amount").input_value() == "270000"
+        assert page.locator("#budget").input_value() == "270000"
+        assert not page.locator("#consent").is_checked()
+        assert page.locator("#children-ages input").count() == 0
+        assert page.locator(".chip.active").count() == 0
+        assert "Заявка не отправлена" in page.locator("#form-status").inner_text()
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        assert submissions == []
+
 @pytest.mark.parametrize("width", [320, 390, 1280])
 @pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
 def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width, asset_dir):
@@ -293,6 +345,40 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
     assert payload["date"]
 
 
+def test_cancel_is_disabled_during_pending_save_and_recovers_after_error():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(MINIAPP_DIR)))
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel="msedge", headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page()
+        page.add_init_script("""window.Telegram = {WebApp: {
+            initData: 'synthetic-only', ready() {}, expand() {},
+            BackButton: {show() {}, hide() {}, onClick(fn) { window.__back = fn; }}
+        }};""")
+        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        pending = []
+        page.route(API_URL, lambda route: pending.append(route))
+        page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.locator("#destination").fill("Сочи, Россия")
+        page.locator("#consent").check()
+        page.locator("#submit").click()
+        with page.expect_request(API_URL):
+            page.locator("#save").click()
+        assert all(button.is_disabled() for button in page.locator('[data-clear-trip]').all())
+        assert len(pending) == 1
+        page.evaluate("window.__back()")
+        assert page.locator("#review").is_visible()
+        assert not page.locator("#clear-dialog").is_visible()
+        pending[0].fulfill(status=500, content_type="application/json", body='{"ok":false}', headers={"Access-Control-Allow-Origin": "*"})
+        playwright_sync.expect(page.locator('#review [data-clear-trip]')).to_be_enabled()
+        page.get_by_role("button", name="Отменить подбор", exact=True).click()
+        page.locator("#confirm-clear").click()
+        assert page.locator("#trip-form").is_visible()
+        assert page.locator("#destination").input_value() == ""
+        assert len(pending) == 1
+
+
 @pytest.mark.parametrize("failure", ["network", "http_500", "invalid_json"])
 def test_failed_submit_preserves_review_and_retries_same_submission(failure):
     handler = partial(_QuietHandler, directory=str(MINIAPP_DIR))
@@ -327,6 +413,7 @@ def test_failed_submit_preserves_review_and_retries_same_submission(failure):
             )
         page.route(API_URL, submit)
         page.goto(f"http://127.0.0.1:{server.server_port}/index.html")
+        page.locator('#trip-form[data-ready="true"]').wait_for()
         page.locator("#destination").fill("Пхукет, Таиланд")
         page.locator("#departure").fill("Архангельск")
         page.locator("#consent").check()
@@ -341,6 +428,7 @@ def test_failed_submit_preserves_review_and_retries_same_submission(failure):
         assert page.locator("#summary").inner_text() == summary
         assert page.locator("#save").is_enabled()
         assert page.locator("#edit").is_enabled()
+        assert all(button.is_enabled() for button in page.locator('[data-clear-trip]').all())
         page.locator("#save").click()
         page.wait_for_function("window.__tgClosed === true")
         assert len(attempts) == 2
