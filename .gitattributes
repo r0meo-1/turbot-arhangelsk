@@ -1,0 +1,3 @@
+# Preserve the exact official SDK bytes and its recorded SHA256 on Windows.
+miniapp/vendor/telegram-web-app.js text eol=lf
+docs/miniapp/vendor/telegram-web-app.js text eol=lf
