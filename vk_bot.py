@@ -2335,6 +2335,8 @@ def handle_start(
 ) -> None:
     source_tag = _first_touch_source_tag(user_id, source_tag)
     record_funnel_event("vk", source_tag or "direct", "start", "opened")
+    if has_consent(user_id) and _offer_draft_resume(user_id):
+        return
     if CONSENT_MODE == "strict" and not has_consent(user_id):
         with _lock:
             user_data[user_id] = {
@@ -2363,6 +2365,48 @@ def handle_start(
         return
 
     _begin_destination(user_id, first_name, source_tag=source_tag)
+
+
+def _offer_draft_resume(user_id: int) -> bool:
+    from shared import draft_resume
+    info = user_data.get(user_id) or _restore_session_from_db(user_id)
+    if not info:
+        info = _load_miniapp_snapshot(user_id)
+        if info:
+            user_data[user_id] = info
+            set_session(user_id, info)
+    if not info or info.get('state') == STATE_CONSENT:
+        return False
+    if info.get('_completing'):
+        send_message(user_id, 'Отправка уже выполняется. Дождитесь результата.')
+        return True
+    token = draft_resume.issue(info)
+    send_message(user_id, draft_resume.PROMPT, keyboard=_keyboard([
+        [_btn(draft_resume.CONTINUE, 'primary', {'command': 'draft_continue', 'token': token})],
+        [_btn(draft_resume.RESTART, 'secondary', {'command': 'draft_restart', 'token': token})],
+        [_btn(CANCEL_BUTTON_TEXT, 'negative', {'command': 'draft_cancel', 'token': token})],
+    ]))
+    return True
+
+
+def _resume_draft(user_id: int, action: str, token: str) -> None:
+    from shared import draft_resume
+    info = user_data.get(user_id)
+    if (not info or not has_consent(user_id) or info.get('_completing')
+            or action not in ('continue', 'restart', 'cancel')
+            or not draft_resume.consume(info, token)):
+        send_message(user_id, 'Эта кнопка устарела. Напишите «Начать» для продолжения.')
+        return
+    if action == 'cancel':
+        handle_cancel(user_id)
+    elif action == 'restart':
+        _begin_destination(user_id)
+    elif info.get('_tour_searching'):
+        send_message(user_id, 'Поиск ещё выполняется. Дождитесь результата или отмените подбор.',
+                     keyboard=_tour_search_wait_keyboard())
+    else:
+        _prompt_for_state(user_id, info['state'])
+    _mark_dirty(user_id)
 
 
 def _begin_destination(
@@ -4400,7 +4444,7 @@ def _send_followups() -> int:
         send_message(
             cid,
             f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
-            "Продолжить? Напишите «Начать», чтобы начать заново, «Отмена», чтобы отменить.",
+            "Напишите «Начать», чтобы продолжить подбор или начать заново, «Отмена», чтобы отменить.",
         )
         with _lock:
             if cid in user_data:
@@ -4622,6 +4666,10 @@ def _process_message_unlocked(message: Dict[str, Any]) -> None:
     if favorite_command:
         _favorite_action(user_id, button_payload)
         return
+    if button_payload.get('command') in ('draft_continue', 'draft_restart', 'draft_cancel'):
+        _resume_draft(user_id, button_payload['command'].removeprefix('draft_'),
+                      button_payload.get('token', ''))
+        return
 
     # Command recognition (case-insensitive, natural language)
     text_lower = text.lower()
@@ -4723,18 +4771,6 @@ def _process_message_unlocked(message: Dict[str, Any]) -> None:
             return
 
     if command == "start":
-        if text == NEW_SELECTION_BUTTON_TEXT:
-            _delete_miniapp_snapshot(user_id)
-        else:
-            # VK can open the chat without delivering app_payload. The normal
-            # Start button must resume an explicitly saved Mini App draft.
-            snapshot = _load_miniapp_snapshot(user_id)
-            if snapshot is not None:
-                with _lock:
-                    user_data[user_id] = snapshot
-                set_session(user_id, snapshot)
-                _ask_review(user_id)
-                return
         handle_start(user_id, name, source_tag=incoming_source_tag)
         return
     if command == "help":

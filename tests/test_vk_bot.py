@@ -2725,6 +2725,13 @@ def test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, 
 
     assert response.status_code == 200
     restored = bot.user_data[user_id]
+    if command != "Проверить заявку":
+        # Start now offers a choice and must prefer the newer persisted draft.
+        assert restored["state"] == bot.STATE_DESTINATION
+        assert restored["destination"] == bot.DEST_HOT_TOURS_LABEL
+        assert restored.get('_resume_choice')
+        assert not reviews
+        return
     assert restored["state"] == bot.STATE_REVIEW
     assert restored["destination"] == "Шри-Ланка"
     assert restored["origin"] == "Архангельск"
@@ -2736,13 +2743,13 @@ def test_miniapp_review_command_restores_snapshot_after_chat_navigation(client, 
         assert cur.execute("SELECT count(*) FROM leads").fetchone()[0] == 0
 
 
-def test_explicit_new_selection_discards_miniapp_snapshot(client, monkeypatch):
+def test_new_selection_does_not_discard_snapshot_before_confirmation(client, monkeypatch):
     user_id = 9964
     bot._save_miniapp_snapshot(user_id, {"destination": "Египет", "source": "vk_mini_app"})
     starts = []
     monkeypatch.setattr(bot, "handle_start", lambda *a, **k: starts.append(a[0]))
     assert _post(client, user_id, bot.NEW_SELECTION_BUTTON_TEXT).status_code == 200
-    assert bot._load_miniapp_snapshot(user_id) is None
+    assert bot._load_miniapp_snapshot(user_id) is not None
     assert starts == [user_id]
 
 

@@ -1558,7 +1558,7 @@ def _send_followups() -> int:
         send_message(
             cid,
             f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
-            "Продолжить? Отправьте /start, чтобы начать заново, "
+            "Отправьте /start, чтобы продолжить подбор или начать заново, "
             "или /cancel, чтобы отменить.",
         )
         with _lock:
@@ -3478,6 +3478,9 @@ def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> No
     source_tag = normalise_source_tag(previous_source or source_tag)
     record_funnel_event("telegram", source_tag or "direct", "start", "opened")
 
+    if has_consent(chat_id) and _offer_draft_resume(chat_id):
+        return
+
     if CONSENT_MODE == "strict" and not has_consent(chat_id):
         with _lock:
             user_data[chat_id] = {
@@ -3514,11 +3517,58 @@ def handle_start(chat_id: int, first_name: str = "", source_tag: str = "") -> No
     _begin_destination(chat_id, first_name, source_tag=source_tag)
 
 
+def _offer_draft_resume(chat_id: int) -> bool:
+    from shared import draft_resume
+    info = user_data.get(chat_id)
+    if not info:
+        info = get_session(chat_id)
+        if info:
+            info['kids_ages'] = _ages_from_db(info.get('kids_ages'))
+            user_data[chat_id] = info
+    if not info or info.get('state') == STATE_CONSENT:
+        return False
+    if info.get('_completing'):
+        send_message(chat_id, 'Отправка уже выполняется. Дождитесь результата.')
+        return True
+    token = draft_resume.issue(info)
+    send_message(chat_id, draft_resume.PROMPT, reply_markup=inline_keyboard([
+        [_inline_btn(draft_resume.CONTINUE, f'draft:continue:{token}')],
+        [_inline_btn(draft_resume.RESTART, f'draft:restart:{token}')],
+        [_inline_btn(CANCEL_BUTTON_TEXT, f'draft:cancel:{token}')],
+    ]))
+    return True
+
+
+@_serialized_dialog
+def _resume_draft(chat_id: int, action: str, token: str) -> None:
+    from shared import draft_resume
+    info = user_data.get(chat_id)
+    if (not info or not has_consent(chat_id) or info.get('_completing')
+            or action not in ('continue', 'restart', 'cancel')
+            or not draft_resume.consume(info, token)):
+        send_message(chat_id, 'Эта кнопка устарела. Отправьте /start для продолжения.')
+        return
+    if action == 'cancel':
+        handle_cancel(chat_id)
+    elif action == 'restart':
+        _begin_destination(chat_id)
+    elif info.get('_package_searching'):
+        send_message(chat_id, 'Поиск ещё выполняется. Дождитесь результата или отмените подбор.',
+                     reply_markup=inline_keyboard([[_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)]]))
+    else:
+        _prompt_for_state(chat_id, info['state'])
+    _mark_dirty(chat_id)
+
+
 def _begin_destination(chat_id: int, first_name: str = "", source_tag: str = "") -> None:
     """Enter the first data-collection step while preserving campaign attribution."""
     from shared import tour_favorites
     with _db_cursor(commit=True) as cur:
         tour_favorites.clear(cur, chat_id)
+        cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
+            SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
+            WHERE chat_id=? AND miniapp_submission_id IS NOT NULL""", (int(time.time()), chat_id))
+        cur.execute("UPDATE miniapp_submissions SET status='invalidated' WHERE user_id=?", (chat_id,))
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
         effective_source = normalise_source_tag(previous_source or source_tag)
@@ -5382,6 +5432,12 @@ def _process_callback(data: Dict[str, Any]) -> None:
             _go_back(chat_id)
         else:
             send_message(chat_id, "Для начала работы отправьте /start")
+        return
+
+    if cb_data.startswith('draft:'):
+        parts = cb_data.split(':')
+        if len(parts) == 3:
+            _resume_draft(chat_id, parts[1], parts[2])
         return
 
     info = user_data.get(chat_id)
