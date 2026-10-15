@@ -24,6 +24,52 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
+def test_same_origin_save_works_with_cross_origin_api_blocked_and_retry_is_stable():
+    with sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page(viewport={'width': 390, 'height': 850})
+        page.add_init_script("""window.__nativeEvents = [];
+            window.TelegramWebviewProxy = {postEvent(type, data) { window.__nativeEvents.push(type); }};""")
+        # Reproduce the blocked cross-domain request without weakening auth or TLS.
+        page.route(API_URL, lambda route: route.abort())
+        attempts = []
+        origin = 'https://miniapp.example.test'
+        from urllib.parse import urlsplit
+        def asset(route):
+            name = urlsplit(route.request.url).path.removeprefix('/tg/miniapp/') or 'index.html'
+            assert name in ('index.html', 'app.js', 'styles.css', 'vendor/telegram-web-app.js')
+            route.fulfill(path=MINIAPP_DIR / name)
+        page.route(origin + '/tg/miniapp/**', asset)
+        def submit(route):
+            attempts.append(route.request.post_data_json)
+            assert route.request.headers.get('origin') == origin
+            if len(attempts) == 1:
+                route.abort()
+            else:
+                route.fulfill(status=200, content_type='application/json', body='{"ok":true}')
+        page.route(origin + '/miniapp/submit', submit)
+        from urllib.parse import urlencode
+        fragment = urlencode({'tgWebAppData': INIT_DATA, 'tgWebAppVersion': '8.0', 'tgWebAppPlatform': 'tdesktop'})
+        page.goto(origin + '/tg/miniapp/#' + fragment, wait_until='domcontentloaded')
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.locator('#destination').fill('Сочи, Россия')
+        page.locator('#budget-amount').fill('270123')
+        page.locator('#consent').check()
+        page.locator('#submit').click()
+        assert page.locator('#review').is_visible(), page.locator('#error').inner_text()
+        page.locator('#save').click()
+        page.wait_for_function("document.getElementById('save').disabled === false")
+        assert 'Не удалось подтвердить сохранение.' in page.locator('#status').inner_text(), (attempts, page.locator('#status').inner_text())
+        assert 'Failed to fetch' not in page.locator('#status').inner_text()
+        assert not page.evaluate("window.__nativeEvents.includes('web_app_close')")
+        page.locator('#save').click()
+        page.wait_for_function("window.__nativeEvents.includes('web_app_close')")
+        assert len(attempts) == 2 and attempts[0] == attempts[1]
+        assert attempts[0]['payload']['budgetMaxRub'] == 270123
+        assert attempts[0]['initData'] == INIT_DATA
+
+
 @pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
 @pytest.mark.parametrize('flexible', [False, True])
 def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asset_dir, flexible):

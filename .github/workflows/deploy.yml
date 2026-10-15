@@ -170,9 +170,14 @@ jobs:
             exit 1
           fi
 
+          tg_html="$(curl -fsS --max-time 15 'https://bot.r0meo1.ru/tg/miniapp/')"
+          tg_js="$(curl -fsS --max-time 15 'https://bot.r0meo1.ru/tg/miniapp/app.js')"
+          grep -q 'trip-form' <<<"$tg_html"
+          grep -q "'/miniapp/submit'" <<<"$tg_js"
+
           tg_auth_status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
             -X POST "$tg_submit" \
-            -H 'Origin: https://r0meo-1.github.io' \
+            -H 'Origin: https://bot.r0meo1.ru' \
             -H 'Content-Type: application/json' \
             --data '{"initData":"tampered","payload":{}}')"
           if [[ "$tg_auth_status" != "401" ]]; then

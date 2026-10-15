@@ -214,9 +214,11 @@ jobs:
 
           curl -fsSL --max-time 15 -D "$health_headers" "$base/health" -o /dev/null
           curl -fsSL --max-time 15 -D "$vk_headers" "$base/vk/miniapp/legal.json" -o /dev/null
+          curl -fsSL --max-time 15 "$base/tg/miniapp/" -o /dev/null
+          curl -fsSL --max-time 15 "$base/tg/miniapp/vendor/telegram-web-app.js" -o /dev/null
           tg_status="$(curl -sS --max-time 15 -D "$tg_headers" -o /dev/null -w '%{http_code}' \
             -X POST "$base/miniapp/submit" \
-            -H 'Origin: https://r0meo-1.github.io' \
+            -H "Origin: $base" \
             -H 'Content-Type: application/json' \
             --data '{"initData":"tampered","payload":{}}')"
           if [[ "$tg_status" != "401" ]]; then
