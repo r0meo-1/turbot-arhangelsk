@@ -1469,6 +1469,7 @@ def test_vk_invalid_window_failure_is_not_empty_inventory(monkeypatch, source):
     keyboard = [button["action"]["label"] for row in json.loads(sent[0][1]["keyboard"])["buttons"] for button in row]
     assert bot.TOUR_EDIT_DATES_TEXT in keyboard
     assert bot.CANCEL_BUTTON_TEXT in keyboard
+    assert bot.TOUR_SHOW_OVER_BUDGET_TEXT not in keyboard
 
 
 @pytest.mark.parametrize('has_offers', [False, True])
@@ -1488,7 +1489,6 @@ def test_partial_range_notice_survives_vk_result_rendering(monkeypatch, has_offe
     assert all('не нашлось' not in text for text in sent)
     if has_offers:
         assert 'Неполная подборка' in bot.user_data[42]['_tour_wait_final_text']
-    assert bot.TOUR_SHOW_OVER_BUDGET_TEXT not in keyboard
 
 
 @pytest.mark.parametrize("error,search_id", [("provider timeout", 123), ("HTTP 503", None), ("", 123)])
