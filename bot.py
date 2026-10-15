@@ -850,6 +850,8 @@ def init_db() -> None:
                 cur.execute(f"ALTER TABLE {_table} ADD COLUMN selected_tour TEXT")
         cur.execute("PRAGMA table_info(sessions)")
         _session_cols = {row[1] for row in cur.fetchall()}
+        if 'budget_open_ended' not in _session_cols:
+            cur.execute('ALTER TABLE sessions ADD COLUMN budget_open_ended INTEGER NOT NULL DEFAULT 0')
         if "review_token" not in _session_cols:
             cur.execute("ALTER TABLE sessions ADD COLUMN review_token TEXT")
         if "miniapp_submission_id" not in _session_cols:
@@ -1163,9 +1165,9 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
             INSERT INTO sessions (
                 chat_id, state, destination, origin, dates, nights, people,
                 kids, kids_ages, infants, budget, budget_scope, direct_only,
-                phone, review_token, miniapp_submission_id, source_tag, updated_at, selected_tour
+                phone, review_token, miniapp_submission_id, source_tag, updated_at, selected_tour, budget_open_ended
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state,
                 destination=excluded.destination,
@@ -1184,7 +1186,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 miniapp_submission_id=excluded.miniapp_submission_id,
                 source_tag=excluded.source_tag,
                 updated_at=excluded.updated_at,
-                selected_tour=excluded.selected_tour
+                selected_tour=excluded.selected_tour,
+                budget_open_ended=excluded.budget_open_ended
             """,
             (
                 chat_id,
@@ -1206,6 +1209,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 data.get("source_tag"),
                 data.get("updated_at", now),
                 json.dumps(data.get("selected_tour"), ensure_ascii=False) if data.get("selected_tour") else None,
+                int(bool(data.get('budget_open_ended'))),
             ),
         )
 
@@ -1215,7 +1219,7 @@ def update_session(chat_id: int, **kwargs) -> None:
     allowed = {
         "state", "destination", "origin", "dates", "nights", "people", "kids",
         "kids_ages", "infants", "budget", "budget_scope", "direct_only",
-        "phone", "review_token", "miniapp_submission_id", "source_tag", "updated_at",
+        "phone", "review_token", "miniapp_submission_id", "source_tag", "updated_at", "budget_open_ended",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:

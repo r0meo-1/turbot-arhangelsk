@@ -123,6 +123,11 @@ def test_same_budget_amount_with_different_constraint_has_separate_shortlist(cha
     favorites.change(module._db_cursor, uid, info, offers[0])
     assert favorites.items(module._db_cursor, uid, info)
     assert favorites.items(module._db_cursor, uid, dict(info, budget_open_ended=False)) == []
+    if module is tg:
+        module.set_session(uid, info)
+        restored = module.get_session(uid)
+        assert restored['budget_open_ended']
+        assert len(favorites.items(module._db_cursor, uid, restored)) == 1
 
 
 def test_vk_card_binds_add_to_exact_offer_and_generation():
