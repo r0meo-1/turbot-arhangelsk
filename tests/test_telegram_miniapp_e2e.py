@@ -24,6 +24,32 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         return
 
 
+@pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
+def test_telegram_form_cannot_submit_before_handlers_load(asset_dir):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset_dir)))
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel="msedge", headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page()
+        page.route("https://telegram.org/js/telegram-web-app.js", lambda route: route.abort())
+        scripts, navigations, submissions = [], [], []
+        page.route("**/app.js*", lambda route: scripts.append(route))
+        page.route(API_URL, lambda route: (submissions.append(route.request.url), route.abort()))
+        page.on("request", lambda request: navigations.append(request.url) if request.is_navigation_request() else None)
+        url = f"http://127.0.0.1:{server.server_port}/index.html"
+        with page.expect_request("**/app.js*"):
+            page.goto(url, wait_until="commit")
+        playwright_sync.expect(page.locator("#submit")).to_be_disabled()
+        page.locator("#destination").fill("QA LOCAL ONLY")
+        page.locator("#destination").press("Enter")
+        assert navigations == [url]
+        assert submissions == []
+        assert len(scripts) == 1
+        scripts[0].fulfill(content_type="application/javascript", body=(asset_dir / "app.js").read_text(encoding="utf-8"))
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        playwright_sync.expect(page.locator("#submit")).to_be_enabled()
+
+
 
 def _assert_zoom_and_default_contrast(page):
     viewport = page.locator('meta[name="viewport"]').get_attribute("content") or ""
