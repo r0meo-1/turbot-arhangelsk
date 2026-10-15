@@ -3167,7 +3167,7 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
     )
 
 
-def _selected_tour_summary(info: Dict[str, Any]) -> str:
+def _selected_tour_summary(info: Dict[str, Any], *, include_internal: bool = True) -> str:
     offer = info.get("selected_tour")
     if not isinstance(offer, dict):
         return ""
@@ -3201,11 +3201,11 @@ def _selected_tour_summary(info: Dict[str, Any]) -> str:
         "travelata": "Travelata",
         "alean": "Алеан",
     }.get(provider)
-    if provider_label:
+    if provider_label and include_internal:
         parts.append(f"Провайдер: {provider_label}")
     if provider == "alean":
         parts.append("Отель и авиабилеты; трансфер не включён. Цена и наличие требуют проверки менеджером.")
-    if offer.get("tour_id"):
+    if offer.get("tour_id") and include_internal:
         parts.append(f"ID предложения: {offer['tour_id']}")
     actualization_status = str(offer.get("actualization_status") or "").strip().lower()
     if actualization_status:
@@ -3320,9 +3320,8 @@ def _actualize_selected_tour_worker(
         price_line = "\nЦена и наличие остаются предварительными до проверки менеджером."
 
     message_text = (
-        f"{intro}\n\n{_selected_tour_summary({'selected_tour': current})}\n\n"
-        f"{actual['flight_status']}\n"
-        f"{actual['hotel_status']}"
+        f"{intro}\n\n{_selected_tour_summary({'selected_tour': current}, include_internal=False)}\n\n"
+        f"{_client_tour_status(current, actual)}"
         f"{price_line}\n\n"
         "Можно передать этот вариант Наталье для финальной проверки 👇"
     )
@@ -3334,6 +3333,12 @@ def _actualize_selected_tour_worker(
         message_text,
         keyboard=_selected_tour_keyboard(),
     )
+
+
+def _client_tour_status(offer, actual):
+    if str(offer.get('provider') or '').lower() == 'alean':
+        return '🟡 Наличие авиабилетов, отеля и окончательную цену проверит менеджер.'
+    return f"{actual['flight_status']}\n{actual['hotel_status']}"
 
 
 def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any]] = None) -> None:
@@ -3370,7 +3375,7 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
         provider_label = "Слетать.ру" if provider == "sletat" else "Tourvisor"
         send_message(
             user_id,
-            f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
+            f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer}, include_internal=False)}\n\n"
             f"⏳ Перепроверяю цену и наличие в {provider_label}…",
             keyboard=_hide_keyboard(),
         )
@@ -3390,9 +3395,8 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
     )
     send_message(
         user_id,
-        f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer})}\n\n"
-        f"{actual['flight_status']}\n"
-        f"{actual['hotel_status']}\n\n"
+        f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer}, include_internal=False)}\n\n"
+        f"{_client_tour_status(offer, actual)}\n\n"
         "Цена и наличие предварительные до проверки менеджером. "
         "Можно передать вариант Наталье 👇",
         keyboard=_selected_tour_keyboard(),
@@ -3991,7 +3995,7 @@ def handle_dialog(user_id: int, text: str, message: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 def _confirm_to_user(user_id: int, info: Dict[str, Any], phone: str) -> None:
-    selected = _selected_tour_summary(info)
+    selected = _selected_tour_summary(info, include_internal=False)
     send_message(
         user_id,
         "✅ Заявка принята! Наталья Ильина, менеджер «АПРЕЛЬ тур», свяжется с вами.\n"

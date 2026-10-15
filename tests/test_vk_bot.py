@@ -1350,6 +1350,7 @@ def test_vk_selected_tour_is_persisted_with_lead(monkeypatch):
     assert stored["hotel"] == "Selected Hotel"
     assert stored["tour_id"] == "offer-42"
     assert "ID предложения: offer-42" in bot._selected_tour_summary(bot.user_data[960])
+    assert "ID предложения" not in bot._selected_tour_summary(bot.user_data[960], include_internal=False)
     labels = [
         button["action"]["label"]
         for row in json.loads(bot._selected_tour_keyboard())["buttons"]
@@ -3022,8 +3023,8 @@ def test_vk_actualization_checks_ownership_before_confirmation_message(actualiza
     def actualize(*args, **kwargs):
         ready.append(True)
         return result
-    def summary(info):
-        text = real_summary(info)
+    def summary(info, **kwargs):
+        text = real_summary(info, **kwargs)
         if ready:
             live = bot.user_data[user_id]
             if change == "new-search":
