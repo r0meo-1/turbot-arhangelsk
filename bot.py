@@ -626,6 +626,16 @@ selection_ai_provider = build_selection_provider(
 # Shared HTTP session with retries for Telegram API calls
 # ---------------------------------------------------------------------------
 
+class _TelegramProxyAdapter(HTTPAdapter):
+    """Route only the mounted Telegram API prefix through the configured proxy."""
+
+    def send(self, request, **kwargs):
+        proxy_url = os.getenv("TELEGRAM_PROXY_URL", "").strip()
+        if proxy_url:
+            kwargs["proxies"] = {"https": proxy_url}
+        return super().send(request, **kwargs)
+
+
 def _create_telegram_session() -> requests.Session:
     """Create a requests session that retries on network errors and 429/5xx."""
     retry = Retry(
@@ -639,6 +649,8 @@ def _create_telegram_session() -> requests.Session:
     session = requests.Session()
     session.mount("https://", adapter)
     session.mount("http://", adapter)
+    if os.getenv("TELEGRAM_PROXY_URL", "").strip():
+        session.mount("https://api.telegram.org/", _TelegramProxyAdapter(max_retries=retry))
     return session
 
 
