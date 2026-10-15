@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+from pathlib import Path
 from contextlib import ExitStack
 import time
 from urllib.parse import urlencode
@@ -106,6 +107,34 @@ def _mock_bridge(page):
         content_type='application/javascript',
         body='/* Bridge transport is installed before document scripts. */',
     ))
+
+
+def test_form_cannot_navigate_or_submit_before_app_handlers_load():
+    app = Flask(__name__)
+    saved = []
+    app.register_blueprint(create_blueprint(lambda *args: saved.append(args), lambda: (SECRET, APP_ID, GROUP_ID)))
+    server = make_server('127.0.0.1', 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page()
+        _mock_bridge(page)
+        scripts, navigations = [], []
+        page.route('**/app.js*', lambda route: scripts.append(route))
+        page.on('request', lambda request: navigations.append(request.url) if request.is_navigation_request() else None)
+        url = f'http://127.0.0.1:{server.server_port}/vk/miniapp/'
+        with page.expect_request('**/app.js*'):
+            page.goto(url, wait_until='commit')
+        pw_api = playwright_sync
+        pw_api.expect(page.locator('#submit')).to_be_disabled()
+        page.locator('#destination').fill('QA LOCAL ONLY')
+        page.locator('#destination').press('Enter')
+        assert navigations == [url]
+        assert saved == []
+        assert len(scripts) == 1
+        scripts[0].fulfill(content_type='application/javascript', body=Path('vk-miniapp/app.js').read_text(encoding='utf-8'))
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        pw_api.expect(page.locator('#submit')).to_be_enabled()
 
 
 @pytest.mark.parametrize('width,appearance', [(320, 'light'), (390, 'light'), (390, 'dark'), (1280, 'light')])
