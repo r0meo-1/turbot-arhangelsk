@@ -109,7 +109,7 @@ def trip_request_from_lead(
         adults=max(1, _int_or(info.get("people"), 1)),
         children=_ages(info),
         dates_text=dates_text,
-        flexible_dates="гиб" in dates_text.lower(),
+        flexible_dates="гиб" in dates_text.lower() or bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}\s*[—–]\s*\d{4}-\d{2}-\d{2}', dates_text)),
         nights_min=nights_min,
         nights_max=nights_max,
         budget_amount=_optional_positive_int(info.get("budget")),

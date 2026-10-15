@@ -133,6 +133,19 @@ def validate_trip_request(payload: Any) -> Dict[str, Any]:
         raise MiniAppValidationError("date is invalid") from exc
     if departure_date < date.today():
         raise MiniAppValidationError("date is in the past")
+    date_to = payload.get('dateTo')
+    dates = date_raw
+    if date_to not in (None, ''):
+        if not isinstance(date_to, str) or len(date_to) != 10:
+            raise MiniAppValidationError('dateTo is invalid')
+        try:
+            end = date.fromisoformat(date_to)
+        except ValueError as exc:
+            raise MiniAppValidationError('dateTo is invalid') from exc
+        if not 0 <= (end - departure_date).days <= 30:
+            raise MiniAppValidationError('departure range must be at most 31 days')
+        if end != departure_date:
+            dates = f'{date_raw} — {date_to}'
 
     nights = _bounded_int(payload, "nights", 3, 30)
     adults = _bounded_int(payload, "adults", 1, 8)
@@ -161,7 +174,7 @@ def validate_trip_request(payload: Any) -> Dict[str, Any]:
     return {
         "destination": destination,
         "origin": departure,
-        "dates": date_raw,
+        "dates": dates,
         "nights": nights,
         "dates_are_trip": False,
         "people": str(adults),

@@ -150,9 +150,21 @@
   // Native date inputs follow the device locale; keep the visible value Russian.
   const dateInput = $('date');
   const dateDisplay = $('date-display');
+  const syncDateRange = () => {
+    const last = $('date-to');
+    const start = Date.parse(`${dateInput.value}T00:00:00Z`);
+    if (!Number.isFinite(start)) {
+      last.removeAttribute('min'); last.removeAttribute('max');
+      return;
+    }
+    last.min = dateInput.value;
+    last.max = new Date(start + 30 * 86400000).toISOString().slice(0,10);
+  };
+  form.addEventListener('reset', () => queueMicrotask(syncDateRange));
   const syncDateDisplay = () => {
     dateDisplay.value = dateInput.value ? dateInput.value.split('-').reverse().join('.') : '';
     dateDisplay.setCustomValidity(dateInput.validity.rangeUnderflow ? 'Дата вылета не может быть в прошлом.' : '');
+    syncDateRange();
   };
   const syncDateValue = () => {
     const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(dateDisplay.value.trim());
@@ -161,6 +173,7 @@
     const valid = Boolean(iso) && dateInput.value === iso;
     dateDisplay.setCustomValidity(!valid ? 'Введите дату в формате ДД.ММ.ГГГГ.'
       : dateInput.validity.rangeUnderflow ? 'Дата вылета не может быть в прошлом.' : '');
+    syncDateRange();
   };
   syncDateDisplay();
   dateInput.addEventListener('input', syncDateDisplay);
@@ -219,6 +232,7 @@
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    syncDateRange();
     if (!form.reportValidity()) return;
 
     payload = {
@@ -227,6 +241,7 @@
       destination: destination.value.trim(),
       departure: departure.value.trim(),
       date: $('date').value,
+      ...($('date-to').value ? { dateTo: $('date-to').value } : {}),
       nights: Number($('nights').value),
       adults: Number($('adults').value),
       children: Number($('children').value),
@@ -248,7 +263,7 @@
     const entries = [
       ['Направление', payload.destination],
       ['Вылет', payload.departure],
-      ['Дата', new Date(`${payload.date}T12:00:00`).toLocaleDateString('ru-RU')],
+      ['Даты вылета', [payload.date, payload.dateTo].filter(Boolean).map(day => new Date(`${day}T12:00:00`).toLocaleDateString('ru-RU')).join(' — ')],
       ['Ночей', payload.nights],
       ['Взрослых', payload.adults],
       ['Дети', payload.children ? payload.childrenAges.map((age) => `${age} лет`).join(', ') : 'Без детей'],

@@ -137,6 +137,19 @@
     budgetOutput.textContent = formatRub(budgetAmount.value);
   });
 
+  const syncDateRange = () => {
+    const first = document.getElementById('date');
+    const last = document.getElementById('date-to');
+    const start = Date.parse(`${first.value}T00:00:00Z`);
+    if (!Number.isFinite(start)) {
+      last.removeAttribute('min'); last.removeAttribute('max');
+      return;
+    }
+    last.min = first.value;
+    last.max = new Date(start + 30 * 86400000).toISOString().slice(0,10);
+  };
+  ['input','change'].forEach(event => document.getElementById('date').addEventListener(event, syncDateRange));
+  form.addEventListener('reset', () => queueMicrotask(syncDateRange));
   const setMinDate = () => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
@@ -147,6 +160,7 @@
       defaultDate.setDate(defaultDate.getDate() + 30);
       dateInput.value = formatDateInput(defaultDate);
     }
+    syncDateRange();
   };
 
   const applyTelegramContext = () => {
@@ -219,6 +233,7 @@
       destination: String(data.get('destination') || '').trim(),
       departure: String(data.get('departure') || '').trim(),
       date: String(data.get('date') || ''),
+      ...(data.get('dateTo') ? { dateTo: String(data.get('dateTo')) } : {}),
       nights: Number(data.get('nights')),
       adults: Number(data.get('adults')),
       children: childCount,
@@ -249,7 +264,7 @@
     summary.replaceChildren(
       summaryRow('Направление', payload.destination),
       summaryRow('Вылет', payload.departure),
-      summaryRow('Дата', payload.date),
+      summaryRow('Даты вылета', [payload.date, payload.dateTo].filter(Boolean).join(' — ')),
       summaryRow('Ночей', String(payload.nights)),
       summaryRow('Взрослых', String(payload.adults)),
       summaryRow('Детей', childrenText),
@@ -338,6 +353,7 @@
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     errorBox.textContent = '';
+    syncDateRange();
 
     if (!form.reportValidity()) {
       errorBox.textContent = 'Проверьте обязательные поля и согласие.';

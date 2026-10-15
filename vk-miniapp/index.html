@@ -76,6 +76,9 @@
           <input id="date-display" type="text" inputmode="decimal" placeholder="ДД.ММ.ГГГГ" maxlength="10" autocomplete="off" required>
           <input id="date" name="date" type="date" aria-label="Выбрать дату в календаре" title="Выбрать дату в календаре" required>
         </div>
+        <label for="date-to">Последняя возможная дата вылета — необязательно</label>
+        <input id="date-to" name="dateTo" class="full-input" type="date">
+        <p class="hint">Гибкие даты: до 31 дня. Длительность поездки задайте отдельно.</p>
       </section>
 
       <section class="grid two-col">
@@ -169,6 +172,6 @@
     </dialog>
   </main>
 
-  <script src="./app.js?v=20261015-handoff"></script>
+  <script src="./app.js?v=20261015-date-range"></script>
 </body>
 </html>

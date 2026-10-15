@@ -200,6 +200,8 @@ def test_search_preview_back_cancel_and_theme_never_submit(width, appearance, tm
         page.locator('#confirm-clear').click()
         assert page.locator('#trip-form').is_visible()
         assert page.locator('#destination').input_value() == ''
+        assert page.locator('#date-to').input_value() == ''
+        assert page.locator('#date-to').get_attribute('min') == page.locator('#date').input_value()
         assert page.locator('#children-ages input').count() == 0
         assert page.locator('#consent').is_checked() is False
         assert page.locator('#terms-accepted').is_checked() is False
@@ -466,12 +468,17 @@ def test_server_delivery_and_native_return_never_need_a_manual_command(platform,
         }''', close_result)
         page.locator('#destination').fill('Сочи')
         page.locator('#budget-amount').fill('270123')
+        from datetime import date, timedelta
+        first_date = page.locator('#date').input_value()
+        last_date = (date.fromisoformat(first_date) + timedelta(days=7)).isoformat()
+        page.locator('#date-to').fill(last_date)
         page.locator('#consent').check()
         page.locator('#terms-accepted').check()
         page.locator('#submit').click()
         page.locator('#save').click()
         playwright_sync.expect(page.locator('#status')).to_have_text('Параметры отправлены в чат. Заявка менеджеру не отправлена.')
         assert len(saved) == 1 and saved[0]['budget'] == 270123
+        assert saved[0]['dates'] == f'{first_date} — {last_date}' and saved[0]['nights'] == 10
         if platform == 'desktop_app_messenger':
             page.locator('#return-chat').click()
             if close_result != 'success':

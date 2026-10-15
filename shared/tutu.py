@@ -158,6 +158,15 @@ def resolve_dates(raw: str, today: Optional[date] = None) -> Tuple[Optional[str]
     text = (raw or "").strip().lower()
     if not text:
         return None, None
+    departure_window = re.fullmatch(r'(\d{4}-\d{2}-\d{2})\s*[—–]\s*(\d{4}-\d{2}-\d{2})', text)
+    if departure_window:
+        try:
+            first, last = map(date.fromisoformat, departure_window.groups())
+        except ValueError:
+            return None, None
+        # The Tutu schema accepts an exact departure, not an invented range
+        # parameter. Search the first date as a labelled price indication.
+        return (first.isoformat(), None) if today <= first <= last else (None, None)
 
     # Mini App drafts store an ISO departure date, unlike the chat's free text.
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
@@ -348,6 +357,7 @@ class SearchResult:
     depart_date: str = ""
     # True when nothing matched the client's budget and we widened the search.
     over_budget: bool = False
+    date_scope_note: str = ""
 
     @property
     def cheapest(self) -> Optional[Offer]:
@@ -461,7 +471,7 @@ def search_offers(
     # An explicit trip range already supplies its own return date.
     if not ret and nights is not None:
         raw_nights = str(nights).strip()
-        if not re.fullmatch(r"[0-9]{1,2}", raw_nights) or not 1 <= int(raw_nights) <= 28:
+        if not re.fullmatch(r"[0-9]{1,2}", raw_nights) or not 1 <= int(raw_nights) <= 30:
             return None
         ret = (date.fromisoformat(depart) + timedelta(days=int(raw_nights))).isoformat()
 
@@ -531,6 +541,8 @@ def search_offers(
         search_url=offers[0].search_results_url,
         depart_date=depart,
         over_budget=over_budget,
+        date_scope_note=(f"Проверен вылет {depart}. Остальные даты диапазона вылета не проверены."
+                         if re.fullmatch(r'\d{4}-\d{2}-\d{2}\s*[—–]\s*\d{4}-\d{2}-\d{2}', dates_raw.strip()) else ''),
     )
 
 
@@ -576,7 +588,8 @@ def format_client_message(result: SearchResult, *, max_len: int = 3500,
     if result.over_budget:
         cheapest = result.offers[0]
         return (
-            "✈️ " + bold("По вашему бюджету билетов на эти даты не нашлось") + "\n"
+            (esc(result.date_scope_note) + "\n\n" if result.date_scope_note else '')
+            + "✈️ " + bold("По вашему бюджету билетов на проверенную дату не нашлось" if result.date_scope_note else "По вашему бюджету билетов на эти даты не нашлось") + "\n"
             f"{esc(result.from_city)} → {esc(result.to_city)}: "
             f"рынок начинается от {esc(_fmt_price(cheapest.price, cheapest.currency))} "
             "за перелёт.\n\n"
@@ -590,6 +603,8 @@ def format_client_message(result: SearchResult, *, max_len: int = 3500,
         f"{esc(result.from_city)} → {esc(result.to_city)}",
         "",
     ]
+    if result.date_scope_note:
+        lines.insert(0, esc(result.date_scope_note) + '\n')
     for offer in result.offers:
         bits = [bold(esc(_fmt_price(offer.price, offer.currency)))]
         carriers = ", ".join(offer.carriers)
@@ -634,6 +649,8 @@ def format_admin_block(result: SearchResult) -> str:
         head += f" · {_esc(carriers)}"
     if result.over_budget:
         head += "\n⚠️ <b>Бюджет клиента не покрывает перелёт</b> — ищите чартер/соседние даты."
+    if result.date_scope_note:
+        head += '\n' + _esc(result.date_scope_note)
 
     links: List[str] = []
     if cheapest.checkout_url:

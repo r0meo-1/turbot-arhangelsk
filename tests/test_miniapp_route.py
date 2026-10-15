@@ -15,6 +15,8 @@ ORIGIN = "https://r0meo-1.github.io"
 
 @pytest.fixture(autouse=True)
 def finish_miniapp_notifications_before_restoring_mocks(monkeypatch):
+    with bot._db_cursor(commit=True) as db:
+        db.execute('DELETE FROM miniapp_submissions')
     yield
     for worker in threading.enumerate():
         if worker.name.startswith("miniapp-contact-"):
@@ -283,6 +285,48 @@ def test_menu_miniapp_rejects_invalid_submission_id(monkeypatch):
     assert response.status_code == 400
     assert response.get_json() == {"ok": False, "error": "Submission ID is invalid"}
     assert chat_id not in bot.user_data
+
+
+@pytest.mark.parametrize('action', ['restart', 'cancel', 'replace', 'change_payload', 'edit_in_bot', 'receipt_crash_restart', 'receipt_crash_cancel'])
+def test_durable_miniapp_receipt_reconciles_restart_and_fences_old_trips(monkeypatch, action):
+    uid = 88191
+    monkeypatch.setattr(bot, 'BOT_TOKEN', BOT_TOKEN)
+    monkeypatch.setattr(bot, 'MINI_APP_ORIGIN', ORIGIN)
+    monkeypatch.setattr(bot, '_notify_miniapp_contact', lambda *a: None)
+    monkeypatch.setattr(bot, 'send_message', lambda *a, **k: None)
+    monkeypatch.setattr(bot, 'save_lead', lambda *a, **k: pytest.fail('not an enquiry'))
+    body = dict(initData=_signed_init_data(uid), payload=_payload(), submissionId='durable-miniapp-operation-1')
+    client = bot.app.test_client()
+    with bot._db_cursor(commit=True) as db:
+        db.execute('DELETE FROM sessions WHERE chat_id=?', (uid,))
+    bot.user_data.pop(uid, None)
+    assert client.post('/miniapp/submit', json=body, headers={'Origin': ORIGIN}).status_code == 200
+    if action.startswith('receipt_crash'):
+        with bot._db_cursor(commit=True) as db:
+            db.execute('DELETE FROM miniapp_submissions WHERE user_id=?',(uid,))
+    if action in ('restart', 'receipt_crash_restart'):
+        bot.user_data.pop(uid)
+    elif action in ('cancel', 'receipt_crash_cancel'):
+        bot.handle_cancel(uid)
+        bot.user_data.pop(uid, None)
+    elif action == 'replace':
+        newer = dict(body, submissionId='durable-miniapp-operation-2', payload=dict(_payload(), budgetMaxRub=350001))
+        assert client.post('/miniapp/submit', json=newer, headers={'Origin': ORIGIN}).status_code == 200
+    elif action == 'change_payload':
+        body['payload']['budgetMaxRub'] = 350001
+    else:
+        bot.user_data[uid]['budget'] = 350001
+        bot.set_session(uid, bot.user_data[uid])
+    before = bot.get_session(uid)
+    reply = client.post('/miniapp/submit', json=body, headers={'Origin': ORIGIN})
+    if action in ('restart', 'receipt_crash_restart'):
+        assert reply.status_code == 200 and reply.json['duplicate'] is True
+    else:
+        assert reply.status_code == 409
+    assert bot.get_session(uid) == before
+    bot.delete_user_data(uid)
+    with bot._db_cursor() as db:
+        assert db.execute('SELECT count(*) FROM miniapp_submissions WHERE user_id=?',(uid,)).fetchone()[0] == 0
 
 
 def test_concurrent_miniapp_retry_waits_for_first_durable_save(monkeypatch):

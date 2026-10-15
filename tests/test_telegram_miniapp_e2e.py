@@ -25,7 +25,8 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 
 
 @pytest.mark.parametrize("asset_dir", [MINIAPP_DIR, MINIAPP_DIR.parent / "docs" / "miniapp"], ids=["source", "pages"])
-def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asset_dir):
+@pytest.mark.parametrize('flexible', [False, True])
+def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asset_dir, flexible):
     from urllib.parse import urlencode
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), partial(_QuietHandler, directory=str(asset_dir)))
@@ -43,15 +44,32 @@ def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asse
         page.locator('#trip-form[data-ready="true"]').wait_for()
         assert page.evaluate("Telegram.WebApp.initData") == INIT_DATA
         page.locator("#destination").fill("Сочи, Россия")
+        if flexible:
+            from datetime import date, timedelta
+            last_date = (date.fromisoformat(page.locator('#date').input_value()) + timedelta(days=10)).isoformat()
+            page.locator('#date-to').fill(last_date)
         page.locator("#consent").check()
         page.locator("#submit").click()
         page.locator("#review").wait_for(state="visible")
         assert page.locator("#review").evaluate("el => el.getBoundingClientRect().top < document.querySelector('[aria-labelledby=apreltour-site-title]').getBoundingClientRect().top")
         assert submissions == []
+        if flexible:
+            assert last_date in page.locator('#summary').inner_text()
+            page.evaluate("Telegram.WebView.receiveEvent('back_button_pressed')")
+            page.locator('#trip-form').wait_for(state='visible')
+            assert page.locator('#date-to').input_value() == last_date
+            page.locator('#date').fill('2099-12-01')
+            assert page.locator('#date-to').get_attribute('min') == '2099-12-01'
+            assert page.locator('#date-to').get_attribute('max') == '2099-12-31'
+            last_date = '2099-12-11'
+            page.locator('#date-to').fill(last_date)
+            page.locator('#submit').click()
         page.locator("#save").click()
         page.wait_for_function("window.__nativeEvents.includes('web_app_close')")
         assert len(submissions) == 1
         assert submissions[0]["initData"] == INIT_DATA
+        if flexible:
+            assert submissions[0]['payload']['dateTo'] == last_date
         assert external == []
 
 

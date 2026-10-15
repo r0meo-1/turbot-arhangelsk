@@ -128,8 +128,8 @@ def _nights_range(raw: Any) -> Optional[Tuple[int, int]]:
     values = [int(value) for value in re.findall(r"\d+", str(raw or ""))]
     if not values:
         return None
-    start = max(1, min(values[0], 28))
-    end = max(1, min(values[1] if len(values) > 1 else start, 28))
+    start = max(1, min(values[0], 30))
+    end = max(1, min(values[1] if len(values) > 1 else start, 30))
     return min(start, end), max(start, end)
 
 
@@ -143,6 +143,15 @@ def resolve_search_window(
     text = (raw or "").strip().lower()
     explicit_nights = _nights_range(nights_raw)
     if not text:
+        return None
+    iso_range = re.fullmatch(r'(\d{4}-\d{2}-\d{2})\s*[—–]\s*(\d{4}-\d{2}-\d{2})', text)
+    if iso_range and explicit_nights:
+        try:
+            first, last = map(date.fromisoformat, iso_range.groups())
+        except ValueError:
+            return None
+        if today <= first <= last:
+            return SearchWindow(first.isoformat(), last.isoformat(), *explicit_nights)
         return None
 
     start_raw, end_raw = parse_russian_dates(raw)

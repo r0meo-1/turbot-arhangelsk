@@ -3148,6 +3148,7 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         live["_tour_page"] = page
         selected = bool(live.get("selected_tour"))
         marker = _ensure_tour_marker(live)
+        party = _party_text(live)
 
     numbers = list(range(offset + 1, offset + len(offers) + 1))
     keyboard = _tour_results_keyboard(numbers, selected=selected, offers=offers, search_marker=marker)
@@ -3155,6 +3156,7 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         offers=[_tourvisor.TourOffer(**offer) for offer in offers]
     )
     header = f"📄 Страница {page + 1} из {page_count} (варианты {offset + 1}–{offset + len(offers)} из {len(pool)}):\n\n"
+    header += f"👥 Состав: {party}. Цены — за тур на всех туристов.\n\n"
     if live.get("_tour_partial_notice"):
         header = "⚠️ " + live["_tour_partial_notice"] + "\n\n" + header
     content = _tourvisor.format_client_message(result, start_index=offset + 1)
