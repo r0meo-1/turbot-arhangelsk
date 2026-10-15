@@ -148,6 +148,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
 
             page.route(API_URL, accept_submit)
             page.goto(url, wait_until="domcontentloaded")
+            page.locator('#trip-form[data-ready="true"]').wait_for()
             _assert_zoom_and_default_contrast(page)
 
             # Narrow-mobile acceptance: the entire customer form must fit the
@@ -245,6 +246,7 @@ def test_telegram_miniapp_browser_reviews_then_posts_v2_payload_and_closes(width
             page.locator("#review").wait_for(state="visible")
             assert captured == []
             page.reload(wait_until="domcontentloaded")
+            page.locator('#trip-form[data-ready="true"]').wait_for()
             page.locator("#trip-form").wait_for(state="visible")
             assert page.locator("#review").is_hidden()
             assert captured == []
