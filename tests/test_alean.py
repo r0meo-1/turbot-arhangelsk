@@ -145,6 +145,35 @@ def test_range_cancellation_stops_before_another_supplier_window():
     assert sum(k['params']['action'] == 'GetTours' for _, k in session.calls) == 1
 
 
+@pytest.mark.parametrize('status', [401, 403, 429])
+def test_range_does_not_repeat_permanent_or_rate_limit_errors(status):
+    session = Session(bad={'GetTours': Response('', status=status)})
+    result = alean.search_tours(settings(), session, info(dates='Даты гибкие'))
+    assert result.partial and result.error and result.completed_windows == 0
+    assert sum(k['params']['action'] == 'GetTours' for _, k in session.calls) == 1
+
+
+def test_cancel_during_cold_catalog_stops_the_next_catalog():
+    session = Session()
+    result = alean.search_tours(settings(), session, info(), cancelled=lambda: bool(session.calls))
+    assert result.error_code == 'cancelled'
+    assert [k['params']['action'] for _, k in session.calls] == ['GetCountries']
+
+
+def test_range_connect_and_read_timeouts_fit_remaining_budget(monkeypatch):
+    original, clock, limits = alean._request, [0], []
+    monkeypatch.setattr(alean.time, 'monotonic', lambda: clock[0])
+    def request(config, session, action, params=None):
+        if action == 'GetTours':
+            limits.append((config.timeout, config.search_timeout))
+            if len(limits) == 1:
+                clock[0] = 29.8
+        return original(config, session, action, params)
+    monkeypatch.setattr(alean, '_request', request)
+    alean.search_tours(settings(), Session(), info(dates='Даты гибкие'))
+    assert all(connect + read <= .201 for connect, read in limits[1:])
+
+
 def test_range_deadline_returns_partial_even_if_remaining_windows_are_empty(monkeypatch):
     original = alean._request
     clock = [0]

@@ -185,13 +185,17 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
 
         # Derive once per search, rather than repeating the KDF for every catalog.
         account = _account_key(settings)
-        countries = _catalog(settings, session, "GetCountries", account=account)
-        resorts = _catalog(settings, session, "GetResorts", account=account)
+        def catalog(action):
+            if cancelled and cancelled():
+                raise InterruptedError("Search cancelled")
+            return _catalog(settings, session, action, account=account)
+        countries = catalog("GetCountries")
+        resorts = catalog("GetResorts")
         country = _named(countries, info.get("destination"))
         resort = None if country else _named(resorts, info.get("destination"))
         if resort:
             country = next((r for r in countries if r.get("id") == resort.get("countryId")), None)
-        departure = _named(_catalog(settings, session, "GetDepartCities", account=account), info.get("origin"))
+        departure = _named(catalog("GetDepartCities"), info.get("origin"))
         if not country or not country.get("cid") or not departure or not departure.get("cid"):
             return tv.SearchResult(error="Направление или город вылета не найден в Alean")
         allowed_resorts = _allowed_resort_ids(resorts, resort, country) if resort else None
@@ -211,13 +215,13 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
             params["kidsAges"] = ",".join(map(str, ages))
         if cap > 0:
             params["priceMax"] = cap
-        hotels = _catalog(settings, session, "GetHotels", account=account)
+        hotels = catalog("GetHotels")
         if info.get("hotel_query"):
             selected = [h for h in hotels if tv._hotel_matches(h.get("name", ""), str(info["hotel_query"])) and h.get("cid")]
             if not selected:
                 return tv.SearchResult(error="Отель не найден в Alean")
             params["hotelCIDs"] = ",".join(h["cid"] for h in selected)
-        categories = {r.get("id"): r.get("name", "") for r in _catalog(settings, session, "GetHotelCategories", account=account)}
+        categories = {r.get("id"): r.get("name", "") for r in catalog("GetHotelCategories")}
         hotel_map = {r.get("id"): r for r in hotels}
         resort_map = {r.get("id"): r for r in resorts}
         # SAPI accepts at most four arrival dates and four durations per call.
@@ -239,7 +243,8 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
             try:
                 # Preserve the existing exact-search timeout contract; for a
                 # range, each later call gets only the remaining time budget.
-                config = settings if len(windows) == 1 else replace(settings, search_timeout=max(0.1, remaining))
+                config = settings if len(windows) == 1 else replace(settings,
+                    timeout=min(settings.timeout, remaining / 2), search_timeout=remaining / 2)
                 batch = _request(config, session, "GetTours", query)
                 root.extend(batch.findall("tour"))
                 completed += 1
@@ -247,6 +252,8 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
                 if len(windows) == 1:
                     raise
                 log.warning("Alean range window failed (%s)", type(exc).__name__)
+                if isinstance(exc, requests.HTTPError) and exc.response is not None and 400 <= exc.response.status_code < 500:
+                    break
         offers, seen = [], set()
         for node in root.findall("tour"):
             row = node.attrib
@@ -298,6 +305,8 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
         return tv.SearchResult(offers=sorted(offers, key=lambda o: o.price)[:settings.max_offers], search_id=-1,
                                partial=partial, completed_windows=completed, total_windows=len(windows), warning=warning,
                                error=warning if partial and not offers else "", error_code="partial" if partial else "")
+    except InterruptedError:
+        return tv.SearchResult(error="Поиск отменён", error_code="cancelled")
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         log.warning("Alean HTTP status %s", status)
