@@ -287,7 +287,7 @@ def test_menu_miniapp_rejects_invalid_submission_id(monkeypatch):
     assert chat_id not in bot.user_data
 
 
-@pytest.mark.parametrize('action', ['restart', 'cancel', 'replace', 'change_payload', 'edit_in_bot'])
+@pytest.mark.parametrize('action', ['restart', 'cancel', 'replace', 'change_payload', 'edit_in_bot', 'receipt_crash_restart', 'receipt_crash_cancel'])
 def test_durable_miniapp_receipt_reconciles_restart_and_fences_old_trips(monkeypatch, action):
     uid = 88191
     monkeypatch.setattr(bot, 'BOT_TOKEN', BOT_TOKEN)
@@ -301,9 +301,12 @@ def test_durable_miniapp_receipt_reconciles_restart_and_fences_old_trips(monkeyp
         db.execute('DELETE FROM sessions WHERE chat_id=?', (uid,))
     bot.user_data.pop(uid, None)
     assert client.post('/miniapp/submit', json=body, headers={'Origin': ORIGIN}).status_code == 200
-    if action == 'restart':
+    if action.startswith('receipt_crash'):
+        with bot._db_cursor(commit=True) as db:
+            db.execute('DELETE FROM miniapp_submissions WHERE user_id=?',(uid,))
+    if action in ('restart', 'receipt_crash_restart'):
         bot.user_data.pop(uid)
-    elif action == 'cancel':
+    elif action in ('cancel', 'receipt_crash_cancel'):
         bot.handle_cancel(uid)
         bot.user_data.pop(uid, None)
     elif action == 'replace':
@@ -316,7 +319,7 @@ def test_durable_miniapp_receipt_reconciles_restart_and_fences_old_trips(monkeyp
         bot.set_session(uid, bot.user_data[uid])
     before = bot.get_session(uid)
     reply = client.post('/miniapp/submit', json=body, headers={'Origin': ORIGIN})
-    if action == 'restart':
+    if action in ('restart', 'receipt_crash_restart'):
         assert reply.status_code == 200 and reply.json['duplicate'] is True
     else:
         assert reply.status_code == 409

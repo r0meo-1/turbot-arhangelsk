@@ -1231,6 +1231,10 @@ def session_exists(chat_id: int) -> bool:
 def delete_session(chat_id: int) -> None:
     """Remove a user's dialog session."""
     with _db_cursor(commit=True) as cur:
+        # Also fence a crash after the draft committed but before its receipt.
+        cur.execute("""INSERT OR IGNORE INTO miniapp_submissions
+            SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
+            WHERE chat_id=? AND miniapp_submission_id IS NOT NULL""", (int(time.time()), chat_id))
         cur.execute("UPDATE miniapp_submissions SET status='invalidated' WHERE user_id=?", (chat_id,))
         lead_ids = [
             int(row[0])
@@ -1250,6 +1254,9 @@ def delete_session(chat_id: int) -> None:
 def clear_sessions() -> None:
     """Delete all active dialog sessions."""
     with _db_cursor(commit=True) as cur:
+        cur.execute("""INSERT OR IGNORE INTO miniapp_submissions
+            SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
+            WHERE miniapp_submission_id IS NOT NULL""", (int(time.time()),))
         cur.execute("UPDATE miniapp_submissions SET status='invalidated'")
         cur.execute("DELETE FROM sessions")
 
@@ -4874,6 +4881,10 @@ def miniapp_submit() -> Response:
                     ):
                         if _miniapp_trip_hash(existing) != fingerprint:
                             return _miniapp_json({'ok': False, 'error': 'Параметры уже изменены в боте. Откройте форму заново.'}, 409)
+                        if not receipt:
+                            with _db_cursor(commit=True) as cur:
+                                cur.execute("INSERT OR IGNORE INTO miniapp_submissions VALUES(?,?,?,'saved',?)",
+                                            (chat_id, submission_id, fingerprint, int(time.time())))
                         return _miniapp_json({
                             "ok": True,
                             "state": existing.get("state"),
