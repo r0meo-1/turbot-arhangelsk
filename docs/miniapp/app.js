@@ -1,6 +1,8 @@
 (() => {
   const tg = window.Telegram?.WebApp;
-  const API_URL = 'https://bot.r0meo1.ru/miniapp/submit';
+  // Production is hosted beside the API. Keep old Pages launches compatible.
+  const API_URL = window.location.pathname.startsWith('/tg/miniapp/')
+    ? '/miniapp/submit' : 'https://bot.r0meo1.ru/miniapp/submit';
   const form = document.getElementById('trip-form');
   const destination = document.getElementById('destination');
   const departure = document.getElementById('departure');
@@ -121,7 +123,7 @@
       if (error?.name === 'AbortError') {
         throw new Error(timeoutMessage);
       }
-      throw error;
+      throw new Error('Не удалось подтвердить сохранение. Проверьте подключение и повторите — повтор не создаст дубликат.');
     } finally {
       clearTimeout(timer);
     }

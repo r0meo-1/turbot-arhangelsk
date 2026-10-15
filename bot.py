@@ -181,9 +181,12 @@ STATE_FILE           = os.getenv("STATE_FILE", "bot_state.json")
 DATABASE_PATH        = os.getenv("DATABASE_PATH", "bot_state.sqlite")
 TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", "")
 # HTTPS URL opened by Telegram as the bot Web App menu button.
+_MINI_APP_BASE = (os.getenv("PUBLIC_BASE_URL", "").strip()
+                  or os.getenv("RENDER_EXTERNAL_URL", "").strip()).rstrip("/")
 MINI_APP_URL = os.getenv(
     "MINI_APP_URL",
-    "https://r0meo-1.github.io/turbot-arhangelsk/miniapp/",
+    f"{_MINI_APP_BASE}/tg/miniapp/" if _MINI_APP_BASE
+    else "https://r0meo-1.github.io/turbot-arhangelsk/miniapp/",
 ).strip()
 MINI_APP_ORIGIN = os.getenv(
     "MINI_APP_ORIGIN", "https://r0meo-1.github.io"
@@ -4983,12 +4986,32 @@ def _global_security_headers(response: Response) -> Response:
     return response
 
 
+def _miniapp_origins() -> set[str]:
+    parts = urlsplit(MINI_APP_URL)
+    configured_origin = f'{parts.scheme}://{parts.netloc}' if parts.scheme == 'https' and parts.netloc else ''
+    return {value for value in (MINI_APP_ORIGIN, configured_origin) if value}
+
+
+@app.get('/tg/miniapp/')
+@app.get('/tg/miniapp/<path:name>')
+def telegram_miniapp_asset(name: str = 'index.html') -> Response:
+    """Serve the Telegram form beside its authenticated API, without CORS hops."""
+    from pathlib import Path
+    from flask import send_from_directory, abort
+    if name not in ('index.html', 'app.js', 'styles.css', 'vendor/telegram-web-app.js'):
+        abort(404)
+    response = send_from_directory(Path(__file__).resolve().parent / 'miniapp', name)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
+
+
 def _miniapp_json(body: Dict[str, Any], status: int = 200) -> Response:
-    """JSON response with narrowly scoped CORS for the GitHub Pages Mini App."""
+    """JSON response with CORS limited to explicitly configured launch origins."""
     response = jsonify(body)
     response.status_code = status
     origin = request.headers.get("Origin", "")
-    if origin and origin == MINI_APP_ORIGIN:
+    if origin and origin in _miniapp_origins():
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
@@ -5008,7 +5031,7 @@ def _miniapp_trip_hash(info: Dict[str, Any]) -> str:
 def miniapp_submit() -> Response:
     """Accept a menu-button Mini App request after Telegram initData validation."""
     origin = request.headers.get("Origin", "")
-    if not MINI_APP_ORIGIN or origin != MINI_APP_ORIGIN:
+    if origin not in _miniapp_origins():
         return _miniapp_json({"ok": False, "error": "Origin is not allowed"}, 403)
     if request.method == "OPTIONS":
         return _miniapp_json({"ok": True}, 204)
@@ -5092,7 +5115,7 @@ def miniapp_submit() -> Response:
 def miniapp_transfer_link() -> Response:
     """Return a Kiwitaxi partner link for an authenticated Telegram Mini App."""
     origin = request.headers.get("Origin", "")
-    if not MINI_APP_ORIGIN or origin != MINI_APP_ORIGIN:
+    if origin not in _miniapp_origins():
         return _miniapp_json({"ok": False, "error": "Origin is not allowed"}, 403)
     if request.method == "OPTIONS":
         return _miniapp_json({"ok": True}, 204)
@@ -5130,7 +5153,7 @@ def miniapp_transfer_link() -> Response:
 def miniapp_partner_link() -> Response:
     """Resolve Telegram Mini App partner links on the trusted backend."""
     origin = request.headers.get("Origin", "")
-    if not MINI_APP_ORIGIN or origin != MINI_APP_ORIGIN:
+    if origin not in _miniapp_origins():
         return _miniapp_json({"ok": False, "error": "Origin is not allowed"}, 403)
     if request.method == "OPTIONS":
         return _miniapp_json({"ok": True}, 204)

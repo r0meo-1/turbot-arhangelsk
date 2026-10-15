@@ -98,6 +98,57 @@ def _payload():
     }
 
 
+@pytest.mark.parametrize('asset,mimetype', [('', 'text/html'), ('app.js', 'javascript'),
+    ('styles.css', 'text/css'), ('vendor/telegram-web-app.js', 'javascript')])
+def test_same_origin_miniapp_serves_only_public_assets(asset, mimetype):
+    with bot.app.test_client().get('/tg/miniapp/' + asset + '?rev=test') as response:
+        assert response.status_code == 200
+        assert mimetype in response.content_type
+        assert response.headers['Cache-Control'] == 'no-store'
+        assert response.headers['Referrer-Policy'] == 'no-referrer'
+    with bot.app.test_client().get('/tg/miniapp/backend/.env') as response:
+        assert response.status_code == 404
+
+
+def test_same_origin_save_retry_and_continue_never_create_enquiry(monkeypatch):
+    uid = 88067
+    origin = 'https://bot.example.test'
+    monkeypatch.setattr(bot, 'MINI_APP_URL', origin + '/tg/miniapp/')
+    monkeypatch.setattr(bot, 'BOT_TOKEN', BOT_TOKEN)
+    monkeypatch.setattr(bot, '_queue_miniapp_contact', lambda *a: None)
+    monkeypatch.setattr(bot, 'send_message', lambda *a, **kw: None)
+    for name in ('handle_completion', 'save_lead', '_notify_admin', 'send_lead_to_mdt'):
+        monkeypatch.setattr(bot, name, lambda *a, **kw: pytest.fail('enquiry gate crossed'))
+    client = bot.app.test_client()
+    payload = dict(_payload(), budgetMaxRub=270123)
+    body = {'initData': _signed_init_data(uid), 'payload': payload, 'submissionId': 'same-origin-test-0001'}
+    leads = bot.count_leads()
+    try:
+        preflight = client.options('/miniapp/submit', headers={'Origin': origin})
+        assert preflight.status_code == 204
+        for duplicate in (False, True):
+            response = client.post('/miniapp/submit', json=body, headers={'Origin': origin})
+            assert response.status_code == 200
+            assert response.get_json()['duplicate'] is duplicate
+            assert response.headers['Access-Control-Allow-Origin'] == origin
+        assert client.post('/miniapp/submit', json=body,
+                           headers={'Origin': 'https://evil.example', 'Host': 'evil.example'}).status_code == 403
+        tampered = dict(body, initData=body['initData'].replace('tester', 'attacker'))
+        assert client.post('/miniapp/submit', json=tampered, headers={'Origin': origin}).status_code == 401
+        bot.user_data.pop(uid)
+        bot.handle_start(uid)
+        restored = bot.user_data[uid]
+        assert restored['budget'] == 270123
+        assert restored['kids_ages'] == [7]
+        assert restored['dates'] == '2099-02-10'
+        bot._resume_draft(uid, 'continue', restored['_resume_choice'][0])
+        assert bot.user_data[uid]['state'] == bot.STATE_CONTACT
+        assert bot.count_leads() == leads
+    finally:
+        bot.user_data.pop(uid, None)
+        bot.delete_session(uid)
+
+
 def test_menu_miniapp_submission_creates_contact_step(monkeypatch):
     chat_id = 88001
     sent = []
