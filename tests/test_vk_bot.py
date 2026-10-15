@@ -1618,6 +1618,67 @@ def test_vk_wait_animation_only_restores_its_current_completed_search(monkeypatc
     assert (edits[-1] == "Ready") is (transition == "finished")
 
 
+@pytest.mark.parametrize('cancel_after_preview', [False, True])
+def test_vk_progress_shows_first_offers_then_respects_cancel(monkeypatch, cancel_after_preview):
+    user_id, marker = 9579, 'progress-search'
+    live = {'state':bot.STATE_REVIEW,'_tour_searching':True,'_tour_search_marker':marker}
+    bot.user_data[user_id]=live
+    offer=bot._tourvisor.TourOffer('Первый отель',4,'Сочи','2030-11-14',10,'HB','Номер','Алеан',80000,provider='alean')
+    edits,sent,pages=[],[],[]
+    monkeypatch.setattr(bot.time,'sleep',lambda *a:None)
+    monkeypatch.setattr(bot,'edit_message',lambda uid,mid,text,**kw:edits.append((text,kw)))
+    monkeypatch.setattr(bot,'send_message',lambda uid,text,**kw:sent.append(text))
+    monkeypatch.setattr(bot,'_send_tour_results_page',lambda *a:pages.append(True))
+    monkeypatch.setattr(bot,'save_lead',lambda *a,**k:pytest.fail('progress created a lead'))
+    def search(*args, **kwargs):
+        kwargs['on_progress'](bot._tourvisor.SearchResult(offers=[offer],completed_windows=1,total_windows=6))
+        assert edits==[]  # callback never performs network I/O
+        bot._tour_search_wait_animation(user_id,marker,111)
+        assert 'Первый отель' in edits[0][0] and '1 из 6' in edits[0][0]
+        assert 'Москва' in edits[0][0] and 'после завершения' in edits[0][0]
+        assert bot.TOUR_SEND_SELECTED_TEXT not in edits[0][1].get('keyboard','')
+        if cancel_after_preview:
+            bot.handle_cancel(user_id)
+        return bot._tourvisor.SearchResult(offers=[offer]),'alean'
+    monkeypatch.setattr(bot._tour_providers,'search_tours',search)
+    bot._tour_search_worker(user_id,marker,{'origin':'Москва'},111)
+    assert bool(pages) is (not cancel_after_preview)
+    if cancel_after_preview:
+        assert user_id not in bot.user_data and len(edits)==1
+
+
+def test_vk_cancel_is_ordered_after_inflight_progress_edit(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    entered,release,cancelled=Event(),Event(),Event()
+    uid=9580
+    bot.user_data[uid]={'state':bot.STATE_REVIEW,'_tour_searching':True,'_tour_search_marker':'atomic'}
+    events=[]
+    monkeypatch.setattr(bot.time,'sleep',lambda *a:None)
+    monkeypatch.setattr(bot,'send_typing',lambda *a:None)
+    def edit(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        events.append('progress')
+        return True
+    def sent(*args, **kwargs):
+        events.append('cancel')
+        cancelled.set()
+    monkeypatch.setattr(bot,'edit_message',edit)
+    monkeypatch.setattr(bot,'send_message',sent)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        updating=pool.submit(bot._tour_search_wait_animation,uid,'atomic',111)
+        try:
+            assert entered.wait(3)
+            cancelling=pool.submit(bot.handle_cancel,uid)
+            assert not cancelled.wait(.05)
+        finally:
+            release.set()
+        updating.result(timeout=5)
+        cancelling.result(timeout=5)
+    assert events==['progress','cancel'] and uid not in bot.user_data
+
+
 def test_vk_hotel_edit_invalidates_pending_search_and_previous_selection(monkeypatch):
     user_id, marker = 9574, "old-search"
     live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker,

@@ -170,7 +170,7 @@ def _resolve_destination(countries, resorts, destination):
     return (country, resort) if resort else (None, None)
 
 
-def search_tours(settings, session, info, *, log=None, cancelled=None):
+def search_tours(settings, session, info, *, log=None, cancelled=None, on_progress=None):
     log = log or logging.getLogger(__name__)
     if not settings.enabled or not settings.username or not settings.password:
         return tv.SearchResult(error="Alean сейчас не настроен")
@@ -286,6 +286,59 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
                 transport = local.session
             config = settings if len(windows) == 1 else replace(settings, total_timeout=remaining)
             return _request(config, transport, 'GetTours', query)
+        def snapshot():
+            offers, seen = [], set()
+            for node in root.findall("tour"):
+                row = node.attrib
+                try:
+                    supplier_price, nights = Decimal(row["price"]), int(row["nights"])
+                    day = datetime.strptime(row["tourDate"], "%d.%m.%Y").date()
+                except (KeyError, ValueError, InvalidOperation):
+                    continue
+                hotel = hotel_map.get(row.get("hotelId"))
+                if not supplier_price.is_finite() or not hotel or not hotel.get("name"):
+                    continue
+                if supplier_price <= 0 or (cap > 0 and supplier_price > cap):
+                    continue
+                numeric_price = float(supplier_price)
+                if not math.isfinite(numeric_price) or numeric_price <= 0:
+                    continue
+                # Retain kopecks while keeping the card JSON serializable. Budget
+                # comparisons above use the original decimal, before float conversion.
+                price = int(supplier_price) if supplier_price == supplier_price.to_integral_value() else numeric_price
+                if not start <= day <= end or not window.nights_from <= nights <= window.nights_to:
+                    continue
+                if row.get("ticketsIncluded") != "1" or row.get("hotelIsInStop") != "0":
+                    continue
+                if not any(row.get("has" + cls + "TicketsDpt") == "1" and row.get("has" + cls + "TicketsRtn") == "1" for cls in ("Econom", "Business")):
+                    continue
+                location = resort_map.get(row.get("resortId"), {})
+                if location.get("countryId") != country["id"] or (allowed_resorts is not None and location.get("id") not in allowed_resorts):
+                    continue
+                if info.get("hotel_query") and not tv._hotel_matches(hotel["name"], str(info["hotel_query"])):
+                    continue
+                category = re.search(r"[1-5]", categories.get(row.get("hotelCategoryId"), ""))
+                # offerId is a surrogate, not a booking identifier. Stable within this card only.
+                identity = hashlib.sha256(repr(sorted(row.items())).encode()).hexdigest()[:24]
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                offers.append(tv.TourOffer(
+                    hotel=hotel["name"], category=int(category[0]) if category else 0,
+                    region=location.get("name", ""), date=day.isoformat(), nights=nights,
+                    meal=row.get("mealCode", ""), room=row.get("roomTypeName", ""),
+                    operator="Алеан", price=price, currency="RUB", provider="alean",
+                    departure=departure["name"], tour_id="alean:" + identity,
+                ))
+            # Local completion marker, never a supplier token. VK uses it to offer
+            # an explicit above-budget retry after a successful empty search.
+            partial = completed < len(windows)
+            warning = (f"Проверена часть диапазона: {completed} из {len(windows)} окон. "
+                       "Результаты неполные. Повторите поиск или сузьте даты.") if partial else ""
+            return tv.SearchResult(offers=sorted(offers, key=lambda o: o.price)[:settings.max_offers], search_id=-1,
+                                   partial=partial, completed_windows=completed, total_windows=len(windows), warning=warning,
+                                   error=warning if partial and not offers else "", error_code="partial" if partial else "")
+
         if len(windows) == 1:
             root.extend(run_window(windows[0]).findall('tour'))
             completed = 1
@@ -312,6 +365,11 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
                                 if isinstance(exc, InterruptedError) or (isinstance(exc, requests.HTTPError)
                                         and exc.response is not None and 400 <= exc.response.status_code < 500):
                                     stopped = True
+                        if done and on_progress and not (cancelled and cancelled()):
+                            try:
+                                on_progress(snapshot())
+                            except Exception as exc:
+                                log.warning('Alean progress callback failed (%s)', type(exc).__name__)
                         if stopped:
                             for future in pending:
                                 future.cancel()
@@ -324,57 +382,7 @@ def search_tours(settings, session, info, *, log=None, cancelled=None):
                     transport.close()
             if cancelled and cancelled():
                 return tv.SearchResult(error='Поиск отменён', error_code='cancelled')
-        offers, seen = [], set()
-        for node in root.findall("tour"):
-            row = node.attrib
-            try:
-                supplier_price, nights = Decimal(row["price"]), int(row["nights"])
-                day = datetime.strptime(row["tourDate"], "%d.%m.%Y").date()
-            except (KeyError, ValueError, InvalidOperation):
-                continue
-            hotel = hotel_map.get(row.get("hotelId"))
-            if not supplier_price.is_finite() or not hotel or not hotel.get("name"):
-                continue
-            if supplier_price <= 0 or (cap > 0 and supplier_price > cap):
-                continue
-            numeric_price = float(supplier_price)
-            if not math.isfinite(numeric_price) or numeric_price <= 0:
-                continue
-            # Retain kopecks while keeping the card JSON serializable. Budget
-            # comparisons above use the original decimal, before float conversion.
-            price = int(supplier_price) if supplier_price == supplier_price.to_integral_value() else numeric_price
-            if not start <= day <= end or not window.nights_from <= nights <= window.nights_to:
-                continue
-            if row.get("ticketsIncluded") != "1" or row.get("hotelIsInStop") != "0":
-                continue
-            if not any(row.get("has" + cls + "TicketsDpt") == "1" and row.get("has" + cls + "TicketsRtn") == "1" for cls in ("Econom", "Business")):
-                continue
-            location = resort_map.get(row.get("resortId"), {})
-            if location.get("countryId") != country["id"] or (allowed_resorts is not None and location.get("id") not in allowed_resorts):
-                continue
-            if info.get("hotel_query") and not tv._hotel_matches(hotel["name"], str(info["hotel_query"])):
-                continue
-            category = re.search(r"[1-5]", categories.get(row.get("hotelCategoryId"), ""))
-            # offerId is a surrogate, not a booking identifier. Stable within this card only.
-            identity = hashlib.sha256(repr(sorted(row.items())).encode()).hexdigest()[:24]
-            if identity in seen:
-                continue
-            seen.add(identity)
-            offers.append(tv.TourOffer(
-                hotel=hotel["name"], category=int(category[0]) if category else 0,
-                region=location.get("name", ""), date=day.isoformat(), nights=nights,
-                meal=row.get("mealCode", ""), room=row.get("roomTypeName", ""),
-                operator="Алеан", price=price, currency="RUB", provider="alean",
-                departure=departure["name"], tour_id="alean:" + identity,
-            ))
-        # Local completion marker, never a supplier token. VK uses it to offer
-        # an explicit above-budget retry after a successful empty search.
-        partial = completed < len(windows)
-        warning = (f"Проверена часть диапазона: {completed} из {len(windows)} окон. "
-                   "Результаты неполные. Повторите поиск или сузьте даты.") if partial else ""
-        return tv.SearchResult(offers=sorted(offers, key=lambda o: o.price)[:settings.max_offers], search_id=-1,
-                               partial=partial, completed_windows=completed, total_windows=len(windows), warning=warning,
-                               error=warning if partial and not offers else "", error_code="partial" if partial else "")
+        return snapshot()
     except InterruptedError:
         return tv.SearchResult(error="Поиск отменён", error_code="cancelled")
     except requests.HTTPError as exc:

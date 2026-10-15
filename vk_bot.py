@@ -17,6 +17,7 @@ import hmac
 import time
 import random
 import sqlite3
+from functools import wraps
 import logging
 import threading
 from contextlib import contextmanager
@@ -70,6 +71,7 @@ from shared import tourvisor as _tourvisor
 from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
+from shared.search_progress import format_search_progress
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
@@ -546,6 +548,14 @@ _dialog_locks = tuple(threading.RLock() for _ in range(256))
 
 def _dialog_lock(user_id: int):
     return _dialog_locks[int(user_id) % len(_dialog_locks)]
+
+
+def _serialized_dialog(function):
+    @wraps(function)
+    def guarded(user_id, *args, **kwargs):
+        with _dialog_lock(user_id):
+            return function(user_id, *args, **kwargs)
+    return guarded
 
 user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}
@@ -2933,49 +2943,53 @@ def _tour_search_wait_text(status: str) -> str:
         "🔎 Ищу актуальные туры по вашей заявке\n\n"
         "✅ Параметры приняты\n"
         f"{status}\n\n"
-        "Обычно поиск занимает 10–20 секунд. Можно не держать чат открытым — "
+        "Широкий диапазон дат может занять больше минуты. Можно не держать чат открытым — "
         "я пришлю варианты сюда."
     )
 
 
 def _tour_search_wait_animation(user_id: int, marker: str, message_id: int) -> None:
     """Keep VK's native typing indicator alive and gently update one message."""
-    statuses = (
-        "⏳ Запрашиваю предложения у туроператоров…",
-        "✈️ Сверяю даты, длительность и состав туристов…",
-        "💰 Сравниваю доступные варианты по цене…",
-    )
-    for status in statuses:
+    previous_text = None
+    for _ in range(38):
         time.sleep(4)
-        with _lock:
-            live = user_data.get(user_id)
-            active = bool(
-                live and live.get("_tour_search_marker") == marker
-                and live.get("_tour_searching") and live.get("state") == STATE_REVIEW
+        with _dialog_lock(user_id):
+            with _lock:
+                live = user_data.get(user_id)
+                active = bool(
+                    live and live.get("_tour_search_marker") == marker
+                    and live.get("_tour_searching") and live.get("state") == STATE_REVIEW
+                )
+                progress = live.get('_tour_progress_result') if active else None
+                progress_origin = live.get('_tour_progress_origin') if active else ''
+            if not active:
+                return
+            text = (format_search_progress(progress, origin=progress_origin) if progress else
+                    _tour_search_wait_text('⏳ Ожидаю ответ туроператора…'))
+            if text == previous_text:
+                continue
+            previous_text = text
+            send_typing(user_id)
+            edit_message(
+                user_id,
+                message_id,
+                text,
+                keyboard=_tour_search_wait_keyboard(),
             )
-        if not active:
-            return
-        send_typing(user_id)
-        edit_message(
-            user_id,
-            message_id,
-            _tour_search_wait_text(status),
-            keyboard=_tour_search_wait_keyboard(),
-        )
-        # The API may finish between the active check and messages.edit.
-        # Restore the final state so a late animation tick never wins the race.
-        with _lock:
-            live = user_data.get(user_id)
-            current = bool(
-                live and live.get("_tour_search_marker") == marker
-                and live.get("state") == STATE_REVIEW
-            )
-            active = bool(current and live.get("_tour_searching"))
-            final_text = str(live.get("_tour_wait_final_text") or "") if current else ""
-        if not active:
-            if final_text:
-                edit_message(user_id, message_id, final_text, keyboard=_hide_keyboard())
-            return
+            # The API may finish between the active check and messages.edit.
+            # Restore the final state so a late animation tick never wins the race.
+            with _lock:
+                live = user_data.get(user_id)
+                current = bool(
+                    live and live.get("_tour_search_marker") == marker
+                    and live.get("state") == STATE_REVIEW
+                )
+                active = bool(current and live.get("_tour_searching"))
+                final_text = str(live.get("_tour_wait_final_text") or "") if current else ""
+            if not active:
+                if final_text:
+                    edit_message(user_id, message_id, final_text, keyboard=_hide_keyboard())
+                return
 
 
 def _tour_search_worker(
@@ -2995,6 +3009,17 @@ def _tour_search_worker(
             if live and live.get("_tour_search_marker") == marker and live.get("state") != STATE_REVIEW:
                 live.pop("_tour_searching", None)
             return not live or live.get("state") != STATE_REVIEW or live.get("_tour_search_marker") != marker
+    def progress(partial):
+        preview = _tourvisor.SearchResult(
+            offers=sorted([offer for previous in results for offer in previous.offers] + partial.offers,
+                          key=lambda offer: offer.price + offer.fuel_charge),
+            completed_windows=partial.completed_windows, total_windows=partial.total_windows)
+        with _lock:
+            live = user_data.get(user_id)
+            if (live and live.get('state') == STATE_REVIEW and live.get('_tour_search_marker') == marker
+                    and live.get('_tour_searching')):
+                live['_tour_progress_result'] = preview
+                live['_tour_progress_origin'] = origin
     for origin in origins[:2]:
         if cancelled():
             return
@@ -3006,6 +3031,7 @@ def _tour_search_worker(
                 "provider", provider, outcome
             ),
             cancelled=cancelled,
+            on_progress=progress,
         )
         results.append(provider_result)
         if provider_name:
@@ -3029,6 +3055,11 @@ def _tour_search_worker(
         partial=any(item.partial or item.error for item in results),
         warning=" ".join(item.warning for item in results if item.warning),
     )
+    _publish_tour_search_result(user_id, marker, snapshot, result, provider_names, wait_message_id)
+
+
+@_serialized_dialog
+def _publish_tour_search_result(user_id, marker, snapshot, result, provider_names, wait_message_id):
     search_failed = bool(result.error) and not result.offers
     if search_failed and result.warning:
         failure_title = "⚠️ Диапазон проверен не полностью."
@@ -3051,6 +3082,8 @@ def _tour_search_worker(
         if live is None or live.get("_tour_search_marker") != marker:
             return
         live.pop("_tour_searching", None)
+        live.pop('_tour_progress_result', None)
+        live.pop('_tour_progress_origin', None)
         if live.get("state") != STATE_REVIEW:
             live.pop("_tour_search_marker", None)
             return
@@ -3585,6 +3618,7 @@ def _show_hotel_info(user_id: int) -> None:
     send_message(user_id, "\n".join(lines), keyboard=_selected_tour_keyboard())
 
 
+@_serialized_dialog
 def _start_tour_search(
     user_id: int,
     info: Dict[str, Any],
@@ -3600,7 +3634,7 @@ def _start_tour_search(
         )
         return
     if info.get("_tour_searching"):
-        send_message(user_id, "Поиск уже идёт — обычно это занимает 10–20 секунд.")
+        send_message(user_id, "Поиск уже идёт. Найденные варианты появятся здесь; подбор можно отменить.")
         return
 
     marker = f"{time.time_ns()}-{random.randint(1000, 9999)}"
@@ -3609,6 +3643,8 @@ def _start_tour_search(
     info.pop("_tour_offers_base", None)
     info.pop("_tour_page", None)
     info.pop("_tour_wait_final_text", None)
+    info.pop('_tour_progress_result', None)
+    info.pop('_tour_progress_origin', None)
     info["_tour_searching"] = True
     info["_tour_search_marker"] = marker
     snapshot = dict(info)

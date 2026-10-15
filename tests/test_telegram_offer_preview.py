@@ -34,6 +34,42 @@ def offers():
                          provider='alean',tour_id=f'alean:{i}') for i in range(5)]
 
 
+def test_progress_is_read_only_coalesced_and_cannot_replace_final_or_cancelled_chat(monkeypatch, preview):
+    info, sent = preview
+    info.update(_package_searching=True, _package_wait_message_id=10,
+                _package_progress_result=tv.SearchResult(offers=offers(), completed_windows=1,total_windows=6))
+    edits = []
+    monkeypatch.setattr(bot, '_edit_package_wait', lambda uid, mid, text, markup: edits.append((text,markup)))
+    assert bot._publish_package_progress(42,info,'old')
+    assert '1 из 6' in edits[0][0] and 'Отель 0' in edits[0][0]
+    assert 'после завершения' in edits[0][0]
+    assert 'details_' not in edits[0][1] and 'cancel:old' in edits[0][1]
+    bot._publish_package_progress(42,info,'old')
+    assert len(edits)==1
+    result=tv.SearchResult(offers=offers(),completed_windows=6,total_windows=6)
+    bot._publish_package_preview(42,info,'old',result)
+    assert 'Поиск завершён' in edits[-1][0] and 'Страница' in sent[-1][1]
+    assert not bot._publish_package_progress(42,info,'old')
+    info['_package_searching']=True
+    bot.user_data.pop(42)
+    assert not bot._publish_package_progress(42,info,'old')
+    assert len(edits)==2
+
+
+def test_worker_captures_progress_before_final_without_messaging_supplier_callback(monkeypatch, preview):
+    info,sent=preview
+    info['_package_searching']=True
+    def search(snapshot, **kwargs):
+        partial=tv.SearchResult(offers=offers()[:1],completed_windows=1,total_windows=6)
+        kwargs['on_progress'](partial)
+        assert info['_package_progress_result'] is partial
+        assert sent==[]
+        return tv.SearchResult(offers=offers())
+    monkeypatch.setattr(bot,'_alean_search',search)
+    bot._package_preview_worker(42,info,'old',dict(info))
+    assert '_package_progress_result' not in info and 'Страница' in sent[-1][1]
+
+
 def test_search_details_pagination_and_selection_require_separate_manager_confirmation(monkeypatch, preview):
     info, sent = preview
     monkeypatch.setattr(bot, '_alean_search', lambda *a, **kw: tv.SearchResult(offers=offers()))
