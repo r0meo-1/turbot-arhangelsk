@@ -107,6 +107,7 @@ def search_tours(
     """
     log = log or logger
     errors: List[str] = []
+    error_codes: List[str] = []
     attempted = False
     last_search_id = None
 
@@ -161,6 +162,7 @@ def search_tours(
                 outcome = "error"
             _emit_outcome(on_outcome, name, outcome, log)
             errors.append(f"{name}: {result.error}")
+            error_codes.append(result.error_code)
         else:
             _emit_outcome(on_outcome, name, "empty", log)
         failed_before_success = True
@@ -171,8 +173,9 @@ def search_tours(
         ), ""
 
     return _tourvisor.SearchResult(
-        error="; ".join(errors) or "Подходящих туров пока не найдено",
+        error="; ".join(errors),
         search_id=last_search_id,
+        error_code="search_window" if error_codes and all(code == "search_window" for code in error_codes) else "",
     ), ""
 
 

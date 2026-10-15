@@ -1246,6 +1246,68 @@ def test_vk_fallback_sends_text_and_buttons_together(monkeypatch):
     assert "№1" in labels
 
 
+@pytest.mark.parametrize("source", ["vk_chat", "vk_mini_app"])
+def test_vk_wide_window_failure_is_not_empty_inventory(monkeypatch, source):
+    from shared.alean import AleanSettings
+    from shared.tour_providers import ProviderSettings
+
+    uid, marker = 9577, "wide-window"
+    info = dict(destination="Сочи", origin="Москва", dates="следующий месяц",
+                nights="7", people="2", kids_ages=[], budget=270123,
+                budget_scope="total", source=source)
+    if source == "vk_mini_app":
+        bot._save_miniapp_draft(uid, dict(info))
+    else:
+        bot.user_data[uid] = dict(info, state=bot.STATE_REVIEW)
+    live = bot.user_data[uid]
+    live.update(_tour_searching=True, _tour_search_marker=marker)
+    settings = ProviderSettings(order=("alean",), alean=AleanSettings(
+        enabled=True, username="fixture", password="fixture"))
+    monkeypatch.setattr(bot, "_tour_provider_settings", lambda: settings)
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    sent, edited = [], []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kw: sent.append((text, kw)))
+    monkeypatch.setattr(bot, "edit_message", lambda uid, mid, text, **kw: edited.append(text) or True)
+    monkeypatch.setattr(bot, "save_lead", lambda *a, **k: pytest.fail("search created a lead"))
+
+    bot._tour_search_worker(uid, marker, info, 111)
+
+    assert len(sent) == 1
+    for text in [sent[0][0], *edited, live["_tour_wait_final_text"]]:
+        assert "Наличие туров пока не проверено" in text
+        assert "не нашлось" not in text and "не найдено" not in text
+    assert "диапазон до 4 дней" in sent[0][0]
+    assert live["dates"] == "следующий месяц" and live["budget"] == 270123
+    assert not live.get("_tour_searching")
+    keyboard = [button["action"]["label"] for row in json.loads(sent[0][1]["keyboard"])["buttons"] for button in row]
+    assert bot.TOUR_EDIT_DATES_TEXT in keyboard
+    assert bot.CANCEL_BUTTON_TEXT in keyboard
+    assert bot.TOUR_SHOW_OVER_BUDGET_TEXT not in keyboard
+
+
+@pytest.mark.parametrize("error,search_id", [("provider timeout", 123), ("HTTP 503", None), ("", 123)])
+def test_vk_failed_search_and_successful_empty_search_have_distinct_feedback(monkeypatch, error, search_id):
+    uid, marker = 9578, "search-outcome"
+    live = {"state": bot.STATE_REVIEW, "_tour_searching": True, "_tour_search_marker": marker}
+    bot.user_data[uid] = live
+    result = bot._tourvisor.SearchResult(error=error, search_id=search_id)
+    monkeypatch.setattr(bot._tour_providers, "search_tours", lambda *a, **k: (result, ""))
+    monkeypatch.setattr(bot, "DEMO_MODE", False)
+    sent, edited = [], []
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kw: sent.append((text, kw)))
+    monkeypatch.setattr(bot, "edit_message", lambda uid, mid, text, **kw: edited.append(text) or True)
+    bot._tour_search_worker(uid, marker, {"origin": "Москва", "budget": 270123}, 111)
+    if error:
+        assert all("Наличие туров пока не проверено" in text for text in [sent[0][0], *edited])
+        assert "не нашлось" not in sent[0][0]
+        labels = [button["action"]["label"] for row in json.loads(sent[0][1]["keyboard"])["buttons"] for button in row]
+        assert bot.TOUR_SHOW_OVER_BUDGET_TEXT not in labels
+    else:
+        assert "вариантов не нашлось" in sent[0][0]
+        labels = [button["action"]["label"] for row in json.loads(sent[0][1]["keyboard"])["buttons"] for button in row]
+        assert bot.TOUR_SHOW_OVER_BUDGET_TEXT in labels
+
+
 def test_vk_discards_tour_result_after_user_leaves_review(monkeypatch):
     captured = []
     user_id = 957

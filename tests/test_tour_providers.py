@@ -256,7 +256,7 @@ def test_travelata_budget_filter_marks_real_search_for_over_budget_retry():
 
     assert result.offers == []
     assert result.search_id == -1
-    assert "не найдено" in result.error.lower()
+    assert result.error == ""
 
 
 def test_sletat_search_maps_gateway_result_to_turbot_offer():
@@ -448,12 +448,24 @@ def test_router_has_no_fake_offer_when_no_provider_is_configured():
     assert "не настроен" in result.error.lower()
 
 
+@pytest.mark.parametrize("error,code", [("", ""), ("narrow dates", "search_window"), ("HTTP 503", "")])
+def test_router_preserves_empty_vs_failure_and_safe_reason(monkeypatch, error, code):
+    settings = tour_providers.ProviderSettings()
+    monkeypatch.setattr(settings, "enabled_names", lambda: ["alean"])
+    monkeypatch.setattr(tour_providers._alean, "search_tours", lambda *a, **k:
+                        tourvisor.SearchResult(error=error, error_code=code))
+    result, provider = tour_providers.search_tours(settings, FakeSession(), _info())
+    assert bool(result.error) == bool(error)
+    assert result.error_code == code
+    assert result.offers == [] and provider == ""
+
+
 def test_router_reports_empty_then_fallback_success_without_payload_data(monkeypatch):
     outcomes = []
     monkeypatch.setattr(
         tour_providers._travelata,
         "search_tours",
-        lambda *args, **kwargs: tourvisor.SearchResult(error="Подходящих туров не найдено"),
+        lambda *args, **kwargs: tourvisor.SearchResult(),
     )
     offer = tourvisor.TourOffer(
         hotel="Safe hotel",
@@ -484,7 +496,7 @@ def test_router_reports_empty_then_fallback_success_without_payload_data(monkeyp
     assert provider == "tourvisor"
     assert result.offers
     assert outcomes == [
-        ("travelata", "error"),
+        ("travelata", "empty"),
         ("tourvisor", "success"),
         ("tourvisor", "fallback"),
     ]

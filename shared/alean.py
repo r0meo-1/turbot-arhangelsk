@@ -164,10 +164,10 @@ def search_tours(settings, session, info, *, log=None):
                 if 1 <= low <= high <= 28:
                     window = tv.SearchWindow(exact.isoformat(),exact.isoformat(),low,high)
         if not window:
-            return tv.SearchResult(error="Для Alean нужны точные даты")
+            return tv.SearchResult(error="Для Alean нужны точные даты", error_code="search_window")
         start, end = date.fromisoformat(window.date_from), date.fromisoformat(window.date_to)
         if (end - start).days > 3 or window.nights_to - window.nights_from > 3:
-            return tv.SearchResult(error="Для Alean сузьте диапазоны заезда и ночей до четырёх значений")
+            return tv.SearchResult(error="Для Alean сузьте диапазоны заезда и ночей до четырёх значений", error_code="search_window")
         adult_match = re.fullmatch(r"\s*(\d+)(?:\s+взросл\w*)?\s*", str(info.get("people") or ""))
         ages = info.get("kids_ages") or []
         if not adult_match or not 1 <= int(adult_match[1]) <= 10 or not isinstance(ages, list):

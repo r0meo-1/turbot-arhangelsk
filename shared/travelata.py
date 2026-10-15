@@ -228,7 +228,6 @@ def search_tours(
             # A negative sentinel means a real upstream search completed. The VK
             # layer can use it to offer a deliberate over-budget retry.
             return _tourvisor.SearchResult(
-                error="Подходящих туров пока не найдено",
                 search_id=-1 if had_positive_price else None,
             )
         return _tourvisor.SearchResult(offers=offers, search_id=-1)
