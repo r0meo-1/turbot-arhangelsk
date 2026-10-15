@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import hmac
+import hashlib
 import html
 import re
 import sqlite3
@@ -737,6 +738,10 @@ def init_db() -> None:
         cur.execute("PRAGMA journal_mode=WAL")
         cur.fetchone()
     with _db_cursor(commit=True) as cur:
+        cur.execute('''CREATE TABLE IF NOT EXISTS miniapp_submissions (
+            user_id INTEGER NOT NULL, submission_id TEXT NOT NULL,
+            payload_hash TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL,
+            PRIMARY KEY(user_id, submission_id))''')
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -1226,6 +1231,7 @@ def session_exists(chat_id: int) -> bool:
 def delete_session(chat_id: int) -> None:
     """Remove a user's dialog session."""
     with _db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_submissions SET status='invalidated' WHERE user_id=?", (chat_id,))
         lead_ids = [
             int(row[0])
             for row in cur.execute(
@@ -1244,6 +1250,7 @@ def delete_session(chat_id: int) -> None:
 def clear_sessions() -> None:
     """Delete all active dialog sessions."""
     with _db_cursor(commit=True) as cur:
+        cur.execute("UPDATE miniapp_submissions SET status='invalidated'")
         cur.execute("DELETE FROM sessions")
 
 
@@ -1439,6 +1446,7 @@ def set_consent(chat_id: int) -> None:
         )
 
 
+@_serialized_dialog
 def delete_user_data(chat_id: int) -> None:
     """Erase all personal data for a user: session, registry row, and consent.
 
@@ -1456,6 +1464,7 @@ def delete_user_data(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))
+        cur.execute("DELETE FROM miniapp_submissions WHERE user_id = ?", (chat_id,))
 
 
 def cleanup_expired_data() -> int:
@@ -1475,6 +1484,8 @@ def cleanup_expired_data() -> int:
         expired = [row[0] for row in cur.fetchall()]
     for chat_id in expired:
         delete_user_data(chat_id)
+    with _db_cursor(commit=True) as cur:
+        cur.execute('DELETE FROM miniapp_submissions WHERE updated_at < ?', (cutoff,))
     if expired:
         logger.info("Retention cleanup erased %d expired user(s)", len(expired))
     return len(expired)
@@ -4804,6 +4815,14 @@ def _miniapp_json(body: Dict[str, Any], status: int = 200) -> Response:
     return response
 
 
+def _miniapp_trip_hash(info: Dict[str, Any]) -> str:
+    keys = ('destination', 'origin', 'dates', 'nights', 'people', 'budget', 'budget_scope')
+    value = {key: str(info.get(key) if info.get(key) is not None else '') for key in keys}
+    value['kids_ages'] = info.get('kids_ages') or []
+    value['direct_only'] = bool(info.get('direct_only'))
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
 @app.route("/miniapp/submit", methods=["POST", "OPTIONS"])
 def miniapp_submit() -> Response:
     """Accept a menu-button Mini App request after Telegram initData validation."""
@@ -4833,19 +4852,35 @@ def miniapp_submit() -> Response:
         chat_id = int(telegram_user["id"])
         # Serialize the short persistence section so two ambiguous client
         # retries cannot both pass the idempotency check before either saves.
-        with _miniapp_submit_lock:
+        with _miniapp_submit_lock, _dialog_locks[chat_id % len(_dialog_locks)]:
             if submission_id:
+                validated = validate_trip_request(body.get('payload'))
+                fingerprint = _miniapp_trip_hash(validated)
+                with _db_cursor() as cur:
+                    receipt = cur.execute('SELECT payload_hash,status FROM miniapp_submissions WHERE user_id=? AND submission_id=?',
+                                          (chat_id, submission_id)).fetchone()
+                if receipt and (receipt['payload_hash'] != fingerprint or receipt['status'] != 'saved'):
+                    return _miniapp_json({'ok': False, 'error': 'Черновик изменён или отменён. Откройте форму заново.'}, 409)
                 with _lock:
                     existing = user_data.get(chat_id)
+                    if existing is None:
+                        existing = get_session(chat_id)
+                        if existing:
+                            existing['kids_ages'] = _ages_from_db(existing.get('kids_ages'))
+                            user_data[chat_id] = existing
                     if (
                         existing
                         and existing.get("miniapp_submission_id") == submission_id
                     ):
+                        if _miniapp_trip_hash(existing) != fingerprint:
+                            return _miniapp_json({'ok': False, 'error': 'Параметры уже изменены в боте. Откройте форму заново.'}, 409)
                         return _miniapp_json({
                             "ok": True,
                             "state": existing.get("state"),
                             "duplicate": True,
                         })
+                if receipt:
+                    return _miniapp_json({'ok': False, 'error': 'Этот черновик больше не активен. Откройте форму заново.'}, 409)
             info = _accept_miniapp_trip(
                 chat_id,
                 telegram_user,
@@ -4854,6 +4889,11 @@ def miniapp_submit() -> Response:
                 defer_notifications=True,
                 submission_id=submission_id,
             )
+            if submission_id:
+                with _db_cursor(commit=True) as cur:
+                    cur.execute("UPDATE miniapp_submissions SET status='invalidated' WHERE user_id=?", (chat_id,))
+                    cur.execute("INSERT INTO miniapp_submissions VALUES(?,?,?,'saved',?)",
+                                (chat_id, submission_id, fingerprint, int(time.time())))
     except MiniAppValidationError as exc:
         return _miniapp_json({"ok": False, "error": str(exc)}, 400)
     except Exception:
