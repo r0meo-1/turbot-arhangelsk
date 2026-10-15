@@ -58,6 +58,14 @@ def test_save_state_defers_busy_dialog_without_restoring_cancelled_draft(monkeyp
     assert writes == [('delete', uid)]
 
 
+def test_miniapp_link_updates_release_and_preserves_campaign_and_fragment(monkeypatch):
+    monkeypatch.setattr(bot, 'MINI_APP_URL', 'https://example.com/app/?campaign=vk&rev=old&empty=#trip')
+    monkeypatch.setattr(bot._version, 'REVISION', 'abc1234')
+    assert bot._miniapp_release_url() == 'https://example.com/app/?campaign=vk&empty=&rev=abc1234#trip'
+    monkeypatch.setattr(bot, 'MINI_APP_URL', '')
+    assert bot._miniapp_release_url() == ''
+
+
 def _signed_init_data(user_id=88001, start_param=None):
     fields = {
         "auth_date": str(int(time.time())),

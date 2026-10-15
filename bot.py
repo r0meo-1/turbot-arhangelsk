@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from functools import wraps
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, Response
@@ -186,6 +187,17 @@ MINI_APP_URL = os.getenv(
 MINI_APP_ORIGIN = os.getenv(
     "MINI_APP_ORIGIN", "https://r0meo-1.github.io"
 ).strip().rstrip("/")
+
+
+def _miniapp_release_url() -> str:
+    if not MINI_APP_URL or _version.REVISION == 'unknown':
+        return MINI_APP_URL
+    parts = urlsplit(MINI_APP_URL)
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != 'rev']
+    query.append(('rev', _version.REVISION))
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
@@ -1781,7 +1793,7 @@ def ensure_bot_profile() -> None:
         {
             "type": "web_app",
             "text": "🌐 Открыть приложение",
-            "web_app": {"url": MINI_APP_URL},
+            "web_app": {"url": _miniapp_release_url()},
         }
         if MINI_APP_URL
         else {"type": "commands"}
@@ -2435,7 +2447,7 @@ def kb_destinations() -> str:
     if MINI_APP_URL:
         rows.append([{
             "text": "🌐 Открыть приложение",
-            "web_app": {"url": MINI_APP_URL},
+            "web_app": {"url": _miniapp_release_url()},
         }])
     rows.append([_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)])
     return inline_keyboard(rows)
