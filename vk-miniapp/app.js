@@ -219,6 +219,11 @@
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    const lastDate = $('date-to');
+    if ($('date').value) {
+      lastDate.min = $('date').value;
+      lastDate.max = new Date(Date.parse(`${$('date').value}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0, 10);
+    }
     if (!form.reportValidity()) return;
 
     payload = {
@@ -227,6 +232,7 @@
       destination: destination.value.trim(),
       departure: departure.value.trim(),
       date: $('date').value,
+      ...($('date-to').value ? { dateTo: $('date-to').value } : {}),
       nights: Number($('nights').value),
       adults: Number($('adults').value),
       children: Number($('children').value),
@@ -248,7 +254,7 @@
     const entries = [
       ['Направление', payload.destination],
       ['Вылет', payload.departure],
-      ['Дата', new Date(`${payload.date}T12:00:00`).toLocaleDateString('ru-RU')],
+      ['Даты вылета', [payload.date, payload.dateTo].filter(Boolean).map(day => new Date(`${day}T12:00:00`).toLocaleDateString('ru-RU')).join(' — ')],
       ['Ночей', payload.nights],
       ['Взрослых', payload.adults],
       ['Дети', payload.children ? payload.childrenAges.map((age) => `${age} лет`).join(', ') : 'Без детей'],

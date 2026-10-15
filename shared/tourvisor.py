@@ -144,6 +144,15 @@ def resolve_search_window(
     explicit_nights = _nights_range(nights_raw)
     if not text:
         return None
+    iso_range = re.fullmatch(r'(\d{4}-\d{2}-\d{2})\s*[—–]\s*(\d{4}-\d{2}-\d{2})', text)
+    if iso_range and explicit_nights:
+        try:
+            first, last = map(date.fromisoformat, iso_range.groups())
+        except ValueError:
+            return None
+        if today <= first <= last:
+            return SearchWindow(first.isoformat(), last.isoformat(), *explicit_nights)
+        return None
 
     start_raw, end_raw = parse_russian_dates(raw)
     if start_raw:

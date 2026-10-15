@@ -219,6 +219,7 @@
       destination: String(data.get('destination') || '').trim(),
       departure: String(data.get('departure') || '').trim(),
       date: String(data.get('date') || ''),
+      ...(data.get('dateTo') ? { dateTo: String(data.get('dateTo')) } : {}),
       nights: Number(data.get('nights')),
       adults: Number(data.get('adults')),
       children: childCount,
@@ -249,7 +250,7 @@
     summary.replaceChildren(
       summaryRow('Направление', payload.destination),
       summaryRow('Вылет', payload.departure),
-      summaryRow('Дата', payload.date),
+      summaryRow('Даты вылета', [payload.date, payload.dateTo].filter(Boolean).join(' — ')),
       summaryRow('Ночей', String(payload.nights)),
       summaryRow('Взрослых', String(payload.adults)),
       summaryRow('Детей', childrenText),
@@ -338,6 +339,12 @@
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     errorBox.textContent = '';
+    const firstDate = document.getElementById('date');
+    const lastDate = document.getElementById('date-to');
+    if (firstDate.value) {
+      lastDate.min = firstDate.value;
+      lastDate.max = new Date(Date.parse(`${firstDate.value}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0,10);
+    }
 
     if (!form.reportValidity()) {
       errorBox.textContent = 'Проверьте обязательные поля и согласие.';

@@ -1,5 +1,7 @@
 from shared.telegram_webapp import MiniAppValidationError, normalise_source_tag, validate_trip_request
 from shared.vk_miniapp import validate_vk_trip
+import pytest
+from shared import tourvisor
 
 
 def _payload(**overrides):
@@ -26,6 +28,21 @@ def test_telegram_contract_defaults_legacy_budget_to_per_person():
     info = validate_trip_request(_payload())
     assert info["budget_scope"] == "per_person"
     assert info["direct_only"] is True
+
+
+@pytest.mark.parametrize('validator', [validate_trip_request, validate_vk_trip])
+def test_departure_range_is_distinct_from_trip_duration(validator):
+    info = validator(_payload(date='2099-10-15', dateTo='2099-11-14', nights=10, budgetMaxRub=270123))
+    assert info['dates'] == '2099-10-15 — 2099-11-14' and info['dates_are_trip'] is False
+    assert info['nights'] == 10 and info['budget'] == 270123
+    window = tourvisor.resolve_search_window(info['dates'], nights_raw=info['nights'])
+    assert window == tourvisor.SearchWindow('2099-10-15', '2099-11-14', 10, 10)
+
+
+@pytest.mark.parametrize('date_to', ['2099-10-14', '2099-11-15', 'invalid', True, 123])
+def test_invalid_departure_range_is_rejected(date_to):
+    with pytest.raises(MiniAppValidationError):
+        validate_trip_request(_payload(dateTo=date_to))
 
 
 def test_shared_contract_accepts_explicit_budget_scope():

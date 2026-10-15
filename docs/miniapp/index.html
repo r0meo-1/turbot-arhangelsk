@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0b1220">
   <title>TurBot — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20261015-2">
+  <link rel="stylesheet" href="./styles.css?v=20261015-date-range">
   <script src="./vendor/telegram-web-app.js?v=124bdff7"></script>
 </head>
 <body>
@@ -56,6 +56,9 @@
           <span class="hint">можно примерно</span>
         </div>
         <input id="date" name="date" class="full-input" type="date" required>
+        <label for="date-to">Последняя возможная дата вылета — необязательно</label>
+        <input id="date-to" name="dateTo" class="full-input" type="date">
+        <p class="hint">Гибкие даты: до 31 дня. Длительность поездки задайте отдельно.</p>
       </section>
 
       <section class="grid two-col">
@@ -193,7 +196,7 @@
     </dialog>
   </main>
 
-  <script src="./app.js?v=20261015-2"></script>
+  <script src="./app.js?v=20261015-date-range"></script>
   <script>
     (() => {
       const tg = window.Telegram?.WebApp;
