@@ -107,10 +107,10 @@
         </div>
         <div class="budget-entry">
           <span>до</span>
-          <input id="budget-amount" type="number" min="100000" max="600000" step="10000" inputmode="numeric" value="270000" aria-label="Максимальный бюджет в рублях" required>
+          <input id="budget-amount" type="number" min="100000" max="600000" step="1" inputmode="numeric" value="270000" aria-label="Максимальный бюджет в рублях" required>
           <span>₽</span>
         </div>
-        <input id="budget" name="budget" type="range" min="100000" max="600000" step="10000" value="270000">
+        <input id="budget" name="budget" type="range" min="100000" max="600000" step="1" value="270000">
         <div class="range-labels"><span>100 000 ₽</span><span>600 000 ₽</span></div>
         <p class="hint">На всех туристов, за всю поездку.</p>
       </section>
@@ -168,6 +168,6 @@
     </dialog>
   </main>
 
-  <script src="./app.js?v=20261015-search"></script>
+  <script src="./app.js?v=20261015-budget"></script>
 </body>
 </html>

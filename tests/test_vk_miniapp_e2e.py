@@ -163,8 +163,8 @@ def test_search_preview_back_cancel_and_theme_never_submit(width, appearance, tm
         assert page.locator('html').get_attribute('data-appearance') == appearance
         _assert_zoom_and_default_contrast(page)
         page.get_by_role('button', name='Сочи', exact=True).click()
-        page.locator('#budget-amount').fill('510000')
-        assert page.locator('#budget').input_value() == '510000'
+        page.locator('#budget-amount').fill('270123')
+        assert page.locator('#budget').input_value() == '270123'
         page.locator('#children').fill('1')
         page.locator('#children-ages input').fill('0')
         page.locator('#consent').check()
@@ -172,15 +172,15 @@ def test_search_preview_back_cancel_and_theme_never_submit(width, appearance, tm
         page.locator('#budget-amount').fill('900000')
         page.locator('#submit').click()
         assert page.locator('#review').is_hidden()
-        page.locator('#budget-amount').fill('510000')
+        page.locator('#budget-amount').fill('270123')
         page.locator('#submit').click()
         assert page.locator('#review').is_visible()
         assert page.locator('#save').is_disabled()
-        assert '510' in page.locator('#summary').inner_text()
+        assert '270 123' in page.locator('#summary').inner_text().replace('\u00a0', ' ')
         page.locator('#edit').click()
         assert page.locator('#destination').input_value() == 'Сочи'
         assert page.locator('#children-ages input').input_value() == '0'
-        assert page.locator('#budget-amount').input_value() == '510000'
+        assert page.locator('#budget-amount').input_value() == '270123'
         assert page.locator('#step-parameters').get_attribute('aria-current') == 'step'
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
         page.locator('#destination').scroll_into_view_if_needed()
