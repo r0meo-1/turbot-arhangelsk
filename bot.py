@@ -4122,6 +4122,10 @@ def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict
         except (ValueError, TypeError):
             return
         offers = info.get('_package_offers') or []
+        if kind == 'page' and not offers:
+            send_message(chat_id, 'После перезапуска выдачу нужно обновить. Избранное сохранено.')
+            _ask_review(chat_id, info)
+            return
         if not offers or index < 0 or (kind != 'page' and index >= len(offers)):
             send_message(chat_id, 'Эта подборка недоступна. Повторите поиск.')
             return
