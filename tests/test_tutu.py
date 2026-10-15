@@ -301,12 +301,24 @@ def test_return_date_respects_separate_nights_and_explicit_trip_range(settings, 
     assert fn.seen[0][1]["return_date"] == expected
 
 
-@pytest.mark.parametrize("nights", [0, 29, True, "7-10", "не знаю"])
+@pytest.mark.parametrize("nights", [0, 31, True, "7-10", "не знаю"])
 def test_invalid_separate_nights_never_make_one_way_search(settings, nights):
     fn = _stub([SAMPLE_SEARCH])
     assert tutu.search_offers(settings, FakeSession(), destination="Египет",
                              dates_raw="15 июня 2027", nights=nights, request_fn=fn) is None
     assert not fn.seen
+
+
+@pytest.mark.parametrize('nights', [7,29,30])
+def test_flexible_departures_keep_separate_duration_and_label_exact_flight_scope(settings, nights):
+    from datetime import date, timedelta
+    fn = _stub([SAMPLE_SEARCH])
+    result = tutu.search_offers(settings, FakeSession(), destination='Египет',
+        dates_raw='2099-10-15 — 2099-10-25', nights=nights, request_fn=fn)
+    assert result and fn.seen[0][1]['departure_date'] == '2099-10-15'
+    assert fn.seen[0][1]['return_date'] == (date(2099,10,15)+timedelta(days=nights)).isoformat()
+    assert 'Остальные даты диапазона вылета не проверены' in tutu.format_client_message(result)
+    assert 'Остальные даты диапазона вылета не проверены' in tutu.format_admin_block(result)
 
 
 def test_preset_nights_search_is_round_trip(settings):

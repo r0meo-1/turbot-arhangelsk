@@ -58,6 +58,11 @@ def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asse
             page.evaluate("Telegram.WebView.receiveEvent('back_button_pressed')")
             page.locator('#trip-form').wait_for(state='visible')
             assert page.locator('#date-to').input_value() == last_date
+            page.locator('#date').fill('2099-12-01')
+            assert page.locator('#date-to').get_attribute('min') == '2099-12-01'
+            assert page.locator('#date-to').get_attribute('max') == '2099-12-31'
+            last_date = '2099-12-11'
+            page.locator('#date-to').fill(last_date)
             page.locator('#submit').click()
         page.locator("#save").click()
         page.wait_for_function("window.__nativeEvents.includes('web_app_close')")

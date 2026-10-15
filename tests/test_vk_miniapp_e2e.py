@@ -200,6 +200,8 @@ def test_search_preview_back_cancel_and_theme_never_submit(width, appearance, tm
         page.locator('#confirm-clear').click()
         assert page.locator('#trip-form').is_visible()
         assert page.locator('#destination').input_value() == ''
+        assert page.locator('#date-to').input_value() == ''
+        assert page.locator('#date-to').get_attribute('min') == page.locator('#date').input_value()
         assert page.locator('#children-ages input').count() == 0
         assert page.locator('#consent').is_checked() is False
         assert page.locator('#terms-accepted').is_checked() is False

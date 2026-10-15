@@ -137,6 +137,19 @@
     budgetOutput.textContent = formatRub(budgetAmount.value);
   });
 
+  const syncDateRange = () => {
+    const first = document.getElementById('date');
+    const last = document.getElementById('date-to');
+    const start = Date.parse(`${first.value}T00:00:00Z`);
+    if (!Number.isFinite(start)) {
+      last.removeAttribute('min'); last.removeAttribute('max');
+      return;
+    }
+    last.min = first.value;
+    last.max = new Date(start + 30 * 86400000).toISOString().slice(0,10);
+  };
+  ['input','change'].forEach(event => document.getElementById('date').addEventListener(event, syncDateRange));
+  form.addEventListener('reset', () => queueMicrotask(syncDateRange));
   const setMinDate = () => {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
@@ -147,6 +160,7 @@
       defaultDate.setDate(defaultDate.getDate() + 30);
       dateInput.value = formatDateInput(defaultDate);
     }
+    syncDateRange();
   };
 
   const applyTelegramContext = () => {
@@ -339,12 +353,7 @@
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     errorBox.textContent = '';
-    const firstDate = document.getElementById('date');
-    const lastDate = document.getElementById('date-to');
-    if (firstDate.value) {
-      lastDate.min = firstDate.value;
-      lastDate.max = new Date(Date.parse(`${firstDate.value}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0,10);
-    }
+    syncDateRange();
 
     if (!form.reportValidity()) {
       errorBox.textContent = 'Проверьте обязательные поля и согласие.';

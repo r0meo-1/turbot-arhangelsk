@@ -45,6 +45,16 @@ def test_invalid_departure_range_is_rejected(date_to):
         validate_trip_request(_payload(dateTo=date_to))
 
 
+@pytest.mark.parametrize('nights', [29,30])
+def test_supported_long_duration_is_never_silently_shortened(nights):
+    from shared.travel_crm_adapter import trip_request_from_lead
+    info = validate_trip_request(_payload(dateTo='2099-10-25', nights=nights))
+    window = tourvisor.resolve_search_window(info['dates'], nights_raw=info['nights'])
+    assert window.nights_from == window.nights_to == nights
+    request = trip_request_from_lead(lead_id=1, info=info, channel='telegram')
+    assert request.flexible_dates is True and request.nights_min == nights
+
+
 def test_shared_contract_accepts_explicit_budget_scope():
     assert validate_trip_request(_payload(budgetScope="total"))["budget_scope"] == "total"
     assert validate_trip_request(_payload(budgetScope="per_person"))["budget_scope"] == "per_person"

@@ -128,8 +128,8 @@ def _nights_range(raw: Any) -> Optional[Tuple[int, int]]:
     values = [int(value) for value in re.findall(r"\d+", str(raw or ""))]
     if not values:
         return None
-    start = max(1, min(values[0], 28))
-    end = max(1, min(values[1] if len(values) > 1 else start, 28))
+    start = max(1, min(values[0], 30))
+    end = max(1, min(values[1] if len(values) > 1 else start, 30))
     return min(start, end), max(start, end)
 
 

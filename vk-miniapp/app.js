@@ -150,9 +150,21 @@
   // Native date inputs follow the device locale; keep the visible value Russian.
   const dateInput = $('date');
   const dateDisplay = $('date-display');
+  const syncDateRange = () => {
+    const last = $('date-to');
+    const start = Date.parse(`${dateInput.value}T00:00:00Z`);
+    if (!Number.isFinite(start)) {
+      last.removeAttribute('min'); last.removeAttribute('max');
+      return;
+    }
+    last.min = dateInput.value;
+    last.max = new Date(start + 30 * 86400000).toISOString().slice(0,10);
+  };
+  form.addEventListener('reset', () => queueMicrotask(syncDateRange));
   const syncDateDisplay = () => {
     dateDisplay.value = dateInput.value ? dateInput.value.split('-').reverse().join('.') : '';
     dateDisplay.setCustomValidity(dateInput.validity.rangeUnderflow ? 'Дата вылета не может быть в прошлом.' : '');
+    syncDateRange();
   };
   const syncDateValue = () => {
     const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(dateDisplay.value.trim());
@@ -161,6 +173,7 @@
     const valid = Boolean(iso) && dateInput.value === iso;
     dateDisplay.setCustomValidity(!valid ? 'Введите дату в формате ДД.ММ.ГГГГ.'
       : dateInput.validity.rangeUnderflow ? 'Дата вылета не может быть в прошлом.' : '');
+    syncDateRange();
   };
   syncDateDisplay();
   dateInput.addEventListener('input', syncDateDisplay);
@@ -219,11 +232,7 @@
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const lastDate = $('date-to');
-    if ($('date').value) {
-      lastDate.min = $('date').value;
-      lastDate.max = new Date(Date.parse(`${$('date').value}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0, 10);
-    }
+    syncDateRange();
     if (!form.reportValidity()) return;
 
     payload = {
