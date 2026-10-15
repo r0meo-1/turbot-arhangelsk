@@ -8,6 +8,10 @@
   const childrenAgesCard = document.getElementById('children-ages-card');
   const childrenAges = document.getElementById('children-ages');
   const budget = document.getElementById('budget');
+  const budgetAmount = document.getElementById('budget-amount');
+  const clearDialog = document.getElementById('clear-dialog');
+  const clearButtons = document.querySelectorAll('[data-clear-trip]');
+  const formStatus = document.getElementById('form-status');
   const budgetOutput = document.getElementById('budget-output');
   const errorBox = document.getElementById('error');
   const submit = document.getElementById('submit');
@@ -34,6 +38,7 @@
   };
 
   const DESTINATIONS = Object.freeze([
+    'Россия', 'Сочи, Россия', 'Анапа, Россия', 'Калининград, Россия', 'Кавказские Минеральные Воды, Россия',
     'Таиланд', 'Пхукет, Таиланд', 'Паттайя, Таиланд',
     'Вьетнам', 'Нячанг, Вьетнам', 'Фукуок, Вьетнам',
     'Шри-Ланка', 'Бентота, Шри-Ланка', 'Хиккадува, Шри-Ланка',
@@ -123,8 +128,14 @@
   };
 
   const setBudget = () => {
+    budgetAmount.value = budget.value;
     budgetOutput.textContent = formatRub(budget.value);
   };
+  budgetAmount.addEventListener('input', () => {
+    if (!budgetAmount.validity.valid) return;
+    budget.value = budgetAmount.value;
+    budgetOutput.textContent = formatRub(budgetAmount.value);
+  });
 
   const setMinDate = () => {
     const now = new Date();
@@ -212,7 +223,7 @@
       adults: Number(data.get('adults')),
       children: childCount,
       childrenAges: childAgeValues,
-      budgetMaxRub: Number(data.get('budget')),
+      budgetMaxRub: Number(budgetAmount.value),
       budgetScope: 'total',
       directOnly: data.get('direct') === 'on',
       consent: data.get('consent') === 'on',
@@ -284,8 +295,28 @@
   });
 
   destination.addEventListener('input', () => markDestinationChip(destination.value.trim()));
+  form.addEventListener('input', () => { formStatus.textContent = ''; });
   children.addEventListener('input', renderChildAges);
   budget.addEventListener('input', setBudget);
+  clearButtons.forEach((button) => button.addEventListener('click', () => {
+    if (!isSaving) clearDialog.showModal();
+  }));
+  document.getElementById('keep-trip').addEventListener('click', () => clearDialog.close());
+  document.getElementById('confirm-clear').addEventListener('click', () => {
+    if (isSaving) return;
+    clearDialog.close();
+    form.reset();
+    pendingPayload = null;
+    pendingSubmissionId = null;
+    summary.replaceChildren();
+    errorBox.textContent = '';
+    setBudget();
+    setMinDate();
+    renderChildAges();
+    markDestinationChip('');
+    showForm();
+    formStatus.textContent = 'Параметры очищены. Заявка не отправлена.';
+  });
   edit.addEventListener('click', showForm);
   tg?.BackButton?.onClick?.(showForm);
 
@@ -327,6 +358,7 @@
   save.addEventListener('click', async () => {
     if (!pendingPayload || save.disabled) return;
     isSaving = true;
+    clearButtons.forEach((button) => { button.disabled = true; });
     save.disabled = true;
     edit.disabled = true;
     review.setAttribute('aria-busy', 'true');
@@ -354,6 +386,7 @@
       console.info('TurBot Mini App payload', pendingPayload);
       status.textContent = 'Предпросмотр: откройте приложение из Telegram для сохранения заявки.';
       isSaving = false;
+      clearButtons.forEach((button) => { button.disabled = false; });
       review.setAttribute('aria-busy', 'false');
       save.disabled = false;
       edit.disabled = false;
@@ -363,6 +396,7 @@
       status.textContent = error instanceof Error ? error.message : 'Не удалось передать заявку.';
       tg?.HapticFeedback?.notificationOccurred('error');
       isSaving = false;
+      clearButtons.forEach((button) => { button.disabled = false; });
       review.setAttribute('aria-busy', 'false');
       save.disabled = false;
       edit.disabled = false;
