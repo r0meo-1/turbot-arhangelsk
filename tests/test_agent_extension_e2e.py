@@ -20,8 +20,12 @@ def test_pairing_change_ignores_pending_connection_response(tmp_path, status, ac
             pending = []
             context.route("https://bot.r0meo1.ru/agent-extension/**", lambda route: pending.append(route))
             worker = context.service_workers[0] if context.service_workers else context.wait_for_event("serviceworker")
+            worker.evaluate("async () => chrome.storage.local.set({draft:{name:'QA INITIALIZED'}})")
             page = context.new_page()
             page.goto(f"chrome-extension://{worker.url.split('/')[2]}/sidepanel.html")
+            # The default status already says 'not connected' before async
+            # storage hydration; wait for restored data before typing a token.
+            pw_api.expect(page.locator("#name")).to_have_value("QA INITIALIZED")
             pw_api.expect(page.locator("#connectionState")).to_have_text("Не подключено")
             page.locator("#name").fill("QA LOCAL DRAFT")
             page.locator("#token").evaluate("el => el.closest('details').open = true")
