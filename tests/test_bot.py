@@ -686,6 +686,24 @@ def test_review_edit_invalidates_old_send_button(client):
         assert cur.fetchone()[0] == 90000
 
 
+@pytest.mark.parametrize("raw,resolved,expected", [
+    ("через месяц", ("2099-11-14", None), "14 ноября 2099"),
+    ("через месяц", (None, None), "через месяц"),
+    ("2099-11-14", ("2099-11-14", None), "2099-11-14"),
+    ("15 ноября 2027", ("2027-11-15", None), "15 ноября 2027"),
+    ("15 ноября 2027 — 22 ноября 2027", ("2027-11-15", "2027-11-22"), "15 ноября 2027 — 22 ноября 2027"),
+])
+def test_review_shows_resolved_departure_date(monkeypatch, raw, resolved, expected):
+    sent = []
+    monkeypatch.setattr(bot, "send_message", lambda cid, text, **kwargs: sent.append(text))
+    monkeypatch.setattr(bot._tutu, "resolve_dates", lambda raw: resolved)
+    info = dict(review_token="qa", dates=raw, budget=100000,
+                destination="Турция", origin="Москва", people="2", kids=0)
+    bot._ask_review(88009, info)
+    assert f"📅 Даты: {expected}" in sent[0]
+    assert info["dates"] == raw
+
+
 def test_review_cancel_does_not_send_lead(client):
     chat = 6004
     _reach_contact(client, chat)
