@@ -378,4 +378,6 @@
   renderChildAges();
   applyTelegramContext();
   applyDeepLink();
+  form.dataset.ready = 'true';
+  submit.disabled = false;
 })();
