@@ -78,6 +78,7 @@ def _assert_zoom_and_default_contrast(page):
     assert ratios["muted"] >= 4.5
 
 def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
+    page.locator('#trip-form[data-ready="true"]').wait_for()
     page.locator("#destination").fill(destination)
     page.locator("#departure").fill("Архангельск")
     page.locator("#consent").check()
@@ -85,7 +86,89 @@ def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator("#submit").click()
     page.locator("#review").wait_for(state="visible")
     page.locator("#save").click()
-    page.locator("#chat").wait_for(state="visible")
+    _wait_for_chat(page)
+
+
+def _wait_for_chat(page):
+    try:
+        page.locator('#chat').wait_for(state='visible', timeout=20000)
+    except Exception as error:
+        pytest.fail(f'Chat handoff failed: status={page.locator("#status").inner_text()!r}; save_disabled={page.locator("#save").is_disabled()}; {type(error).__name__}')
+
+
+def _mock_bridge(page):
+    # Test the app/Bridge protocol without the bundled SDK's host detection,
+    # browser tracking protection or unrelated parent-window messaging.
+    page.add_init_script('window.vkBridge={send(){return Promise.resolve({});},subscribe(){}};')
+    page.on('requestfailed', lambda request: print('Browser transport failure:', request.failure, request.url.split('?')[0]))
+    page.on('pageerror', lambda error: print('Browser script failure:', str(error)))
+    page.route('**/vk-bridge.js', lambda route: route.fulfill(
+        content_type='application/javascript',
+        body='/* Bridge transport is installed before document scripts. */',
+    ))
+
+
+@pytest.mark.parametrize('width,appearance', [(320, 'light'), (390, 'light'), (390, 'dark'), (1280, 'light')])
+def test_search_preview_back_cancel_and_theme_never_submit(width, appearance, tmp_path):
+    saved = []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *args: saved.append(args), lambda: (SECRET, APP_ID, GROUP_ID)))
+    server = make_server('127.0.0.1', 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page(viewport={'width': width, 'height': 850})
+        errors, submissions = [], []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.on('request', lambda request: submissions.append(request.url) if '/draft' in request.url else None)
+        page.route('**/vk-bridge.js', lambda route: route.fulfill(content_type='application/javascript', body='''
+          window.vkBridge = {
+            subscribe(callback) { window.deliverVKConfig = callback; },
+            send() { return Promise.reject(new Error('unsigned preview')); }
+          };
+        '''))
+        page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/')
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.wait_for_function("!!document.getElementById('destination-options')")
+        page.evaluate('appearance => window.deliverVKConfig({detail:{type:"VKWebAppUpdateConfig",data:{appearance,insets:{top:24,bottom:16}}}})', appearance)
+        assert page.locator('html').get_attribute('data-appearance') == appearance
+        _assert_zoom_and_default_contrast(page)
+        page.get_by_role('button', name='Сочи', exact=True).click()
+        page.locator('#budget-amount').fill('510000')
+        assert page.locator('#budget').input_value() == '510000'
+        page.locator('#children').fill('1')
+        page.locator('#children-ages input').fill('0')
+        page.locator('#consent').check()
+        page.locator('#terms-accepted').check()
+        page.locator('#budget-amount').fill('900000')
+        page.locator('#submit').click()
+        assert page.locator('#review').is_hidden()
+        page.locator('#budget-amount').fill('510000')
+        page.locator('#submit').click()
+        assert page.locator('#review').is_visible()
+        assert page.locator('#save').is_disabled()
+        assert '510' in page.locator('#summary').inner_text()
+        page.locator('#edit').click()
+        assert page.locator('#destination').input_value() == 'Сочи'
+        assert page.locator('#children-ages input').input_value() == '0'
+        assert page.locator('#budget-amount').input_value() == '510000'
+        assert page.locator('#step-parameters').get_attribute('aria-current') == 'step'
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        page.locator('#destination').scroll_into_view_if_needed()
+        page.screenshot(path=str(tmp_path / f'vk-search-{width}-{appearance}.png'), full_page=True)
+        page.locator('#submit').click()
+        page.locator('#cancel-trip').click()
+        page.locator('#keep-trip').click()
+        assert page.locator('#review').is_visible()
+        page.locator('#cancel-trip').click()
+        page.locator('#confirm-clear').click()
+        assert page.locator('#trip-form').is_visible()
+        assert page.locator('#destination').input_value() == ''
+        assert page.locator('#children-ages input').count() == 0
+        assert page.locator('#consent').is_checked() is False
+        assert page.locator('#terms-accepted').is_checked() is False
+        assert 'не отправлена' in page.locator('#local-status').inner_text()
+        assert saved == [] and submissions == [] and errors == []
 
 
 @pytest.mark.parametrize("locale,width", [("en-US", 1280), ("en-US", 320), ("ru-RU", 390)])
@@ -101,7 +184,9 @@ def test_flight_date_uses_russian_display_and_iso_payload(locale, width, tmp_pat
             browser = pw.chromium.launch(channel="msedge", headless=True)
             resources.callback(browser.close)
             page = browser.new_page(locale=locale, viewport={"width": width, "height": 900})
+            _mock_bridge(page)
             page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
+            page.locator('#trip-form[data-ready="true"]').wait_for()
             display = page.get_by_label("Дата вылета", exact=True)
             native = page.get_by_label("Выбрать дату в календаре", exact=True)
             assert display.input_value() == ".".join(reversed(native.input_value().split("-")))
@@ -149,7 +234,9 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             context = browser.new_context(viewport={"width": width, "height": 760})
             resources.callback(context.close)
             page = context.new_page()
+            _mock_bridge(page)
             page.goto(url, wait_until="domcontentloaded")
+            page.locator('#trip-form[data-ready="true"]').wait_for()
             _assert_zoom_and_default_contrast(page)
 
             overflow = page.evaluate(
@@ -228,6 +315,7 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             assert saved == []
             assert "Заявка ещё не отправлена менеджеру." in page.locator("#review").inner_text()
             page.reload(wait_until="domcontentloaded")
+            page.locator('#trip-form[data-ready="true"]').wait_for()
             page.locator("#trip-form").wait_for(state="visible")
             assert page.locator("#review").is_hidden()
             assert saved == []
@@ -271,7 +359,9 @@ def test_vk_miniapp_browser_roundtrip_sends_review_payload_with_clipboard_fallba
             # command is unavailable on a client, the already-saved draft must
             # stay successful and fall back to copying the review command.
             fallback_page = context.new_page()
+            _mock_bridge(fallback_page)
             fallback_page.goto(url, wait_until="domcontentloaded")
+            fallback_page.locator('#trip-form[data-ready="true"]').wait_for()
             fallback_page.evaluate(
                 """
                 () => {
@@ -344,6 +434,7 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
                 }};''',
             ))
             page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/')
+            page.locator('#trip-form[data-ready="true"]').wait_for()
             page.wait_for_function("document.getElementById('date').value !== ''", timeout=2000)
             page.get_by_role('button', name='Таиланд', exact=True).click()
             assert page.locator('#destination').input_value() == 'Таиланд'
@@ -365,7 +456,7 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
                 page.evaluate('(params) => window.resolveLaunch(params)', dict(parse_qsl(_signed_launch_params())))
                 page.wait_for_function("!document.getElementById('save').disabled")
                 page.locator('#save').click()
-                page.locator('#chat').wait_for(state='visible')
+                _wait_for_chat(page)
                 assert len(saved) == 1
 
 
@@ -399,6 +490,7 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
                 )
         page.route("**/vk/miniapp/draft", submit)
         page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
+        page.locator('#trip-form[data-ready="true"]').wait_for()
         page.locator("#destination").fill("Пхукет, Таиланд")
         page.locator("#departure").fill("Архангельск")
         page.locator("#consent").check()
@@ -416,7 +508,7 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
         assert page.locator("#edit").is_enabled()
         assert page.locator("#save").is_enabled()
         page.locator("#save").click()
-        page.locator("#chat").wait_for(state="visible")
+        _wait_for_chat(page)
         assert len(attempts) == 2
         assert attempts[0] == attempts[1]
         assert len(saved) == 1

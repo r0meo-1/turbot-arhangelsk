@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
-  <meta name="theme-color" content="#0b1220">
+  <meta name="theme-color" content="#f4f6f9">
   <title>АПРЕЛЬ тур — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20260928-ru-date">
+  <link rel="stylesheet" href="./styles.css?v=20261015-search">
   <script src="./vk-bridge.js"></script>
 </head>
 <body>
@@ -17,13 +17,20 @@
         <p class="eyebrow">АПРЕЛЬ тур</p>
         <h1>Подбор тура</h1>
       </div>
-      <span class="ai-badge">ТУР</span>
+      <span class="brand-note">Вместе к морю</span>
     </header>
 
     <section class="intro">
-      <p id="welcome">Соберём параметры поездки за минуту.</p>
-      <h2>Куда летим?</h2>
+      <p class="eyebrow">Ваш следующий отпуск</p>
+      <h2>Куда отправимся?</h2>
+      <p id="welcome">Выберите, как хотите отдохнуть. Продолжим подбор вариантов в чате.</p>
     </section>
+
+    <ol class="journey" aria-label="Этапы подбора">
+      <li id="step-parameters" aria-current="step"><span>1</span> Параметры</li>
+      <li id="step-review"><span>2</span> Проверка</li>
+      <li><span>3</span> Подбор в чате</li>
+    </ol>
 
     <section id="manager-entry" class="card manager-entry" hidden aria-labelledby="manager-entry-title">
       <div>
@@ -39,12 +46,13 @@
         <label for="destination">Направление</label>
         <div class="input-wrap">
           <span aria-hidden="true">🌴</span>
-          <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Таиланд, Вьетнам, Шри-Ланка" required>
+          <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Страна или курорт" required>
         </div>
         <div class="chips" aria-label="Популярные направления">
           <button class="chip" type="button" data-destination="Таиланд">Таиланд</button>
-          <button class="chip" type="button" data-destination="Вьетнам">Вьетнам</button>
-          <button class="chip" type="button" data-destination="Шри-Ланка">Шри-Ланка</button>
+          <button class="chip" type="button" data-destination="Египет">Египет</button>
+          <button class="chip" type="button" data-destination="Турция">Турция</button>
+          <button class="chip" type="button" data-destination="Сочи">Сочи</button>
         </div>
       </section>
 
@@ -97,8 +105,14 @@
           <label for="budget">Бюджет на всю поездку</label>
           <output id="budget-output" for="budget">270 000 ₽</output>
         </div>
+        <div class="budget-entry">
+          <span>до</span>
+          <input id="budget-amount" type="number" min="100000" max="600000" step="10000" inputmode="numeric" value="270000" aria-label="Максимальный бюджет в рублях" required>
+          <span>₽</span>
+        </div>
         <input id="budget" name="budget" type="range" min="100000" max="600000" step="10000" value="270000">
         <div class="range-labels"><span>100 000 ₽</span><span>600 000 ₽</span></div>
+        <p class="hint">На всех туристов, за всю поездку.</p>
       </section>
 
       <label class="toggle-card card" for="direct">
@@ -120,7 +134,11 @@
       </label>
 
       <p id="error" class="error" role="alert" aria-live="polite"></p>
-      <button id="submit" class="primary" type="submit">Проверить параметры</button>
+      <div class="form-actions">
+        <p id="trip-glance" class="trip-glance" aria-live="polite"></p>
+        <button id="submit" class="primary" type="submit" disabled>Проверить параметры <span aria-hidden="true">→</span></button>
+      </div>
+      <button id="clear-trip" class="text-button" type="button">Очистить форму</button>
       <p class="privacy-note">Параметры сохранятся только после «Сохранить и продолжить в боте». Если закрыть приложение раньше, заявка не сохранится и форму нужно будет заполнить заново.</p>
       <nav class="legal-links" aria-label="Юридическая информация">
         <a href="./privacy.html" target="_blank" rel="noopener noreferrer">Политика ПДн</a>
@@ -134,13 +152,22 @@
       <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
       <p>Заявка ещё не отправлена менеджеру.</p>
       <dl id="summary"></dl>
-      <button id="edit" class="secondary" type="button">Изменить</button>
+      <p class="review-note">Цену и наличие проверим при подборе. Сохранение параметров не бронирует тур.</p>
+      <button id="edit" class="secondary" type="button">Назад к параметрам</button>
       <button id="save" class="primary" type="button">Сохранить и продолжить в боте</button>
+      <button id="cancel-trip" class="text-button" type="button">Отмена</button>
       <p id="status" role="status" aria-live="polite"></p>
       <a id="chat" class="primary" hidden target="_blank" rel="noopener noreferrer">Открыть чат с ботом</a>
     </section>
+    <p id="local-status" class="local-status" role="status" aria-live="polite"></p>
+    <dialog id="clear-dialog" aria-labelledby="clear-title">
+      <h2 id="clear-title">Очистить параметры?</h2>
+      <p>Начнёте заново. Заявка менеджеру не отправится.</p>
+      <button id="keep-trip" class="primary" type="button">Продолжить заполнение</button>
+      <button id="confirm-clear" class="text-button" type="button">Да, очистить</button>
+    </dialog>
   </main>
 
-  <script src="./app.js?v=20261001-chat-resume"></script>
+  <script src="./app.js?v=20261015-search"></script>
 </body>
 </html>
