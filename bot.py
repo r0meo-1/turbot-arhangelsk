@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from functools import wraps
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, Response
@@ -186,6 +187,17 @@ MINI_APP_URL = os.getenv(
 MINI_APP_ORIGIN = os.getenv(
     "MINI_APP_ORIGIN", "https://r0meo-1.github.io"
 ).strip().rstrip("/")
+
+
+def _miniapp_release_url() -> str:
+    if not MINI_APP_URL or _version.REVISION == 'unknown':
+        return MINI_APP_URL
+    parts = urlsplit(MINI_APP_URL)
+    query = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != 'rev']
+    query.append(('rev', _version.REVISION))
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
 DIALOG_TIMEOUT_HOURS = _env_int("DIALOG_TIMEOUT_HOURS", 6)
 HTTP_TIMEOUT         = 15    # seconds for outbound HTTP calls
 
@@ -670,7 +682,6 @@ _db_lock = threading.Lock()
 user_data: Dict[int, Dict[str, Any]] = {}
 all_users: Dict[int, Dict[str, Any]] = {}
 _lock = threading.Lock()
-_miniapp_submit_lock = threading.Lock()
 _dialog_locks = tuple(threading.RLock() for _ in range(256))
 
 
@@ -741,7 +752,12 @@ def init_db() -> None:
         cur.execute('''CREATE TABLE IF NOT EXISTS miniapp_submissions (
             user_id INTEGER NOT NULL, submission_id TEXT NOT NULL,
             payload_hash TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL,
+            notice_id INTEGER, contact_id INTEGER,
             PRIMARY KEY(user_id, submission_id))''')
+        columns = {row[1] for row in cur.execute('PRAGMA table_info(miniapp_submissions)')}
+        for column in ('notice_id', 'contact_id'):
+            if column not in columns:
+                cur.execute(f'ALTER TABLE miniapp_submissions ADD COLUMN {column} INTEGER')
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -1232,7 +1248,7 @@ def delete_session(chat_id: int) -> None:
     """Remove a user's dialog session."""
     with _db_cursor(commit=True) as cur:
         # Also fence a crash after the draft committed but before its receipt.
-        cur.execute("""INSERT OR IGNORE INTO miniapp_submissions
+        cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
             SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
             WHERE chat_id=? AND miniapp_submission_id IS NOT NULL""", (int(time.time()), chat_id))
         cur.execute("UPDATE miniapp_submissions SET status='invalidated' WHERE user_id=?", (chat_id,))
@@ -1254,7 +1270,7 @@ def delete_session(chat_id: int) -> None:
 def clear_sessions() -> None:
     """Delete all active dialog sessions."""
     with _db_cursor(commit=True) as cur:
-        cur.execute("""INSERT OR IGNORE INTO miniapp_submissions
+        cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
             SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
             WHERE miniapp_submission_id IS NOT NULL""", (int(time.time()),))
         cur.execute("UPDATE miniapp_submissions SET status='invalidated'")
@@ -1777,7 +1793,7 @@ def ensure_bot_profile() -> None:
         {
             "type": "web_app",
             "text": "🌐 Открыть приложение",
-            "web_app": {"url": MINI_APP_URL},
+            "web_app": {"url": _miniapp_release_url()},
         }
         if MINI_APP_URL
         else {"type": "commands"}
@@ -2431,7 +2447,7 @@ def kb_destinations() -> str:
     if MINI_APP_URL:
         rows.append([{
             "text": "🌐 Открыть приложение",
-            "web_app": {"url": MINI_APP_URL},
+            "web_app": {"url": _miniapp_release_url()},
         }])
     rows.append([_inline_btn(CANCEL_BUTTON_TEXT, CB_CANCEL)])
     return inline_keyboard(rows)
@@ -3666,8 +3682,8 @@ def _ask_budget(chat_id: int) -> None:
     )
 
 
-def _ask_contact(chat_id: int) -> None:
-    send_message(
+def _ask_contact(chat_id: int):
+    return send_message(
         chat_id,
         "📞 <b>Как удобнее связаться?</b>\n\n"
         "Можно просто Telegram (этот чат) — телефон не обязателен.\n"
@@ -4859,7 +4875,7 @@ def miniapp_submit() -> Response:
         chat_id = int(telegram_user["id"])
         # Serialize the short persistence section so two ambiguous client
         # retries cannot both pass the idempotency check before either saves.
-        with _miniapp_submit_lock, _dialog_locks[chat_id % len(_dialog_locks)]:
+        with _dialog_locks[chat_id % len(_dialog_locks)]:
             if submission_id:
                 validated = validate_trip_request(body.get('payload'))
                 fingerprint = _miniapp_trip_hash(validated)
@@ -4868,28 +4884,28 @@ def miniapp_submit() -> Response:
                                           (chat_id, submission_id)).fetchone()
                 if receipt and (receipt['payload_hash'] != fingerprint or receipt['status'] != 'saved'):
                     return _miniapp_json({'ok': False, 'error': 'Черновик изменён или отменён. Откройте форму заново.'}, 409)
-                with _lock:
-                    existing = user_data.get(chat_id)
-                    if existing is None:
-                        existing = get_session(chat_id)
-                        if existing:
-                            existing['kids_ages'] = _ages_from_db(existing.get('kids_ages'))
-                            user_data[chat_id] = existing
-                    if (
-                        existing
-                        and existing.get("miniapp_submission_id") == submission_id
-                    ):
-                        if _miniapp_trip_hash(existing) != fingerprint:
-                            return _miniapp_json({'ok': False, 'error': 'Параметры уже изменены в боте. Откройте форму заново.'}, 409)
-                        if not receipt:
-                            with _db_cursor(commit=True) as cur:
-                                cur.execute("INSERT OR IGNORE INTO miniapp_submissions VALUES(?,?,?,'saved',?)",
-                                            (chat_id, submission_id, fingerprint, int(time.time())))
-                        return _miniapp_json({
-                            "ok": True,
-                            "state": existing.get("state"),
-                            "duplicate": True,
-                        })
+                existing = user_data.get(chat_id)
+                if existing is None:
+                    existing = get_session(chat_id)
+                    if existing:
+                        existing['kids_ages'] = _ages_from_db(existing.get('kids_ages'))
+                        user_data[chat_id] = existing
+                if (
+                    existing
+                    and existing.get("miniapp_submission_id") == submission_id
+                ):
+                    if _miniapp_trip_hash(existing) != fingerprint:
+                        return _miniapp_json({'ok': False, 'error': 'Параметры уже изменены в боте. Откройте форму заново.'}, 409)
+                    if not receipt:
+                        with _db_cursor(commit=True) as cur:
+                            cur.execute("INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at) VALUES(?,?,?,'saved',?)",
+                                        (chat_id, submission_id, fingerprint, int(time.time())))
+                    _queue_miniapp_contact(chat_id, existing)
+                    return _miniapp_json({
+                        "ok": True,
+                        "state": existing.get("state"),
+                        "duplicate": True,
+                    })
                 if receipt:
                     return _miniapp_json({'ok': False, 'error': 'Этот черновик больше не активен. Откройте форму заново.'}, 409)
             info = _accept_miniapp_trip(
@@ -4897,14 +4913,15 @@ def miniapp_submit() -> Response:
                 telegram_user,
                 body.get("payload"),
                 trusted_source_tag=trusted_source_tag,
-                defer_notifications=True,
+                defer_notifications=None,
                 submission_id=submission_id,
             )
             if submission_id:
                 with _db_cursor(commit=True) as cur:
                     cur.execute("UPDATE miniapp_submissions SET status='invalidated' WHERE user_id=?", (chat_id,))
-                    cur.execute("INSERT INTO miniapp_submissions VALUES(?,?,?,'saved',?)",
+                    cur.execute("INSERT INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at) VALUES(?,?,?,'saved',?)",
                                 (chat_id, submission_id, fingerprint, int(time.time())))
+            _queue_miniapp_contact(chat_id, info)
     except MiniAppValidationError as exc:
         return _miniapp_json({"ok": False, "error": str(exc)}, 400)
     except Exception:
@@ -5353,32 +5370,73 @@ def _process_callback(data: Dict[str, Any]) -> None:
 
 
 
-def _notify_miniapp_contact(chat_id: int, info: Dict[str, Any]) -> None:
-    """Continue the saved draft in Telegram without delaying its HTTP receipt."""
-    def still_current() -> bool:
-        with _lock:
-            return user_data.get(chat_id) is info and info.get("state") == STATE_CONTACT
-
-    if not still_current():
-        return
-    direct_note = (
-        "\n✈️ Перелёт: только прямой, если доступен."
-        if info.get("direct_only") else ""
-    )
+def _telegram_message_id(response):
     try:
-        send_message(
-            chat_id,
-            "✅ Параметры поездки получены из Mini App.\n"
-            "Теперь выберите способ связи — после этого покажу заявку для проверки."
-            + direct_note,
-        )
-        if still_current():
-            _ask_contact(chat_id)
+        data = response if isinstance(response, dict) else response.json()
+        value = data.get('result', {}).get('message_id') if data.get('ok') is True else None
+        return value if type(value) is int and value > 0 else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _queue_miniapp_contact(chat_id: int, info: Dict[str, Any]) -> None:
+    with _lock:
+        if user_data.get(chat_id) is not info or info.get('state') != STATE_CONTACT or info.get('_miniapp_notification_queued'):
+            return
+        info['_miniapp_notification_queued'] = True
+    def deliver():
+        try:
+            _notify_miniapp_contact(chat_id, info)
+        finally:
+            with _lock:
+                info.pop('_miniapp_notification_queued', None)
+    threading.Thread(target=deliver, daemon=True,
+        name=f'miniapp-contact-{_log_correlation(chat_id, namespace="tg-user")}').start()
+
+
+@_serialized_dialog
+def _notify_miniapp_contact(chat_id: int, info: Dict[str, Any]) -> None:
+    """Deliver only missing prompts; confirmed Telegram IDs survive restart."""
+    with _lock:
+        if user_data.get(chat_id) is not info or info.get('state') != STATE_CONTACT:
+            return
+    submission_id = info.get('miniapp_submission_id')
+    receipt = None
+    if submission_id:
+        with _db_cursor() as cur:
+            receipt = cur.execute('SELECT * FROM miniapp_submissions WHERE user_id=? AND submission_id=?',
+                                  (chat_id, submission_id)).fetchone()
+        if not receipt or receipt['status'] != 'saved':
+            return
+    def confirmed(column, response):
+        message_id = _telegram_message_id(response)
+        if message_id and receipt:
+            with _db_cursor(commit=True) as cur:
+                cur.execute(f'UPDATE miniapp_submissions SET {column}=? WHERE user_id=? AND submission_id=? AND status=\'saved\'',
+                            (message_id, chat_id, submission_id))
+    direct_note = '\n✈️ Перелёт: только прямой, если доступен.' if info.get('direct_only') else ''
+    try:
+        if not receipt or not receipt['notice_id']:
+            response = send_message(chat_id,
+                '✅ Параметры поездки получены из Mini App.\n'
+                'Теперь выберите способ связи — после этого покажу заявку для проверки.' + direct_note)
+            confirmed('notice_id', response)
+        if not receipt or not receipt['contact_id']:
+            confirmed('contact_id', _ask_contact(chat_id))
     except Exception as exc:
-        logger.error(
-            "Mini App contact notification failed for %s (%s)",
-            _log_correlation(chat_id, namespace="tg-user"), type(exc).__name__,
-        )
+        logger.warning('Mini App prompt delivery failed (%s)', type(exc).__name__)
+
+
+def _recover_miniapp_notifications() -> None:
+    # Exactly one production worker owns the in-memory FSM. This recovery is
+    # limited to saved Mini App operations, never general customer outreach.
+    with _db_cursor() as cur:
+        rows = cur.execute("SELECT user_id,submission_id FROM miniapp_submissions WHERE status='saved' AND (notice_id IS NULL OR contact_id IS NULL)").fetchall()
+    for row in rows:
+        with _lock:
+            info = user_data.get(row['user_id'])
+        if info and info.get('miniapp_submission_id') == row['submission_id']:
+            _queue_miniapp_contact(row['user_id'], info)
 
 
 @_serialized_dialog
@@ -5388,7 +5446,7 @@ def _accept_miniapp_trip(
     payload: Any,
     *,
     trusted_source_tag: str = "",
-    defer_notifications: bool = False,
+    defer_notifications: Optional[bool] = False,
     submission_id: str = "",
 ) -> Dict[str, Any]:
     """Validate a Mini App request and continue at the existing contact step."""
@@ -5417,6 +5475,8 @@ def _accept_miniapp_trip(
 
     # The receipt confirms the persisted draft. Telegram can take longer than
     # the Mini App's 15-second timeout, so its HTTP request must not wait for it.
+    if defer_notifications is None:
+        return info
     if defer_notifications:
         threading.Thread(
             target=_notify_miniapp_contact,
@@ -5677,11 +5737,21 @@ def save_state() -> None:
 
     try:
         for chat_id in session_ids:
-            info = user_data.get(chat_id)
-            if info is not None:
-                set_session(chat_id, info)
-            else:
-                delete_session(chat_id)
+            dialog_lock = _dialog_locks[int(chat_id) % len(_dialog_locks)]
+            # A request may already own its dialog while flushing this batch.
+            # Never wait on another dialog and create a cross-user lock cycle.
+            if not dialog_lock.acquire(blocking=False):
+                with _lock:
+                    _dirty_sessions.add(chat_id)
+                continue
+            try:
+                info = user_data.get(chat_id)
+                if info is not None:
+                    set_session(chat_id, info)
+                else:
+                    delete_session(chat_id)
+            finally:
+                dialog_lock.release()
 
         for chat_id in user_ids:
             meta = all_users.get(chat_id)
@@ -5710,6 +5780,7 @@ def save_state() -> None:
 # here caused "No open ports detected, continuing to scan...".
 
 load_state()
+_recover_miniapp_notifications()
 _start_timeout_worker()
 _start_followup_worker()
 _start_retention_worker()
