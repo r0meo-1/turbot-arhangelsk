@@ -64,6 +64,7 @@ from shared.log_privacy import correlation_id as _log_correlation
 from shared import tutu as _tutu
 from shared import alean as _alean
 from shared import tourvisor as _tourvisor
+from shared import tour_results as _tour_results
 from shared import version as _version
 from shared.search_progress import format_search_progress
 from shared.search_errors import unsupported_departure_text
@@ -885,6 +886,7 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)"
         )
         _travel_crm_store.init_schema(cur)
+        _tour_results.init_schema(cur)
         _funnel_metrics.init_schema(cur)
         cur.execute(
             """
@@ -1217,6 +1219,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 int(bool(data.get('budget_open_ended'))),
             ),
         )
+        _tour_results.save(cur, chat_id, data, 'telegram')
 
 
 def update_session(chat_id: int, **kwargs) -> None:
@@ -1233,6 +1236,8 @@ def update_session(chat_id: int, **kwargs) -> None:
     values = list(fields.values()) + [chat_id]
     with _db_cursor(commit=True) as cur:
         cur.execute(f"UPDATE sessions SET {columns} WHERE chat_id = ?", values)
+        if set(fields) - {"updated_at", "phone", "source_tag"}:
+            _tour_results.clear(cur, chat_id)
 
 
 def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
@@ -1240,13 +1245,14 @@ def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
     with _db_cursor() as cur:
         cur.execute("SELECT * FROM sessions WHERE chat_id = ?", (chat_id,))
         row = cur.fetchone()
-    if not row:
-        return None
-    data = dict(row)
-    data['selected_tour'] = _decode_selected_package(data.get('selected_tour'))
-    if data.get("direct_only") is not None:
-        data["direct_only"] = bool(data["direct_only"])
-    return data
+        if not row:
+            return None
+        data = dict(row)
+        data['selected_tour'] = _decode_selected_package(data.get('selected_tour'))
+        if data.get("direct_only") is not None:
+            data["direct_only"] = bool(data["direct_only"])
+        _tour_results.restore(cur, chat_id, data, 'telegram')
+        return data
 
 
 def session_exists(chat_id: int) -> bool:
@@ -1259,6 +1265,7 @@ def delete_session(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
         from shared import tour_favorites
         tour_favorites.clear(cur, chat_id)
+        _tour_results.clear(cur, chat_id)
         # Also fence a crash after the draft committed but before its receipt.
         cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
             SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
@@ -1285,6 +1292,7 @@ def clear_sessions() -> None:
         from shared import tour_favorites
         tour_favorites._init(cur)
         cur.execute('DELETE FROM tour_favorites')
+        cur.execute('DELETE FROM tour_result_snapshots')
         cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
             SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
             WHERE miniapp_submission_id IS NOT NULL""", (int(time.time()),))
@@ -3569,6 +3577,7 @@ def _begin_destination(chat_id: int, first_name: str = "", source_tag: str = "")
     from shared import tour_favorites
     with _db_cursor(commit=True) as cur:
         tour_favorites.clear(cur, chat_id)
+        _tour_results.clear(cur, chat_id)
         cur.execute("""INSERT OR IGNORE INTO miniapp_submissions(user_id,submission_id,payload_hash,status,updated_at)
             SELECT chat_id,miniapp_submission_id,'','invalidated',? FROM sessions
             WHERE chat_id=? AND miniapp_submission_id IS NOT NULL""", (int(time.time()), chat_id))
@@ -4133,6 +4142,7 @@ def _ask_review(chat_id: int, info: Dict[str, Any]) -> None:
         reply_markup=inline_keyboard(([
             [_inline_btn("🔎 Посмотреть предложения", f"{CB_REVIEW_PREFIX}search:{token}")]
         ] if _package_preview_enabled() else []) + [
+            *([[_inline_btn('◀️ К сохранённым предложениям', f'{CB_REVIEW_PREFIX}page_{info.get("_package_page", 0)}:{token}')]] if info.get('_package_offers') else []),
             [_inline_btn('⭐ Избранное · сравнить', f'{CB_REVIEW_PREFIX}favorites:{token}')],
             [_inline_btn("✅ Отправить менеджеру", f"{CB_REVIEW_PREFIX}send:{token}")],
             [_inline_btn("✏️ Изменить", f"{CB_REVIEW_PREFIX}edit:{token}")],
@@ -4603,12 +4613,13 @@ def _show_package_page(chat_id: int, info: Dict[str, Any], page: int = 0) -> Non
     count = max(1, (len(pool) + 2) // 3)
     page %= count
     info['_package_page'] = page
+    set_session(chat_id, info)
     token = info['review_token']
     offset = page * 3
     shown = pool[offset:offset+3]
     result = _tourvisor.SearchResult(offers=[_tourvisor.TourOffer(**row) for row in shown],
         partial=bool(info.get('_package_warning')), warning=info.get('_package_warning') or '')
-    text = f'Страница {page+1} из {count}\nСостав: {_party_text(info)}\n\n'
+    text = _tour_results.notice(info) + f'Страница {page+1} из {count}\nСостав: {_party_text(info)}\n\n'
     if result.partial:
         text += '⚠️ ' + (result.warning or 'Результаты неполные: часть диапазона не проверена.') + '\n\n'
     text += tour_cards.results(shown, info, start_index=offset+1)
@@ -4654,6 +4665,7 @@ def _start_package_preview(chat_id: int, info: Dict[str, Any]) -> None:
         info.update(review_token=token, _package_searching=True)
         info.pop('selected_tour', None)
         info.pop('_package_offers', None)
+        set_session(chat_id, info)
         snapshot = dict(info)
     info.pop('_package_progress_result', None)
     info.pop('_package_progress_text', None)
@@ -4717,6 +4729,9 @@ def _publish_package_preview(chat_id: int, owner: Dict[str, Any], token: str, re
         owner.pop('_package_progress_result', None)
         owner['_package_offers'] = [offer.__dict__.copy() for offer in result.offers] if result else []
         owner['_package_warning'] = result.warning if result else ''
+        owner['_results_searched_at'] = int(time.time())
+        owner.pop('_results_restored', None)
+        set_session(chat_id, owner)
     departure_unsupported = bool(result and not result.offers and result.error_code == 'departure_unsupported')
     _edit_package_wait(chat_id, owner.get('_package_wait_message_id'),
         '🛫 Поиск не выполнен: город вылета не поддерживается. Подробности ниже.' if departure_unsupported else
@@ -5685,6 +5700,7 @@ def _accept_miniapp_trip(
     from shared import tour_favorites
     with _db_cursor(commit=True) as cur:
         tour_favorites.clear(cur, chat_id)
+        _tour_results.clear(cur, chat_id)
     with _lock:
         previous_source = str((user_data.get(chat_id) or {}).get("source_tag") or "")
     source_tag = normalise_source_tag(previous_source or trusted_source_tag)
@@ -5946,6 +5962,7 @@ def load_state() -> None:
             d['selected_tour'] = _decode_selected_package(d.get('selected_tour'))
             if d.get("direct_only") is not None:
                 d["direct_only"] = bool(d["direct_only"])
+            _tour_results.restore(cur, chat_id, d, 'telegram')
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():
