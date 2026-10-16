@@ -1,4 +1,4 @@
-п»їname: Deploy TurBot
+name: Deploy TurBot
 
 on:
   push:
