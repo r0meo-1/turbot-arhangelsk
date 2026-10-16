@@ -4768,7 +4768,11 @@ def _alean_search(info: Dict[str, Any], *, cancelled=None, on_progress=None) -> 
         "budget", "budget_scope", "budget_open_ended", "direct_only", "needs_consultation",
     ) if key in info}
     # Telegram asks for nights separately unless the user supplied trip dates.
-    query["dates_are_trip"] = _duration_from_dates(str(info.get("dates") or "")) is not None
+    raw_dates = str(info.get('dates') or '')
+    # Mini App ISO ranges always mean possible departures, including after
+    # SQLite reload (legacy Telegram sessions do not persist this flag).
+    departure_range = re.fullmatch(r'\d{4}-\d{2}-\d{2}\s*[—–]\s*\d{4}-\d{2}-\d{2}', raw_dates)
+    query["dates_are_trip"] = False if info.get('dates_are_trip') is False or departure_range else _duration_from_dates(raw_dates) is not None
     try:
         options = {'cancelled': cancelled} if cancelled else {}
         if on_progress:

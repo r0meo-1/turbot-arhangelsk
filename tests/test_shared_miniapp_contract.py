@@ -39,6 +39,26 @@ def test_departure_range_is_distinct_from_trip_duration(validator):
     assert window == tourvisor.SearchWindow('2099-10-15', '2099-11-14', 10, 10)
 
 
+@pytest.mark.parametrize('validator', [validate_trip_request, validate_vk_trip])
+def test_flexible_nights_reach_provider_as_bounds_and_survive_sqlite(validator):
+    import sqlite3
+    info = validator(_payload(date='2099-10-15', dateTo='2099-10-22', nights=7, nightsTo=10, budgetMaxRub=270123))
+    assert info['nights'] == '7-10' and info['budget'] == 270123
+    with sqlite3.connect(':memory:') as db:
+        db.execute('create table trip (nights INTEGER)')
+        db.execute('insert into trip values (?)', (info['nights'],))
+        nights = db.execute('select nights from trip').fetchone()[0]
+    window = tourvisor.resolve_search_window(info['dates'], nights_raw=nights)
+    assert window == tourvisor.SearchWindow('2099-10-15', '2099-10-22', 7, 10)
+
+
+@pytest.mark.parametrize('value', [6, 29, 31, True, 10.5, '10', {}, []])
+@pytest.mark.parametrize('validator', [validate_trip_request, validate_vk_trip])
+def test_invalid_nights_range_rejected(validator, value):
+    with pytest.raises(MiniAppValidationError):
+        validator(_payload(nights=7, nightsTo=value))
+
+
 @pytest.mark.parametrize('date_to', ['2099-10-14', '2099-11-15', 'invalid', True, 123])
 def test_invalid_departure_range_is_rejected(date_to):
     with pytest.raises(MiniAppValidationError):

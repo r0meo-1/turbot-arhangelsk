@@ -1,6 +1,34 @@
 (async () => {
   const $ = (id) => document.getElementById(id);
   const form = $('trip-form');
+  const syncFlexibleFields = () => {
+    for (const [modeId, inputId, wrapperId] of [
+      ['date-mode', 'date-to', 'date-range-fields'],
+      ['nights-mode', 'nights-to', 'nights-range-fields']
+    ]) {
+      const range = document.getElementById(modeId).value === 'range';
+      const input = document.getElementById(inputId);
+      document.getElementById(wrapperId).hidden = !range;
+      input.disabled = !range;
+      input.required = range;
+    }
+    const first = document.getElementById('nights');
+    const last = document.getElementById('nights-to');
+    last.min = first.value || '3';
+    last.setCustomValidity(!last.disabled && last.value && Number(last.value) < Number(first.value)
+      ? 'Последнее число ночей должно быть не меньше первого.' : '');
+    const dateTo = document.getElementById('date-to');
+    const start = document.getElementById('date').value;
+    const days = (Date.parse(`${dateTo.value}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000;
+    dateTo.setCustomValidity(!dateTo.disabled && dateTo.value && (days < 0 || days > 30)
+      ? 'Выберите диапазон вылета от 1 до 31 дня.' : '');
+  };
+  ['date-mode', 'nights-mode', 'date', 'date-to', 'nights', 'nights-to'].forEach(id => {
+    for (const event of ['input', 'change']) document.getElementById(id).addEventListener(event, syncFlexibleFields);
+  });
+  form.addEventListener('reset', () => queueMicrotask(syncFlexibleFields));
+  syncFlexibleFields();
+
   const destination = $('destination');
   const departure = $('departure');
   const REQUEST_TIMEOUT_MS = 15000;
@@ -78,7 +106,7 @@
   const updateGlance = () => {
     const adults = Number($('adults').value) || 0;
     const children = Number($('children').value) || 0;
-    const nights = Number($('nights').value) || 0;
+    const nights = [$('nights').value, ...(!$('nights-to').disabled && $('nights-to').value ? [$('nights-to').value] : [])].join('–');
     $('trip-glance').textContent = `${adults} взр.${children ? ` · детей: ${children}` : ''} · ночей: ${nights} · до ${money($('budget').value)} на всех`;
   };
 
@@ -233,6 +261,7 @@
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     syncDateRange();
+    syncFlexibleFields();
     if (!form.reportValidity()) return;
 
     payload = {
@@ -241,8 +270,9 @@
       destination: destination.value.trim(),
       departure: departure.value.trim(),
       date: $('date').value,
-      ...($('date-to').value ? { dateTo: $('date-to').value } : {}),
+      ...(!$('date-to').disabled && $('date-to').value ? { dateTo: $('date-to').value } : {}),
       nights: Number($('nights').value),
+      ...(!$('nights-to').disabled && $('nights-to').value ? { nightsTo: Number($('nights-to').value) } : {}),
       adults: Number($('adults').value),
       children: Number($('children').value),
       childrenAges: Array.from($('children-ages').querySelectorAll('input'), (i) => Number(i.value)),
@@ -264,7 +294,7 @@
       ['Направление', payload.destination],
       ['Вылет', payload.departure],
       ['Даты вылета', [payload.date, payload.dateTo].filter(Boolean).map(day => new Date(`${day}T12:00:00`).toLocaleDateString('ru-RU')).join(' — ')],
-      ['Ночей', payload.nights],
+      ['Ночей', [payload.nights, payload.nightsTo].filter(value => value !== undefined).join('–')],
       ['Взрослых', payload.adults],
       ['Дети', payload.children ? payload.childrenAges.map((age) => `${age} лет`).join(', ') : 'Без детей'],
       ['Бюджет на всех', `до ${money(payload.budgetMaxRub)}`],

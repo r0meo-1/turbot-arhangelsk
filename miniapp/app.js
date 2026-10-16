@@ -4,6 +4,34 @@
   const API_URL = window.location.pathname.startsWith('/tg/miniapp/')
     ? '/miniapp/submit' : 'https://bot.r0meo1.ru/miniapp/submit';
   const form = document.getElementById('trip-form');
+  const syncFlexibleFields = () => {
+    for (const [modeId, inputId, wrapperId] of [
+      ['date-mode', 'date-to', 'date-range-fields'],
+      ['nights-mode', 'nights-to', 'nights-range-fields']
+    ]) {
+      const range = document.getElementById(modeId).value === 'range';
+      const input = document.getElementById(inputId);
+      document.getElementById(wrapperId).hidden = !range;
+      input.disabled = !range;
+      input.required = range;
+    }
+    const first = document.getElementById('nights');
+    const last = document.getElementById('nights-to');
+    last.min = first.value || '3';
+    last.setCustomValidity(!last.disabled && last.value && Number(last.value) < Number(first.value)
+      ? 'Последнее число ночей должно быть не меньше первого.' : '');
+    const dateTo = document.getElementById('date-to');
+    const start = document.getElementById('date').value;
+    const days = (Date.parse(`${dateTo.value}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400000;
+    dateTo.setCustomValidity(!dateTo.disabled && dateTo.value && (days < 0 || days > 30)
+      ? 'Выберите диапазон вылета от 1 до 31 дня.' : '');
+  };
+  ['date-mode', 'nights-mode', 'date', 'date-to', 'nights', 'nights-to'].forEach(id => {
+    for (const event of ['input', 'change']) document.getElementById(id).addEventListener(event, syncFlexibleFields);
+  });
+  form.addEventListener('reset', () => queueMicrotask(syncFlexibleFields));
+  syncFlexibleFields();
+
   const destination = document.getElementById('destination');
   const departure = document.getElementById('departure');
   const children = document.getElementById('children');
@@ -237,6 +265,7 @@
       date: String(data.get('date') || ''),
       ...(data.get('dateTo') ? { dateTo: String(data.get('dateTo')) } : {}),
       nights: Number(data.get('nights')),
+      ...(data.get('nightsTo') ? { nightsTo: Number(data.get('nightsTo')) } : {}),
       adults: Number(data.get('adults')),
       children: childCount,
       childrenAges: childAgeValues,
@@ -267,7 +296,7 @@
       summaryRow('Направление', payload.destination),
       summaryRow('Вылет', payload.departure),
       summaryRow('Даты вылета', [payload.date, payload.dateTo].filter(Boolean).join(' — ')),
-      summaryRow('Ночей', String(payload.nights)),
+      summaryRow('Ночей', [payload.nights, payload.nightsTo].filter(value => value !== undefined).join('–')),
       summaryRow('Взрослых', String(payload.adults)),
       summaryRow('Детей', childrenText),
       summaryRow('Бюджет на всех', formatRub(payload.budgetMaxRub)),
@@ -356,6 +385,7 @@
     event.preventDefault();
     errorBox.textContent = '';
     syncDateRange();
+    syncFlexibleFields();
 
     if (!form.reportValidity()) {
       errorBox.textContent = 'Проверьте обязательные поля и согласие.';

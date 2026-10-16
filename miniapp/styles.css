@@ -91,3 +91,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   .review-row { grid-template-columns: 1fr; gap: 4px; }
   .review-row dd { text-align: left; }
 }
+
+/* Native selectors stay readable in light and dark embedded WebViews. */
+select { font: inherit; color-scheme: dark light; }
+select:focus-visible { outline: 3px solid #64c9ff; outline-offset: 3px; }
+select option { color: #111827; background: #ffffff; }

@@ -471,6 +471,7 @@ def test_server_delivery_and_native_return_never_need_a_manual_command(platform,
         from datetime import date, timedelta
         first_date = page.locator('#date').input_value()
         last_date = (date.fromisoformat(first_date) + timedelta(days=7)).isoformat()
+        page.locator('#date-mode').select_option('range')
         page.locator('#date-to').fill(last_date)
         page.locator('#consent').check()
         page.locator('#terms-accepted').check()

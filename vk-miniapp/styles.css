@@ -181,3 +181,8 @@ dialog p { color: var(--muted); line-height: 1.5; margin-bottom: 24px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* Native selectors stay readable in light and dark embedded WebViews. */
+select { font: inherit; color-scheme: dark light; }
+select:focus-visible { outline: 3px solid #64c9ff; outline-offset: 3px; }
+select option { color: #111827; background: #ffffff; }

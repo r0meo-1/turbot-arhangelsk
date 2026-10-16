@@ -148,6 +148,36 @@ def test_vk_failed_search_has_explicit_retry_preserving_parameters(channel, monk
     assert {k: info.get(k) for k in before} == before
 
 
+def test_partial_and_failed_range_search_preserves_shortlist_and_retry(channel, monkeypatch):
+    module, uid, info, offers, sent = channel
+    info.update(dates='2099-10-15 — 2099-11-14', nights='7-10')
+    favorites.change(module._db_cursor, uid, info, offers[0])
+    from shared.tourvisor import SearchResult
+    partial = SearchResult(offers=[TourOffer(**offers[1])], partial=True,
+        warning='Проверено 1 из 8 окон. Остальное не проверено.', completed_windows=1, total_windows=8)
+    failed = SearchResult(error='timeout')
+    monkeypatch.setattr(module, '_edit_package_wait' if module is tg else 'edit_message', lambda *a, **kw: None)
+    before = {k: info.get(k) for k in ('dates', 'nights', 'budget', 'kids_ages')}
+    for result in (partial, failed):
+        if module is tg:
+            info['_package_searching'] = True
+            module._publish_package_preview(uid, info, 'test', result)
+        else:
+            info['_tour_searching'] = True
+            module._publish_tour_search_result(uid, 'search', dict(info), result, ['alean'], None)
+        assert len(favorites.items(module._db_cursor, uid, info)) == 1
+        assert {k: info.get(k) for k in before} == before
+        assert 'Отель 1' in sent[-1][1] if result is partial else 'не проверено' in sent[-1][1].lower()
+    calls = []
+    if module is tg:
+        monkeypatch.setattr(module, '_start_package_preview', lambda owner, draft: calls.append(draft))
+        module._process_review(uid, 'rv:search:test', {}, info)
+    else:
+        monkeypatch.setattr(module, '_start_tour_search', lambda owner, draft: calls.append(draft))
+        module._step_review(uid, '🔎 Повторить поиск', {}, info)
+    assert calls == [info] and len(favorites.items(module._db_cursor, uid, info)) == 1
+
+
 def test_same_budget_amount_with_different_constraint_has_separate_shortlist(channel):
     module, uid, info, offers, sent = channel
     info['budget_open_ended'] = True
