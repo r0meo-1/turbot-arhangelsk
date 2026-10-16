@@ -44,7 +44,21 @@ def test_unsupported_departure_explains_limits_and_requires_explicit_city_change
     assert 'Изменить город вылета' in str(json.loads(sent[-1][2]['reply_markup']))
     assert info['origin'] == 'Архангельск' and info['budget'] == 270123
     bot._process_review(42, f'rv:{bot.STATE_ORIGIN}:old', {}, info)
-    assert info['state'] == bot.STATE_ORIGIN and info['origin'] == 'Архангельск'
+    assert info['state'] == bot.STATE_ORIGIN_REVIEW and info['origin'] == 'Архангельск'
+    bot.set_session(42, info)
+    bot.user_data.clear()
+    bot.load_state()
+    info = bot.user_data[42]
+    assert info['state'] == bot.STATE_ORIGIN_REVIEW
+    before = {key: info.get(key) for key in ('dates', 'nights', 'people', 'kids_ages', 'budget', 'budget_scope', 'phone')}
+    bot._step_origin(42, 'Москва', {}, info)
+    assert info['state'] == bot.STATE_REVIEW and info['origin'] == 'Москва'
+    assert {key: info.get(key) for key in before} == before
+    assert info['review_token'] != 'old' and not info.get('_package_searching')
+    token = info['review_token']
+    bot._process_review(42, f'rv:{bot.STATE_ORIGIN}:{token}', {}, info)
+    bot._go_back(42)
+    assert info['state'] == bot.STATE_REVIEW and info['origin'] == 'Москва'
 
 
 def test_progress_is_read_only_coalesced_and_cannot_replace_final_or_cancelled_chat(monkeypatch, preview):

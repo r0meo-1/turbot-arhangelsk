@@ -45,6 +45,7 @@ from shared.constants import (
     STATE_HOTEL,
     STATE_DESTINATION,
     STATE_ORIGIN,
+    STATE_ORIGIN_REVIEW,
     STATE_PEOPLE,
     STATE_KIDS,
     STATE_KIDS_AGES,
@@ -73,6 +74,7 @@ from shared import tour_providers as _tour_providers
 from shared import version as _version
 from shared.search_progress import format_search_progress
 from shared.search_errors import common_error_code, unsupported_departure_text
+from shared.departure_catalog import public_departures as _public_departures
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
@@ -2704,6 +2706,11 @@ def _step_origin(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["origin"] = " / ".join(cities)
+    if info.get("state") == STATE_ORIGIN_REVIEW:
+        info['state'] = STATE_REVIEW
+        _mark_dirty(user_id, user=False)
+        _ask_review(user_id)
+        return
     info["state"] = STATE_DATES
     _ask_dates(user_id)
 
@@ -3778,7 +3785,7 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if text == '🛫 Изменить город вылета':
         for key in ('_tour_searching', '_tour_search_marker', 'selected_tour', '_tour_offers', '_tour_offers_base'):
             info.pop(key, None)
-        info['state'] = STATE_ORIGIN
+        info['state'] = STATE_ORIGIN_REVIEW
         _ask_origin(user_id)
         return
     if text in (
@@ -3977,6 +3984,7 @@ _STATE_KEYBOARDS: Dict[str, Callable[[], str]] = {
     STATE_CONSENT:     _consent_keyboard,
     STATE_DESTINATION: _dest_keyboard,
     STATE_ORIGIN:      _origin_keyboard,
+    STATE_ORIGIN_REVIEW: _origin_keyboard,
     STATE_DATES:       _dates_keyboard,
     STATE_NIGHTS:      _nights_keyboard,
     STATE_HOTEL:       _nav_keyboard,
@@ -3995,6 +4003,7 @@ STATE_HANDLERS: Dict[str, Callable] = {
     STATE_CONSENT:     _step_consent,
     STATE_DESTINATION: _step_destination,
     STATE_ORIGIN:      _step_origin,
+    STATE_ORIGIN_REVIEW: _step_origin,
     STATE_DATES:       _step_dates,
     STATE_NIGHTS:      _step_nights,
     STATE_HOTEL:       _step_hotel,
@@ -4041,7 +4050,7 @@ def _prompt_for_state(user_id: int, state: str) -> None:
             "📍 Куда хотите поехать?\nКнопка или своё направление:",
             keyboard=_dest_keyboard(),
         )
-    elif state == STATE_ORIGIN:
+    elif state in (STATE_ORIGIN, STATE_ORIGIN_REVIEW):
         _ask_origin(user_id)
     elif state == STATE_DATES:
         _ask_dates(user_id)
@@ -4092,6 +4101,11 @@ def _get_previous_state(info: Dict[str, Any]) -> Optional[str]:
 def _go_back(user_id: int) -> None:
     info = user_data.get(user_id, {})
     state = info.get("state")
+    if state == STATE_ORIGIN_REVIEW:
+        info['state'] = STATE_REVIEW
+        _mark_dirty(user_id, user=False)
+        _ask_review(user_id)
+        return
     previous = _get_previous_state(info)
     if previous is None or state == STATE_DESTINATION:
         info["direct_only"] = False
@@ -5100,6 +5114,7 @@ app.register_blueprint(create_blueprint(
     lambda: (os.getenv("VK_MINI_APP_SECRET", ""), os.getenv("VK_MINI_APP_ID", ""), VK_GROUP_ID),
     continue_draft=_continue_miniapp_draft,
     cancel_continue=_cancel_miniapp_continue,
+    departures=lambda: _public_departures(_tour_provider_settings(), http_session),
 ))
 app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024  # 1 MB — VK events are well under this
 

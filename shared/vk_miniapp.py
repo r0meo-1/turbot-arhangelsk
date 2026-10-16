@@ -128,7 +128,7 @@ def validate_vk_trip(payload):
     return info
 
 
-def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=None):
+def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=None, departures=None):
     bp = Blueprint("vk_miniapp", __name__)
     static = Path(__file__).resolve().parents[1] / "vk-miniapp"
 
@@ -138,7 +138,7 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
         # Only public, versioned code/styles may be reused. Signed launch data,
         # API responses, legal configuration and the entry HTML stay private.
         if (request.endpoint == 'vk_miniapp.asset' and response.status_code in (200, 304)
-                and (request.view_args or {}).get('name') in ('app.js', 'styles.css', 'vk-bridge.js', 'legal.js')
+                  and (request.view_args or {}).get('name') in ('app.js', 'styles.css', 'vk-bridge.js', 'legal.js', 'departure-support.js')
                 and set(request.args) == {'v'} and request.args.get('v')):
             response.headers['Cache-Control'] = 'public, max-age=86400'
         response.headers["Referrer-Policy"] = "no-referrer"
@@ -175,15 +175,19 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
     @bp.get("/vk/miniapp/<name>")
     def asset(name):
         if name not in (
-            "app.js", "styles.css", "vk-bridge.js", "legal.js",
+              "app.js", "styles.css", "vk-bridge.js", "legal.js", "departure-support.js",
             "privacy.html", "consent.html", "terms.html", "moderation.html",
         ):
             return jsonify(ok=False), 404
         response = send_from_directory(static, name)
-        if name in ('app.js', 'styles.css', 'vk-bridge.js', 'legal.js'):
+        if name in ('app.js', 'styles.css', 'vk-bridge.js', 'legal.js', 'departure-support.js'):
             from shared.miniapp_assets import compress_public_asset
             response = compress_public_asset(response)
         return response
+
+    @bp.get('/vk/miniapp/departures')
+    def departure_advice():
+        return jsonify(departures() if departures else dict(complete=False, departures=[]))
 
     @bp.post("/vk/miniapp/booking-link")
     def booking_link():
