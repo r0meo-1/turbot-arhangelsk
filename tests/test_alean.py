@@ -586,6 +586,14 @@ def test_unsupported_departure_is_distinct_from_destination_and_never_searches()
     assert result.error_code == 'destination_unsupported'
 
 
+@pytest.mark.parametrize('rows', ['', '<city name="Архангельск"/>',
+    '<city name="Архангельск" cid="one"/><city name="Архангельск" cid="two"/>'])
+def test_invalid_or_ambiguous_departure_catalog_is_not_unsupported(rows):
+    result = alean.search_tours(settings(), Session(bad={'GetDepartCities': Response(
+        '<getDepartCitiesResult>' + rows + '</getDepartCitiesResult>')}), info(origin='Архангельск'))
+    assert result.error and result.error_code == '' and not result.offers
+
+
 @pytest.mark.parametrize("response", [Response('<error>fixture-secret</error>'),Response('not XML'),
     Response('<!DOCTYPE x [<!ENTITY a "test">]><getCountriesResult/>'),Response('',302),Response('',401)])
 def test_bad_responses_fail_softly_without_logging_credentials(response,caplog):
