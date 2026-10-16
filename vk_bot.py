@@ -69,6 +69,7 @@ from shared.vk_miniapp import build_open_app_button, create_blueprint
 from shared.telegram_webapp import MiniAppValidationError, normalise_source_tag
 from shared import tutu as _tutu
 from shared import tourvisor as _tourvisor
+from shared import tour_results as _tour_results
 from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
@@ -692,6 +693,8 @@ def init_db() -> None:
             _cols = {r[1] for r in cur.fetchall()}
             if "origin" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN origin TEXT")
+            if _t == "sessions" and "budget_open_ended" not in _cols:
+                cur.execute("ALTER TABLE sessions ADD COLUMN budget_open_ended INTEGER NOT NULL DEFAULT 0")
             if "direct_only" not in _cols:
                 cur.execute(f"ALTER TABLE {_t} ADD COLUMN direct_only INTEGER NOT NULL DEFAULT 0")
             if "nights" not in _cols:
@@ -783,6 +786,7 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_created_at ON leads(created_at)")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
         _travel_crm_store.init_schema(cur)
+        _tour_results.init_schema(cur)
         _funnel_metrics.init_schema(cur)
         cur.execute(
             """
@@ -827,8 +831,8 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                                   hotel_query,
                                   kids, kids_ages, infants, budget, budget_scope,
                                   source, source_tag, vk_ref, vk_platform, phone,
-                                  needs_consultation, selected_tour, updated_at, direct_only)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  needs_consultation, selected_tour, updated_at, direct_only, budget_open_ended)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chat_id) DO UPDATE SET
                 state=excluded.state, destination=excluded.destination,
                 origin=excluded.origin,
@@ -844,6 +848,7 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
                 needs_consultation=excluded.needs_consultation,
                 selected_tour=excluded.selected_tour,
                 direct_only=excluded.direct_only,
+                budget_open_ended=excluded.budget_open_ended,
                 updated_at=excluded.updated_at
         """, (chat_id, data.get("state", ""), data.get("destination"),
               data.get("origin"),
@@ -856,14 +861,19 @@ def set_session(chat_id: int, data: Dict[str, Any]) -> None:
               data.get("vk_ref"), data.get("vk_platform"), data.get("phone"),
               int(bool(data.get("needs_consultation"))),
               _tour_to_db(data.get("selected_tour")),
-              data.get("updated_at", now), int(bool(data.get("direct_only")))))
+              data.get("updated_at", now), int(bool(data.get("direct_only"))),
+              int(bool(data.get("budget_open_ended")))))
+        _tour_results.save(cur, chat_id, data, 'vk')
 
 
 def get_session(chat_id: int) -> Optional[Dict[str, Any]]:
     with _db_cursor() as cur:
         cur.execute("SELECT * FROM sessions WHERE chat_id = ?", (chat_id,))
         row = cur.fetchone()
-        return dict(row) if row else None
+        data = dict(row) if row else None
+        if data:
+            _tour_results.restore(cur, chat_id, data, 'vk')
+        return data
 
 
 def _decode_session_state(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -873,6 +883,7 @@ def _decode_session_state(raw: Dict[str, Any]) -> Dict[str, Any]:
     data["kids_ages"] = _ages_from_db(data.get("kids_ages"))
     data["needs_consultation"] = bool(data.get("needs_consultation"))
     data["direct_only"] = bool(data.get("direct_only"))
+    data["budget_open_ended"] = bool(data.get("budget_open_ended"))
     if data.get("dates_are_trip") is not None:
         data["dates_are_trip"] = bool(data["dates_are_trip"])
     data["selected_tour"] = _tour_from_db(data.get("selected_tour"))
@@ -918,6 +929,7 @@ def delete_session(chat_id: int) -> None:
     with _db_cursor(commit=True) as cur:
         from shared import tour_favorites
         tour_favorites.clear(cur, chat_id)
+        _tour_results.clear(cur, chat_id)
         cur.execute("UPDATE miniapp_handoffs SET status='invalidated' WHERE user_id=?", (chat_id,))
         lead_ids = [
             int(row[0])
@@ -2000,7 +2012,7 @@ def _budget_keyboard() -> str:
     return _keyboard(rows)
 
 
-def _review_keyboard() -> str:
+def _review_keyboard(info=None) -> str:
     rows: List[List[Dict[str, Any]]] = []
     if TOUR_SEARCH_ENABLED:
         rows.append([_btn(TOUR_SEARCH_BUTTON_TEXT, "positive")])
@@ -2012,7 +2024,8 @@ def _review_keyboard() -> str:
         _btn(TOUR_EDIT_DATES_TEXT, "secondary"),
         _btn(TOUR_EDIT_BUDGET_TEXT, "secondary"),
     ])
-    rows.append([_btn('⭐ Избранное', 'secondary', {'command': 'favorites'})])
+    rows.append([_btn('⭐ Избранное', 'secondary', {'command': 'favorites'})] +
+        ([_btn('◀️ К сохранённым предложениям', 'secondary', {'command': 'favorite_back'})] if (info or {}).get('_tour_offers') else []))
     rows.append([_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")])
     return _keyboard(rows)
 
@@ -2420,6 +2433,7 @@ def _begin_destination(
     from shared import tour_favorites
     with _db_cursor(commit=True) as cur:
         tour_favorites.clear(cur, user_id)
+        _tour_results.clear(cur, user_id)
     with _dialog_lock(user_id), _lock:
         _delete_miniapp_snapshot(user_id)
         user_data[user_id] = {
@@ -2992,7 +3006,7 @@ def _ask_review(user_id: int, *, delivery_id: Optional[int] = None):
         f"{action_hint}"
     )
     if delivery_id is None:
-        response = send_message(user_id, summary, keyboard=_review_keyboard())
+        response = send_message(user_id, summary, keyboard=_review_keyboard(info))
     else:
         response = _vk_api("messages.send", user_id=user_id, message=summary,
                            random_id=delivery_id,
@@ -3184,6 +3198,9 @@ def _publish_tour_search_result(user_id, marker, snapshot, result, provider_name
             live["_tour_page"] = 0
             live["_tour_partial_notice"] = (result.warning or "Результаты неполные: часть поиска недоступна. Повторите поиск.") if result.partial else ""
             live.pop("selected_tour", None)
+            live["_results_searched_at"] = int(time.time())
+            live.pop("_results_restored", None)
+            set_session(user_id, live)
         if snapshot.get("_show_over_budget"):
             send_message(
                 user_id,
@@ -3255,6 +3272,7 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         selected = bool(live.get("selected_tour"))
         marker = _ensure_tour_marker(live)
         party = _party_text(live)
+        set_session(user_id, live)
 
     numbers = list(range(offset + 1, offset + len(offers) + 1))
     keyboard = _tour_results_keyboard(numbers, selected=selected, offers=offers, search_marker=marker)
@@ -3262,6 +3280,7 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
         offers=[_tourvisor.TourOffer(**offer) for offer in offers]
     )
     header = f"📄 Страница {page + 1} из {page_count} (варианты {offset + 1}–{offset + len(offers)} из {len(pool)}):\n\n"
+    header = _tour_results.notice(live) + header
     header += f"👥 Состав: {party}. Цены — за тур на всех туристов.\n\n"
     if live.get("_tour_partial_notice"):
         header = "⚠️ " + live["_tour_partial_notice"] + "\n\n" + header
@@ -3748,6 +3767,7 @@ def _start_tour_search(
     info.pop('_tour_progress_origin', None)
     info["_tour_searching"] = True
     info["_tour_search_marker"] = marker
+    set_session(user_id, info)
     snapshot = dict(info)
     if ignore_budget:
         snapshot["budget_open_ended"] = True
@@ -4959,6 +4979,7 @@ def load_state() -> None:
         for row in cur.fetchall():
             chat_id = row["chat_id"]
             d = _decode_session_state(dict(row))
+            _tour_results.restore(cur, chat_id, d, 'vk')
             user_data[chat_id] = d
         cur.execute("SELECT * FROM users")
         for row in cur.fetchall():
@@ -4998,6 +5019,7 @@ def _save_miniapp_draft(user_id: int, info: Dict[str, Any]) -> None:
         from shared import tour_favorites
         with _db_cursor(commit=True) as cur:
             tour_favorites.clear(cur, user_id)
+            _tour_results.clear(cur, user_id)
         _save_miniapp_snapshot(user_id, info)
         set_session(user_id, info)
         user_data[user_id] = info
@@ -5036,6 +5058,7 @@ def _cancel_miniapp_continue(user_id: int, request_id: str) -> bool:
             with _db_cursor(commit=True) as cur:
                 from shared import tour_favorites
                 tour_favorites.clear(cur, user_id)
+                _tour_results.clear(cur, user_id)
                 cur.execute("DELETE FROM sessions WHERE chat_id=?", (user_id,))
         return True
 
