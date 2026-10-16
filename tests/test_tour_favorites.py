@@ -117,6 +117,37 @@ def test_actualization_metadata_does_not_break_comparison_or_duplicate_offer(cha
     assert 'Отель 0' in favorites.render(favorites.items(module._db_cursor, uid, info))
 
 
+def test_favorites_return_to_same_results_page_without_search(channel, monkeypatch):
+    module, uid, info, offers, sent = channel
+    if module is tg:
+        module._show_package_page(uid, info, 1)
+        module._process_review(uid, 'rv:details_3:test', {}, info)
+        add(module, uid, info, offers, 3)
+        keyboard = sent[-1][2]['reply_markup']
+        assert 'rv:page_1:test' in keyboard
+        module._process_review(uid, 'rv:page_1:test', {}, info)
+    else:
+        module._send_tour_results_page(uid, 1)
+        add(module, uid, info, offers, 3)
+        module._favorite_action(uid, {'command': 'favorite_back'})
+    assert 'Страница 2 из 2' in sent[-1][1] and 'Отель 3' in sent[-1][1]
+    assert not info.get('_package_searching') and not info.get('_tour_searching')
+
+
+def test_vk_failed_search_has_explicit_retry_preserving_parameters(channel, monkeypatch):
+    module, uid, info, offers, sent = channel
+    if module is not vk:
+        return
+    keyboard = json.loads(module._no_tours_keyboard())
+    assert any(button['action']['label'] == '🔎 Повторить поиск' for row in keyboard['buttons'] for button in row)
+    before = {k: info.get(k) for k in ('origin', 'dates', 'nights', 'people', 'kids_ages', 'budget', 'phone')}
+    calls = []
+    monkeypatch.setattr(module, '_start_tour_search', lambda owner, draft: calls.append((owner, draft)))
+    module._step_review(uid, '🔎 Повторить поиск', {}, info)
+    assert calls == [(uid, info)]
+    assert {k: info.get(k) for k in before} == before
+
+
 def test_same_budget_amount_with_different_constraint_has_separate_shortlist(channel):
     module, uid, info, offers, sent = channel
     info['budget_open_ended'] = True
