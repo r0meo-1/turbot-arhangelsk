@@ -60,6 +60,27 @@ def client():
     return bot.app.test_client()
 
 
+def test_unsupported_departure_explanation_survives_worker_and_city_edit(monkeypatch):
+    from shared import tourvisor as tv
+    info = dict(state=bot.STATE_REVIEW, origin='Архангельск', budget=270123, _tour_search_marker='unsupported')
+    bot.user_data[42] = info
+    sent = []
+    monkeypatch.setattr(bot, 'send_message', lambda uid, text, **kw: sent.append((text, kw)))
+    monkeypatch.setattr(bot, 'edit_message', lambda *a, **k: True)
+    monkeypatch.setattr(bot, 'send_typing', lambda *a, **k: None)
+    monkeypatch.setattr(bot._tour_providers, 'search_tours', lambda *a, **k:
+                        (tv.SearchResult(error='not in catalog', error_code='departure_unsupported'), ''))
+    monkeypatch.setattr(bot, 'DEMO_MODE', False)
+    bot._tour_search_worker(42, 'unsupported', dict(info))
+    assert 'Архангельск' in sent[-1][0] and 'не поддерживается' in sent[-1][0]
+    assert 'наличие не проверено' in sent[-1][0]
+    assert 'Изменить город вылета' in str(json.loads(sent[-1][1]['keyboard']))
+    assert bot.TOUR_SEND_MANAGER_TEXT in str(json.loads(sent[-1][1]['keyboard']))
+    assert info['origin'] == 'Архангельск' and info['budget'] == 270123
+    bot._step_review(42, '🛫 Изменить город вылета', {}, info)
+    assert info['state'] == bot.STATE_ORIGIN and '_tour_search_marker' not in info
+
+
 def _vk_message(user_id, text=None, ref=None, ref_source=None):
     """Build a minimal VK message_new event."""
     msg = {"peer_id": user_id, "from_id": user_id}

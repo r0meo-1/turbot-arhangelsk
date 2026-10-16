@@ -72,6 +72,7 @@ from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
 from shared.search_progress import format_search_progress
+from shared.search_errors import common_error_code, unsupported_departure_text
 from shared.runtime_metrics import event_counter_snapshot, lead_delivery_snapshot
 from shared import funnel_metrics as _funnel_metrics
 from shared import travel_crm_store as _travel_crm_store
@@ -3106,7 +3107,7 @@ def _tour_search_worker(
         offers=combined[:TOUR_SEARCH_MAX_OFFERS],
         error="; ".join(result.error for result in results if result.error),
         search_id=next((result.search_id for result in results if result.search_id), None),
-        error_code="search_window" if all(not item.error or item.error_code == "search_window" for item in results) else "",
+        error_code=common_error_code(results),
         partial=any(item.partial or item.error for item in results),
         warning=" ".join(item.warning for item in results if item.warning),
     )
@@ -3116,7 +3117,11 @@ def _tour_search_worker(
 @_serialized_dialog
 def _publish_tour_search_result(user_id, marker, snapshot, result, provider_names, wait_message_id):
     search_failed = bool(result.error) and not result.offers
-    if search_failed and result.warning:
+    departure_unsupported = search_failed and result.error_code == 'departure_unsupported'
+    if departure_unsupported:
+        failure_title = '🛫 Этот город вылета не поддерживается автоматическим поиском. Наличие туров не проверено.'
+        failure_text = unsupported_departure_text(snapshot.get('origin'))
+    elif search_failed and result.warning:
         failure_title = "⚠️ Диапазон проверен не полностью."
         failure_text = result.warning + " Нельзя утверждать, что подходящих туров нет."
     elif search_failed and result.error_code == "search_window":
@@ -3211,7 +3216,12 @@ def _publish_tour_search_result(user_id, marker, snapshot, result, provider_name
             "По заданным параметрам готовых вариантов сейчас не нашлось.\n\n"
             "Можно изменить даты или бюджет, либо попросить помощи менеджера."
         )
-    send_message(user_id, message_text, keyboard=_no_tours_keyboard(can_show_over))
+    keyboard = (_keyboard([
+        [_btn('🛫 Изменить город вылета', 'primary')],
+        [_btn(TOUR_SEND_MANAGER_TEXT, 'positive')],
+        [_btn(BACK_BUTTON_TEXT), _btn(CANCEL_BUTTON_TEXT, 'negative')],
+    ]) if departure_unsupported else _no_tours_keyboard(can_show_over))
+    send_message(user_id, message_text, keyboard=keyboard)
 
 
 def _tour_results_active(user_id: int) -> bool:
@@ -3765,6 +3775,12 @@ def _start_tour_search(
 
 
 def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[str, Any]) -> None:
+    if text == '🛫 Изменить город вылета':
+        for key in ('_tour_searching', '_tour_search_marker', 'selected_tour', '_tour_offers', '_tour_offers_base'):
+            info.pop(key, None)
+        info['state'] = STATE_ORIGIN
+        _ask_origin(user_id)
+        return
     if text in (
         TOUR_SEARCH_BUTTON_TEXT,
         "🔎 Показать отели и цены",

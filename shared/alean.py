@@ -222,9 +222,17 @@ def search_tours(settings, session, info, *, log=None, cancelled=None, on_progre
         countries = catalog("GetCountries")
         resorts = catalog("GetResorts")
         country, resort = _resolve_destination(countries, resorts, info.get("destination"))
-        departure = _named(catalog("GetDepartCities"), info.get("origin"))
-        if not country or not country.get("cid") or not departure or not departure.get("cid"):
-            return tv.SearchResult(error="Направление или город вылета не найден в Alean")
+        departures = catalog("GetDepartCities")
+        if (not departures or any(not row.get('name') for row in departures)
+                or sum(_named([row], info.get('origin')) is not None for row in departures) > 1):
+            return tv.SearchResult(error="Alean вернул некорректный или неоднозначный каталог городов вылета")
+        departure = _named(departures, info.get("origin"))
+        if not country or not country.get("cid"):
+            return tv.SearchResult(error="Направление не найдено в Alean", error_code="destination_unsupported")
+        if departure and not departure.get('cid'):
+            return tv.SearchResult(error="Alean не вернул идентификатор выбранного города вылета")
+        if not departure:
+            return tv.SearchResult(error="Город вылета не найден в Alean", error_code="departure_unsupported")
         allowed_resorts = _allowed_resort_ids(resorts, resort, country) if resort else None
         params = {
             "countryCID": country["cid"], "departCityCID": departure["cid"],

@@ -34,6 +34,19 @@ def offers():
                          provider='alean',tour_id=f'alean:{i}') for i in range(5)]
 
 
+def test_unsupported_departure_explains_limits_and_requires_explicit_city_change(monkeypatch, preview):
+    info, sent = preview
+    info['origin'] = 'Архангельск'
+    result = tv.SearchResult(error='not in catalog', error_code='departure_unsupported')
+    bot._publish_package_preview(42, info, 'old', result)
+    text = sent[-1][1]
+    assert 'Архангельск' in text and 'не поддерживается' in text and 'наличие не проверено' in text
+    assert 'Изменить город вылета' in str(json.loads(sent[-1][2]['reply_markup']))
+    assert info['origin'] == 'Архангельск' and info['budget'] == 270123
+    bot._process_review(42, f'rv:{bot.STATE_ORIGIN}:old', {}, info)
+    assert info['state'] == bot.STATE_ORIGIN and info['origin'] == 'Архангельск'
+
+
 def test_progress_is_read_only_coalesced_and_cannot_replace_final_or_cancelled_chat(monkeypatch, preview):
     info, sent = preview
     info.update(_package_searching=True, _package_wait_message_id=10,

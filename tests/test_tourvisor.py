@@ -8,6 +8,18 @@ import pytest
 from shared import tourvisor
 
 
+@pytest.mark.parametrize('catalog,code', [
+    ({'error': 'upstream'}, ''), (None, ''), ([], ''), ([{}], ''),
+    ([{'id': 'invalid', 'name': 'Архангельск'}], ''),
+    ([{'id': 1, 'name': 'Москва'}], 'departure_unsupported'),
+])
+def test_departure_absence_requires_valid_catalog(catalog, code):
+    result = tourvisor.search_tours(tourvisor.TourvisorSettings(enabled=True, token='test'), None,
+        dict(origin='Архангельск', destination='Турция', dates='15-22 сентября 2030', people=2),
+        request_fn=lambda *a, **k: catalog)
+    assert result.error and result.error_code == code and not result.offers
+
+
 def _jwt(exp):
     payload = base64.urlsafe_b64encode(
         json.dumps({"exp": exp}).encode()
