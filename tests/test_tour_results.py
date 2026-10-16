@@ -141,3 +141,11 @@ def test_partial_session_update_invalidates_results(channel):
     module.update_session(uid, budget=300000)
     module.update_session(uid, budget=270123)  # returning to the same query cannot resurrect it
     assert not module.get_session(uid).get('_package_offers')
+
+
+def test_fresh_search_shows_time_without_requesting_immediate_refresh():
+    info = dict(_results_searched_at=1700000000)
+    assert 'Поиск:' in results.notice(info)
+    assert 'требуют обновления' not in results.notice(info)
+    info['_results_restored'] = True
+    assert 'требуют обновления' in results.notice(info)

@@ -100,4 +100,7 @@ def notice(info):
     if not stamp:
         return ''
     when = datetime.fromtimestamp(stamp, timezone.utc).strftime('%d.%m.%Y %H:%M UTC')
-    return f'🕒 Поиск: {when}. Сохранённая выдача: цены и наличие требуют обновления. Обновить — отдельной кнопкой поиска.\n\n'
+    text = f'🕒 Поиск: {when}.'
+    if info.get('_results_restored'):
+        text += ' Сохранённая выдача: цены и наличие требуют обновления. Обновить — отдельной кнопкой поиска.'
+    return text + '\n\n'
