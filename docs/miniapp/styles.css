@@ -96,3 +96,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 select { font: inherit; color-scheme: dark light; }
 select:focus-visible { outline: 3px solid #64c9ff; outline-offset: 3px; }
 select option { color: #111827; background: #ffffff; }
+
+/* Keep standalone values visibly editable, including both night bounds. */
+.field-card input.full-input { background: rgba(255,255,255,.04); }
+#nights-mode + label, #nights-range-fields > label { margin-top: 12px; }

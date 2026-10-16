@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#0b1220">
   <title>TurBot — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20261016-flexible-dates">
+  <link rel="stylesheet" href="./styles.css?v=20261016-editable-fields">
   <script defer src="./vendor/telegram-web-app.js?v=124bdff7"></script>
 </head>
 <body>
@@ -42,14 +42,14 @@
       <section class="grid">
         <label class="card field-card">
           <span>Вылет</span>
-          <input id="departure" name="departure" type="text" maxlength="100" placeholder="Москва" value="Москва" required>
+          <input id="departure" class="full-input" name="departure" type="text" maxlength="100" placeholder="Москва" value="Москва" required>
         </label>
         <div class="card field-card">
           <label for="nights-mode">Длительность поездки</label>
           <select id="nights-mode" class="full-input" aria-label="Длительность поездки"><option value="exact">Точное число ночей</option><option value="range">Диапазон ночей</option></select>
           <label for="nights">Ночей</label>
-          <input id="nights" name="nights" type="number" min="3" max="28" inputmode="numeric" value="10" required>
-          <div id="nights-range-fields" hidden><label for="nights-to">До скольких ночей</label><input id="nights-to" name="nightsTo" type="number" min="3" max="28" inputmode="numeric" disabled></div>
+          <input id="nights" class="full-input" name="nights" type="number" min="3" max="28" inputmode="numeric" value="10" required>
+          <div id="nights-range-fields" hidden><label for="nights-to">До скольких ночей</label><input id="nights-to" class="full-input" name="nightsTo" type="number" min="3" max="28" inputmode="numeric" disabled></div>
         </div>
       </section>
 
@@ -69,11 +69,11 @@
       <section class="grid two-col">
         <label class="card field-card">
           <span>Взрослых</span>
-          <input id="adults" name="adults" type="number" min="1" max="8" inputmode="numeric" value="2" required>
+          <input id="adults" class="full-input" name="adults" type="number" min="1" max="8" inputmode="numeric" value="2" required>
         </label>
         <label class="card field-card">
           <span>Детей до 18</span>
-          <input id="children" name="children" type="number" min="0" max="6" inputmode="numeric" value="0" required>
+          <input id="children" class="full-input" name="children" type="number" min="0" max="6" inputmode="numeric" value="0" required>
         </label>
       </section>
 
