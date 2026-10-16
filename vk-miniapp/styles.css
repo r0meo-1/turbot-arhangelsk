@@ -186,3 +186,10 @@ dialog p { color: var(--muted); line-height: 1.5; margin-bottom: 24px; }
 select { font: inherit; color-scheme: dark light; }
 select:focus-visible { outline: 3px solid #64c9ff; outline-offset: 3px; }
 select option { color: #111827; background: #ffffff; }
+
+/* Duration values must look editable in exact and range modes. */
+#nights-mode + label, #nights-range-fields > label { margin-top: 12px; }
+#nights:focus-visible, #nights-to:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
