@@ -541,9 +541,18 @@ def test_failed_submit_preserves_review_and_retries_same_submission(failure):
 
 
 def test_telegram_flight_fallback_available_after_primary_browser_failure():
-    import bot
+    import ast
+    from flask import Flask, Response, request
     from urllib.parse import urlencode, urlsplit
-    html = bot.app.test_client().get('/tg/miniapp/').get_data(as_text=True)
+    # Exercise the real renderer without booting the bot/AI stack in browser CI.
+    source = MINIAPP_DIR.parent / 'bot.py'
+    renderer = next(node for node in ast.parse(source.read_text(encoding='utf-8')).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'telegram_miniapp_asset')
+    renderer.decorator_list = []
+    namespace = {'__file__': str(source), 'Response': Response, 'request': request}
+    exec(compile(ast.Module(body=[renderer], type_ignores=[]), str(source), 'exec'), namespace)
+    with Flask(__name__).test_request_context('/tg/miniapp/'):
+        html = namespace['telegram_miniapp_asset']().get_data(as_text=True)
     with sync_playwright() as pw:
         browser = pw.chromium.launch(channel='msedge', headless=True)
         try:
