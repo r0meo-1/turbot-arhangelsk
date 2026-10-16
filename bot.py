@@ -3749,9 +3749,10 @@ def _ask_kids_ages(chat_id: int) -> None:
 
 
 def _ask_budget(chat_id: int) -> None:
+    scope = _budget_scope_text(user_data.get(chat_id, {}))
     send_message(
         chat_id,
-        "💰 <b>Бюджет на человека</b> (примерно, в рублях)\n\n"
+        f"💰 <b>Бюджет {scope}</b> (примерно, в рублях)\n\n"
         "Выберите кнопку или укажите одну максимальную сумму: 100000 ₽ или 100 тыс.",
         reply_markup=kb_budget(),
         parse_mode="HTML",
@@ -3969,7 +3970,7 @@ def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if raw in (f"{CB_BUDGET_PREFIX}custom", "✏️ Свой бюджет", "свой бюджет"):
         send_message(
             chat_id,
-            "✍️ Напишите бюджет числом (например: 75000):",
+            f"✍️ Напишите бюджет {_budget_scope_text(info)} числом (например: 75000):",
             reply_markup=kb_nav(include_back=True),
         )
         return
@@ -3989,7 +3990,7 @@ def _step_budget(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
     if not ok:
         send_message(
             chat_id,
-            "Укажите одну максимальную сумму на человека, например 120000 ₽ или 120 тыс. "
+            f"Укажите одну максимальную сумму {_budget_scope_text(info)}, например 120000 ₽ или 120 тыс. "
             "Если бюджет 100000–120000 ₽, введите 120000. Можно выбрать кнопку ниже.",
             reply_markup=kb_budget(),
         )
