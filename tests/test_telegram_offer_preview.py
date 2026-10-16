@@ -233,3 +233,20 @@ def test_chat_presets_resolve_before_supplier_search(monkeypatch, preview, prese
     assert captured[0]['budget_open_ended'] is True
     assert captured[0]['kids_ages'] == [0,14]
     assert info['dates'] == preset
+
+
+@pytest.mark.parametrize('scope,label', [('total','на всю поездку'), ('per_person','на человека'), (None,'на человека')])
+def test_budget_edit_prompts_follow_scope_without_changing_trip(preview, scope, label):
+    info, sent = preview
+    info['budget_scope'] = scope
+    before = {key: info.get(key) for key in ('dates','nights','people','kids_ages','budget','budget_scope')}
+    bot._process_review(42, f'rv:{bot.STATE_BUDGET}:old', {}, info)
+    assert f'Бюджет {label}' in sent[-1][1]
+    bot._step_budget(42, bot.CB_BUDGET_PREFIX + 'custom', {}, info)
+    assert label in sent[-1][1]
+    bot._step_budget(42, '100000–120000', {}, info)
+    assert label in sent[-1][1]
+    assert {key: info.get(key) for key in before} == before
+    bot._step_budget(42, bot.CB_BUDGET_PREFIX + str(len(bot.BUDGET_PRESETS)-1), {}, info)
+    assert info['budget'] == 200000 and info['budget_open_ended'] is True
+    assert info['budget_scope'] == scope and info['kids_ages'] == before['kids_ages']
