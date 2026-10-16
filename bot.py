@@ -4773,12 +4773,17 @@ def _package_preview_worker(chat_id: int, owner: Dict[str, Any], token: str, sna
         logger.warning('Telegram preview delivery failed (%s)', type(exc).__name__)
 
 
+def _telegram_budget_minimum(info):
+    minimum = int(info.get("budget") or 0)
+    if info.get("budget_scope") != "total":
+        minimum *= int(info.get("people") or 0) + len(info.get("kids_ages") or [])
+    return minimum
+
+
 def _telegram_budget_result(result, info):
     """Apply Telegram minimum budgets to final and progressive supplier results."""
     if result and info.get("budget_open_ended"):
-        minimum = int(info.get("budget") or 0)
-        if info.get("budget_scope") != "total":
-            minimum *= int(info.get("people") or 0) + len(info.get("kids_ages") or [])
+        minimum = _telegram_budget_minimum(info)
         result.offers = [offer for offer in result.offers
                          if offer.currency == "RUB" and offer.price > 0
                          and offer.price + offer.fuel_charge >= minimum]
@@ -4795,6 +4800,8 @@ def _alean_search(info: Dict[str, Any], *, cancelled=None, on_progress=None) -> 
         "destination", "origin", "dates", "nights", "people", "kids_ages",
         "budget", "budget_scope", "budget_open_ended", "direct_only", "needs_consultation",
     ) if key in info}
+    if info.get("budget_open_ended"):
+        query["budget_min_rub"] = _telegram_budget_minimum(info)
     # Telegram asks for nights separately unless the user supplied trip dates.
     raw_dates = str(info.get('dates') or '')
     # Resolve human chat presets before crossing the supplier boundary.
