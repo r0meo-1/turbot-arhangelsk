@@ -71,6 +71,7 @@ def test_no_script_documents_already_identify_canonical_operator(name):
 
 def test_production_blueprint_enforces_shared_budget(monkeypatch):
     import vk_bot as bot
+    monkeypatch.setattr(limits.time,'time',lambda:1800000000)
     monkeypatch.setenv('VK_MINI_APP_SECRET',SECRET)
     monkeypatch.setenv('VK_MINI_APP_ID','123')
     for _ in range(30):
