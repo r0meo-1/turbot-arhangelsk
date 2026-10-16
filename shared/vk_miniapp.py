@@ -179,7 +179,11 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
             "privacy.html", "consent.html", "terms.html", "moderation.html",
         ):
             return jsonify(ok=False), 404
-        return send_from_directory(static, name)
+        response = send_from_directory(static, name)
+        if name in ('app.js', 'styles.css', 'vk-bridge.js', 'legal.js'):
+            from shared.miniapp_assets import compress_public_asset
+            response = compress_public_asset(response)
+        return response
 
     @bp.post("/vk/miniapp/booking-link")
     def booking_link():

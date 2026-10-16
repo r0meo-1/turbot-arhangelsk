@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0b1220">
   <title>TurBot — подбор тура</title>
   <link rel="stylesheet" href="./styles.css?v=20261015-date-range">
-  <script src="./vendor/telegram-web-app.js?v=124bdff7"></script>
+  <script defer src="./vendor/telegram-web-app.js?v=124bdff7"></script>
 </head>
 <body>
   <main class="shell">
@@ -196,9 +196,9 @@
     </dialog>
   </main>
 
-  <script src="./app.js?v=20261016-same-origin"></script>
+  <script defer src="./app.js?v=20261016-same-origin"></script>
   <script>
-    (() => {
+    document.addEventListener('DOMContentLoaded', () => {
       const tg = window.Telegram?.WebApp;
       const openExternal = (url) => {
         try { tg?.HapticFeedback?.selectionChanged?.(); } catch (_) {}
@@ -297,7 +297,7 @@
         'https://www.airalo.com/',
         'Подбираем eSIM…'
       );
-    })();
+    }, { once: true });
   </script>
 </body>
 </html>

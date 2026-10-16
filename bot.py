@@ -5002,6 +5002,11 @@ def telegram_miniapp_asset(name: str = 'index.html') -> Response:
     response = send_from_directory(Path(__file__).resolve().parent / 'miniapp', name)
     response.headers['Cache-Control'] = 'no-store'
     response.headers['Referrer-Policy'] = 'no-referrer'
+    if name != 'index.html':
+        from shared.miniapp_assets import compress_public_asset
+        response = compress_public_asset(response)
+        if set(request.args) == {'v'} and request.args.get('v'):
+            response.headers['Cache-Control'] = 'public, max-age=86400'
     return response
 
 
