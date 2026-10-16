@@ -4796,6 +4796,11 @@ def _alean_search(info: Dict[str, Any], *, cancelled=None, on_progress=None) -> 
     ) if key in info}
     # Telegram asks for nights separately unless the user supplied trip dates.
     raw_dates = str(info.get('dates') or '')
+    # Resolve human chat presets before crossing the supplier boundary.
+    if raw_dates in {value for _, value in DATE_PRESETS}:
+        departure, _ = _tutu.resolve_dates(raw_dates)
+        if departure:
+            query["dates"] = departure
     # Mini App ISO ranges always mean possible departures, including after
     # SQLite reload (legacy Telegram sessions do not persist this flag).
     departure_range = re.fullmatch(r'\d{4}-\d{2}-\d{2}\s*[—–]\s*\d{4}-\d{2}-\d{2}', raw_dates)

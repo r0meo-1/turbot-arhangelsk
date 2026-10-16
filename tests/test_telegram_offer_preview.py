@@ -216,3 +216,20 @@ def test_selection_and_new_search_cannot_interleave(monkeypatch, preview):
         first.result(timeout=5)
         second.result(timeout=5)
     assert info['review_token'] != 'old' and not info.get('selected_tour')
+
+
+@pytest.mark.parametrize("preset", [value for _, value in bot.DATE_PRESETS])
+def test_chat_presets_resolve_before_supplier_search(monkeypatch, preview, preset):
+    info, _ = preview
+    monkeypatch.setenv('TOUR_PROVIDER_ORDER', 'alean')
+    settings = bot._alean.AleanSettings(enabled=True, username='fixture', password='fixture')
+    monkeypatch.setattr(bot._alean.AleanSettings, 'from_env', lambda: settings)
+    captured = []
+    monkeypatch.setattr(bot._alean, 'search_tours', lambda config, session, query, **kw: captured.append(query) or tv.SearchResult())
+    info.update(dates=preset, budget_open_ended=True, budget=200000, people='2')
+    bot._alean_search(info)
+    assert captured[0]['dates'] == bot._tutu.resolve_dates(preset)[0]
+    assert captured[0]['dates_are_trip'] is False
+    assert captured[0]['budget_open_ended'] is True
+    assert captured[0]['kids_ages'] == [0,14]
+    assert info['dates'] == preset
