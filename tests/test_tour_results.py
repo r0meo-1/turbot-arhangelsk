@@ -1,5 +1,4 @@
 """Result restoration is local, owner-scoped and never submits an enquiry."""
-import json
 import sqlite3
 from dataclasses import asdict
 
@@ -111,6 +110,8 @@ def test_snapshot_bounds_and_whitelist():
     for pool in ([None], [dict(offer, price=float('nan'))], [offer]*101):
         results.save(cur, 1, dict(info, _package_offers=pool), 'telegram')
         assert cur.execute('SELECT count(*) FROM tour_result_snapshots').fetchone()[0] == 0
+    conn.close()
+
 
 def test_vk_filtered_view_and_open_budget_survive_restart(channel):
     module, uid, info, offers, sent = channel
