@@ -88,5 +88,8 @@ def isolate_webhook_receipts():
             if conn.execute("SELECT 1 FROM sqlite_master WHERE name='webhook_receipts'").fetchone():
                 with conn:
                     conn.execute("DELETE FROM webhook_receipts")
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='vk_miniapp_write_limits'").fetchone():
+                with conn:
+                    conn.execute("DELETE FROM vk_miniapp_write_limits")
         finally:
             conn.close()

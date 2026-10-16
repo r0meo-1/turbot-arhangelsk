@@ -1,6 +1,6 @@
 (async () => {
   const fallback = {
-    operatorName: 'ТА «АПРЕЛЬ тур»',
+    operatorName: 'ИП Замятина Мария Андреевна, ОГРНИП 311293232600026',
     privacyContact: 'Наталья Ильина, +7 902 193-29-23, VK: https://vk.ru/id112655584',
     projectUrl: 'https://r0meo1.ru/apreltour/'
   };

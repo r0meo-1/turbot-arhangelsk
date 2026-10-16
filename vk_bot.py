@@ -70,6 +70,7 @@ from shared.telegram_webapp import MiniAppValidationError, normalise_source_tag
 from shared import tutu as _tutu
 from shared import tourvisor as _tourvisor
 from shared import tour_results as _tour_results
+from shared import vk_miniapp_limits as _vk_miniapp_limits
 from shared import travelata as _travelata
 from shared import tour_providers as _tour_providers
 from shared import version as _version
@@ -787,6 +788,7 @@ def init_db() -> None:
         cur.execute("CREATE INDEX IF NOT EXISTS idx_leads_mdt_retry ON leads(mdt_status, mdt_next_retry_at)")
         _travel_crm_store.init_schema(cur)
         _tour_results.init_schema(cur)
+        _vk_miniapp_limits.init_schema(cur)
         _funnel_metrics.init_schema(cur)
         cur.execute(
             """
@@ -1536,6 +1538,7 @@ def _delete_user_data_unlocked(chat_id: int) -> None:
         cur.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM leads WHERE chat_id = ?", (chat_id,))
         cur.execute("DELETE FROM miniapp_handoffs WHERE user_id = ?", (chat_id,))
+        cur.execute("DELETE FROM vk_miniapp_write_limits WHERE user_id = ?", (chat_id,))
 
 
 def cleanup_expired_data() -> int:
@@ -5136,10 +5139,16 @@ def _continue_miniapp_draft(user_id: int, request_id: str, info: Dict[str, Any])
         return outcome, 200
 
 
+def _admit_miniapp_write(user_id):
+    with _db_cursor(commit=True) as cur:
+        return _vk_miniapp_limits.admit(cur, user_id)
+
+
 app = Flask(__name__)
 app.register_blueprint(create_blueprint(
     _save_miniapp_draft,
     lambda: (os.getenv("VK_MINI_APP_SECRET", ""), os.getenv("VK_MINI_APP_ID", ""), VK_GROUP_ID),
+    admit_write=_admit_miniapp_write,
     continue_draft=_continue_miniapp_draft,
     cancel_continue=_cancel_miniapp_continue,
     departures=lambda: _public_departures(_tour_provider_settings(), http_session),

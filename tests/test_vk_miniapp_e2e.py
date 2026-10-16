@@ -533,7 +533,7 @@ def test_saved_but_undelivered_draft_shows_retry_and_keeps_operation_identity(de
         assert len(saved) == 1
 
 
-@pytest.mark.parametrize("failure", ["network", "http_500", "invalid_json"])
+@pytest.mark.parametrize("failure", ["network", "http_500", "http_429", "invalid_json"])
 def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
     saved = []
     attempts = []
@@ -557,9 +557,9 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
                 route.abort()
             else:
                 route.fulfill(
-                    status=500 if failure == "http_500" else 200,
+                    status=429 if failure == "http_429" else (500 if failure == "http_500" else 200),
                     content_type="application/json",
-                    body='{"ok":false}' if failure == "http_500" else "not json",
+                    body='{"ok":false,"error":"Подождите минуту и повторите переход."}' if failure == "http_429" else ('{"ok":false}' if failure == "http_500" else "not json"),
                 )
         page.route("**/vk/miniapp/continue", submit)
         page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
@@ -617,3 +617,25 @@ def test_clear_after_reload_cancels_the_durable_pending_operation(expired):
         playwright_sync.expect(page.locator('#local-status')).to_contain_text('Параметры очищены')
         assert len(cancelled) == 1 and cancelled[0][1] == rid
         assert page.evaluate('sessionStorage.length') == 0
+
+@pytest.mark.parametrize('failure', ['offline','invalid_json','http_500'])
+def test_legal_documents_keep_verified_identity_when_config_fails(failure):
+    from shared.legal_identity import LEGAL_OPERATOR_DISPLAY, LEGAL_PRIVACY_CONTACT
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *_: pytest.fail('no writes'), lambda: (SECRET,APP_ID,GROUP_ID)))
+    server = make_server('127.0.0.1', 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser=pw.chromium.launch(channel='msedge',headless=True)
+        resources.callback(browser.close)
+        page=browser.new_page(viewport={'width':390,'height':850})
+        def fail_config(route):
+            if failure=='offline':
+                return route.abort()
+            route.fulfill(status=500 if failure=='http_500' else 200,
+                          content_type='application/json',body='invalid')
+        page.route('**/legal.json', fail_config)
+        for name in ('privacy.html','consent.html'):
+            page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/{name}')
+            playwright_sync.expect(page.locator('[data-legal-operator]')).to_have_text(LEGAL_OPERATOR_DISPLAY)
+            playwright_sync.expect(page.locator('[data-legal-contact]')).to_have_text(LEGAL_PRIVACY_CONTACT)
+            assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
