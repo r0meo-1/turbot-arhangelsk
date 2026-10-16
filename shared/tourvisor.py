@@ -357,7 +357,7 @@ def search_tours(
         departures = caller("GET", "departures", {"departureCountryId": 1})
         departure_id = _find_named_id(departures, str(info.get("origin") or ""))
         if departure_id is None:
-            return SearchResult(error="Этот город вылета пока не найден в Tourvisor")
+            return SearchResult(error="Этот город вылета пока не найден в Tourvisor", error_code="departure_unsupported")
 
         country_params: Dict[str, Any] = {"departureId": departure_id}
         if info.get("direct_only"):

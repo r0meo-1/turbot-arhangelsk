@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import requests
+from shared.search_errors import common_error_code
 
 from shared import sletat as _sletat
 from shared import alean as _alean
@@ -113,6 +114,7 @@ def search_tours(
     attempted = False
     last_search_id = None
     partial_results = []
+    attempted_results = []
 
     failed_before_success = False
     for name in settings.enabled_names():
@@ -150,6 +152,7 @@ def search_tours(
         else:  # defensive; enabled_names() currently filters this already.
             continue
 
+        attempted_results.append(result)
         if result.search_id is not None:
             last_search_id = result.search_id
         if result.partial:
@@ -185,7 +188,7 @@ def search_tours(
     return _tourvisor.SearchResult(
         error="; ".join(errors),
         search_id=last_search_id,
-        error_code="search_window" if error_codes and all(code == "search_window" for code in error_codes) else "",
+        error_code=common_error_code(attempted_results) if len(errors) == len(error_codes) else "",
         partial=bool(partial_results),
         completed_windows=sum(item.completed_windows for item in partial_results),
         total_windows=sum(item.total_windows for item in partial_results),

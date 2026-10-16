@@ -65,6 +65,7 @@ from shared import alean as _alean
 from shared import tourvisor as _tourvisor
 from shared import version as _version
 from shared.search_progress import format_search_progress
+from shared.search_errors import unsupported_departure_text
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared.ai_provider import build_selection_provider
 from shared.ai_chat import generate_ai_chat_reply as _generate_ai_chat_reply
@@ -4701,11 +4702,14 @@ def _publish_package_preview(chat_id: int, owner: Dict[str, Any], token: str, re
     if result and result.offers:
         _show_package_page(chat_id, owner)
         return
-    text = (('⚠️ ' + result.warning) if result and result.partial else
+    departure_unsupported = bool(result and result.error_code == 'departure_unsupported')
+    text = (unsupported_departure_text(owner.get('origin')) if departure_unsupported else
+            ('⚠️ ' + result.warning) if result and result.partial else
             '⚠️ Поиск не выполнен. Наличие туров не проверено.' if not result or result.error else
             'Поиск завершён. По этим параметрам вариантов не нашлось.')
-    send_message(chat_id, text + '\nЗаявка менеджеру не отправлена.', reply_markup=inline_keyboard([
-        [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
+    send_message(chat_id, text + ('' if departure_unsupported else '\nЗаявка менеджеру не отправлена.'), reply_markup=inline_keyboard([
+        [_inline_btn('🛫 Изменить город вылета', f'{CB_REVIEW_PREFIX}{STATE_ORIGIN}:{token}')]
+        if departure_unsupported else [_inline_btn('🔎 Повторить поиск', f'{CB_REVIEW_PREFIX}search:{token}')],
         [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
         [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]]))
 

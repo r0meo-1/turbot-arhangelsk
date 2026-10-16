@@ -575,6 +575,17 @@ def test_failed_search_does_not_allow_vk_budget_retry():
     assert result.error and not result.offers and result.search_id is None and not provider
 
 
+def test_unsupported_departure_is_distinct_from_destination_and_never_searches():
+    session = Session()
+    result = alean.search_tours(settings(), session, info(origin='Архангельск'))
+    assert result.error_code == 'departure_unsupported' and not result.offers
+    assert all(call[1]['params']['action'] != 'GetTours' for call in session.calls)
+    routed, _ = router.search_tours(router.ProviderSettings(order=('alean',), alean=settings()), Session(), info(origin='Архангельск'))
+    assert routed.error_code == 'departure_unsupported'
+    result = alean.search_tours(settings(), Session(), info(destination='Несуществующий курорт'))
+    assert result.error_code == 'destination_unsupported'
+
+
 @pytest.mark.parametrize("response", [Response('<error>fixture-secret</error>'),Response('not XML'),
     Response('<!DOCTYPE x [<!ENTITY a "test">]><getCountriesResult/>'),Response('',302),Response('',401)])
 def test_bad_responses_fail_softly_without_logging_credentials(response,caplog):
