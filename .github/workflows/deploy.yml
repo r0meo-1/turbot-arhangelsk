@@ -1,4 +1,4 @@
-﻿name: Deploy TurBot
+п»їname: Deploy TurBot
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.VK_MODERATION_FREEZE != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -22,6 +22,7 @@ jobs:
       - uses: ./.github/actions/regression
 
   deploy:
+    if: vars.VK_MODERATION_FREEZE != 'true'
     needs: test
     runs-on: ubuntu-latest
     environment: production

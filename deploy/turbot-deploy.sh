@@ -6,6 +6,17 @@ repo=/opt/turbot
 branch=main
 venv="$repo/venv/bin"
 
+# While VK moderation is pending, only the dedicated Telegram protocol may mutate production.
+if [[ -f /etc/turbot/vk-moderation-freeze ]]; then
+  IFS= read -r moderation_marker || exit 1
+  if [[ "$moderation_marker" == "TURBOT_TELEGRAM_ONLY_V1" ]]; then
+    exec "$venv/python" /opt/turbot-tg-drive/telegram_deploy.py
+  fi
+  cat >/dev/null
+  echo "VK moderation freeze: full deployment/config changes refused" >&2
+  exit 1
+fi
+
 ensure_runtime_permissions() {
   if [[ ! -d "$repo" ]]; then
     echo "TurBot runtime directory is missing: $repo" >&2

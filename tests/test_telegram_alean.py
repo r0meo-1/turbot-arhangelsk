@@ -73,3 +73,27 @@ def test_completion_delivers_package_or_falls_back(monkeypatch, has_offers):
         assert "SOAP Specify" in sent[1][0][1]
     else:
         assert sent == []
+
+
+@pytest.mark.parametrize("scope,minimum", [("total", 100000), ("per_person", 400000)])
+def test_open_ended_budget_excludes_below_minimum_with_exact_children(monkeypatch, enabled, scope, minimum):
+    def offer(price, charge=0, currency="RUB"):
+        return tv.TourOffer("Отель", 3, "Сочи", "2099-11-15", 7, "HB", "Номер", "Алеан", price,
+                            fuel_charge=charge, currency=currency)
+    result = tv.SearchResult(offers=[offer(minimum-1), offer(minimum-500, 500),
+                                    offer(minimum+1), offer(minimum, currency="EUR")])
+    monkeypatch.setattr(bot._alean, "search_tours", lambda *a, **k: result)
+    actual = bot._alean_search(dict(budget=100000, budget_scope=scope, budget_open_ended=True,
+                                   people=2, kids_ages=[1,15]))
+    assert [(o.price, o.fuel_charge) for o in actual.offers] == [(minimum-500,500), (minimum+1,0)]
+
+
+def test_progress_also_obeys_open_ended_budget(monkeypatch, enabled):
+    seen = []
+    def search(*args, **kwargs):
+        result = tv.SearchResult(offers=[tv.TourOffer("Отель",3,"Сочи","2099-11-15",7,"HB","Номер","Алеан",99999)])
+        kwargs['on_progress'](result)
+        return result
+    monkeypatch.setattr(bot._alean, 'search_tours', search)
+    bot._alean_search(dict(budget=100000,budget_scope='total',budget_open_ended=True),on_progress=lambda r:seen.append(list(r.offers)))
+    assert seen == [[]]
