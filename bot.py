@@ -5063,7 +5063,26 @@ def telegram_miniapp_asset(name: str = 'index.html') -> Response:
     from flask import send_from_directory, abort
     if name not in ('index.html', 'app.js', 'styles.css', 'vendor/telegram-web-app.js', 'departure-support.js'):
         abort(404)
-    response = send_from_directory(Path(__file__).resolve().parent / 'miniapp', name)
+    assets = Path(__file__).resolve().parent / 'miniapp'
+    if name == 'index.html':
+        # Telegram-only presentation while shared/VK assets are frozen.
+        # An external browser failure cannot be detected by this WebView.
+        html = (assets / name).read_text(encoding='utf-8')
+        html = html.replace(
+            '<button id="flights" class="secondary" type="button">Найти авиабилеты</button>',
+            '<button id="flights" class="secondary" type="button">Найти авиабилеты</button>'
+            '<p class="hint">Если сайт не открывается с VPN, попробуйте прямой поиск Aviasales.</p>'
+            '<button id="flights-fallback" class="secondary" type="button">Открыть Aviasales напрямую</button>',
+        )
+        html = html.replace(
+            "flightsButton?.addEventListener('click', () => openExternal(flightsUrl));",
+            "flightsButton?.addEventListener('click', () => openExternal(flightsUrl));\n"
+            "      document.getElementById('flights-fallback')?.addEventListener('click', "
+            "() => openExternal('https://www.aviasales.com/?marker=778488'));",
+        )
+        response = Response(html, mimetype='text/html')
+    else:
+        response = send_from_directory(assets, name)
     response.headers['Cache-Control'] = 'no-store'
     response.headers['Referrer-Policy'] = 'no-referrer'
     if name != 'index.html':

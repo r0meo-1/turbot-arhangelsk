@@ -538,3 +538,59 @@ def test_failed_submit_preserves_review_and_retries_same_submission(failure):
         assert len(attempts) == 2
         assert attempts[0] == attempts[1]
         assert attempts[0]["submissionId"]
+
+
+def test_telegram_flight_fallback_available_after_primary_browser_failure():
+    import ast
+    from flask import Flask, Response, request
+    from urllib.parse import urlencode, urlsplit
+    # Exercise the real renderer without booting the bot/AI stack in browser CI.
+    source = MINIAPP_DIR.parent / 'bot.py'
+    renderer = next(node for node in ast.parse(source.read_text(encoding='utf-8')).body
+                    if isinstance(node, ast.FunctionDef) and node.name == 'telegram_miniapp_asset')
+    renderer.decorator_list = []
+    namespace = {'__file__': str(source), 'Response': Response, 'request': request}
+    exec(compile(ast.Module(body=[renderer], type_ignores=[]), str(source), 'exec'), namespace)
+    with Flask(__name__).test_request_context('/tg/miniapp/'):
+        html = namespace['telegram_miniapp_asset']().get_data(as_text=True)
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        try:
+            page = browser.new_page(viewport={'width': 390, 'height': 850})
+            page.add_init_script("""window.__nativeEvents = [];
+                window.TelegramWebviewProxy = {postEvent(type, data) {
+                    window.__nativeEvents.push({type, data: JSON.parse(data || '{}')});
+                }};""")
+            origin = 'https://miniapp.example.test'
+            submissions = []
+            def route_request(route):
+                url = urlsplit(route.request.url)
+                if url.path == '/miniapp/submit':
+                    submissions.append(route.request.url)
+                    route.abort()
+                elif route.request.url.startswith(origin + '/tg/miniapp/'):
+                    name = url.path.removeprefix('/tg/miniapp/') or 'index.html'
+                    if name == 'index.html':
+                        route.fulfill(content_type='text/html', body=html)
+                    elif name in ('app.js','styles.css','vendor/telegram-web-app.js','departure-support.js'):
+                        route.fulfill(path=MINIAPP_DIR / name)
+                    else:
+                        route.abort()
+                else:
+                    route.abort()
+            page.route('**/*', route_request)
+            fragment = urlencode({'tgWebAppData': INIT_DATA, 'tgWebAppVersion':'8.0', 'tgWebAppPlatform':'tdesktop'})
+            page.goto(origin + '/tg/miniapp/#' + fragment)
+            page.locator('#flights').click()
+            # The native browser does not report external connection failure back.
+            # Leave its open event unanswered and verify fallback remains usable.
+            page.locator('#flights-fallback').click()
+            events = page.evaluate("window.__nativeEvents.filter(e => e.type === 'web_app_open_link')")
+            assert len(events) == 2
+            assert events[0]['data']['url'].startswith('https://travel.r0meo1.ru/')
+            assert events[1]['data']['url'] == 'https://www.aviasales.com/?marker=778488'
+            assert 'tgWebAppData' not in events[1]['data']['url']
+            assert not submissions
+            assert page.locator('#flights-fallback').is_enabled()
+        finally:
+            browser.close()
