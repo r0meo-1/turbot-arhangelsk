@@ -594,6 +594,13 @@ def test_invalid_or_ambiguous_departure_catalog_is_not_unsupported(rows):
     assert result.error and result.error_code == '' and not result.offers
 
 
+def test_named_no_flight_catalog_placeholder_does_not_block_valid_absence():
+    rows = '<city name="Без перелета"/><city name="Москва" cid="MOW"/>'
+    result = alean.search_tours(settings(), Session(bad={'GetDepartCities': Response(
+        '<getDepartCitiesResult>' + rows + '</getDepartCitiesResult>')}), info(origin='Архангельск'))
+    assert result.error_code == 'departure_unsupported'
+
+
 @pytest.mark.parametrize("response", [Response('<error>fixture-secret</error>'),Response('not XML'),
     Response('<!DOCTYPE x [<!ENTITY a "test">]><getCountriesResult/>'),Response('',302),Response('',401)])
 def test_bad_responses_fail_softly_without_logging_credentials(response,caplog):
