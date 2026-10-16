@@ -4772,6 +4772,18 @@ def _package_preview_worker(chat_id: int, owner: Dict[str, Any], token: str, sna
         logger.warning('Telegram preview delivery failed (%s)', type(exc).__name__)
 
 
+def _telegram_budget_result(result, info):
+    """Apply Telegram minimum budgets to final and progressive supplier results."""
+    if result and info.get("budget_open_ended"):
+        minimum = int(info.get("budget") or 0)
+        if info.get("budget_scope") != "total":
+            minimum *= int(info.get("people") or 0) + len(info.get("kids_ages") or [])
+        result.offers = [offer for offer in result.offers
+                         if offer.currency == "RUB" and offer.price > 0
+                         and offer.price + offer.fuel_charge >= minimum]
+    return result
+
+
 def _alean_search(info: Dict[str, Any], *, cancelled=None, on_progress=None) -> Optional[Any]:
     """Opt-in package search; keep contact data out of the supplier boundary."""
     settings = _alean.AleanSettings.from_env()
@@ -4791,8 +4803,10 @@ def _alean_search(info: Dict[str, Any], *, cancelled=None, on_progress=None) -> 
     try:
         options = {'cancelled': cancelled} if cancelled else {}
         if on_progress:
-            options['on_progress'] = on_progress
-        return _alean.search_tours(settings, telegram_session, query, log=logger, **options)
+            options['on_progress'] = lambda result: on_progress(_telegram_budget_result(result, info))
+        result = _alean.search_tours(settings, telegram_session, query, log=logger, **options)
+        result = _telegram_budget_result(result, info)
+        return result
     except Exception as exc:
         logger.warning("Alean Telegram search failed (%s)", type(exc).__name__)
         return None
