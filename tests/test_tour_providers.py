@@ -460,6 +460,16 @@ def test_router_preserves_empty_vs_failure_and_safe_reason(monkeypatch, error, c
     assert result.offers == [] and provider == ""
 
 
+def test_skipped_direct_flight_adapter_does_not_hide_attempted_departure_reason(monkeypatch):
+    settings = tour_providers.ProviderSettings()
+    monkeypatch.setattr(settings, 'enabled_names', lambda: ['travelata', 'tourvisor'])
+    monkeypatch.setattr(tour_providers._tourvisor, 'search_tours', lambda *a, **k:
+        tourvisor.SearchResult(error='not in catalog', error_code='departure_unsupported'))
+    query = dict(_info(), direct_only=True)
+    result, _ = tour_providers.search_tours(settings, FakeSession(), query)
+    assert result.error_code == 'departure_unsupported'
+
+
 def test_router_reports_empty_then_fallback_success_without_payload_data(monkeypatch):
     outcomes = []
     monkeypatch.setattr(

@@ -75,6 +75,7 @@ def test_unsupported_departure_explanation_survives_worker_and_city_edit(monkeyp
     assert 'Архангельск' in sent[-1][0] and 'не поддерживается' in sent[-1][0]
     assert 'наличие не проверено' in sent[-1][0]
     assert 'Изменить город вылета' in str(json.loads(sent[-1][1]['keyboard']))
+    assert bot.TOUR_SEND_MANAGER_TEXT in str(json.loads(sent[-1][1]['keyboard']))
     assert info['origin'] == 'Архангельск' and info['budget'] == 270123
     bot._step_review(42, '🛫 Изменить город вылета', {}, info)
     assert info['state'] == bot.STATE_ORIGIN and '_tour_search_marker' not in info

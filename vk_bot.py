@@ -3218,6 +3218,7 @@ def _publish_tour_search_result(user_id, marker, snapshot, result, provider_name
         )
     keyboard = (_keyboard([
         [_btn('🛫 Изменить город вылета', 'primary')],
+        [_btn(TOUR_SEND_MANAGER_TEXT, 'positive')],
         [_btn(BACK_BUTTON_TEXT), _btn(CANCEL_BUTTON_TEXT, 'negative')],
     ]) if departure_unsupported else _no_tours_keyboard(can_show_over))
     send_message(user_id, message_text, keyboard=keyboard)

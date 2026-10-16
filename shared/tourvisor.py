@@ -355,6 +355,13 @@ def search_tours(
     )
     try:
         departures = caller("GET", "departures", {"departureCountryId": 1})
+        if not isinstance(departures, list) or not departures or not all(
+            isinstance(row, dict) and str(row.get('id', '')).isdigit()
+            and int(row['id']) > 0
+            and any(isinstance(row.get(key), str) and row[key].strip() for key in ('name', 'russianName', 'fullName'))
+            for row in departures
+        ):
+            return SearchResult(error='Tourvisor вернул некорректный каталог городов вылета')
         departure_id = _find_named_id(departures, str(info.get("origin") or ""))
         if departure_id is None:
             return SearchResult(error="Этот город вылета пока не найден в Tourvisor", error_code="departure_unsupported")

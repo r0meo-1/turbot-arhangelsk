@@ -188,7 +188,7 @@ def search_tours(
     return _tourvisor.SearchResult(
         error="; ".join(errors),
         search_id=last_search_id,
-        error_code=common_error_code(attempted_results) if len(errors) == len(error_codes) else "",
+        error_code=common_error_code(attempted_results),
         partial=bool(partial_results),
         completed_windows=sum(item.completed_windows for item in partial_results),
         total_windows=sum(item.total_windows for item in partial_results),
