@@ -83,3 +83,18 @@ def test_trip_request_requires_exact_child_age_count():
 def test_trip_request_requires_consent():
     with pytest.raises(MiniAppValidationError, match="consent"):
         validate_trip_request(_payload(consent=False))
+
+
+def test_telegram_only_index_offers_independent_flight_fallback():
+    import bot
+    from pathlib import Path
+    before = (Path(bot.__file__).parent / 'miniapp' / 'index.html').read_bytes()
+    response = bot.app.test_client().get('/tg/miniapp/')
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'no-store'
+    assert html.count('id="flights-fallback"') == 1
+    assert 'Открыть Aviasales напрямую' in html
+    assert "openExternal('https://www.aviasales.com/?marker=778488')" in html
+    assert "openExternal(flightsUrl)" in html
+    assert (Path(bot.__file__).parent / 'miniapp' / 'index.html').read_bytes() == before
