@@ -6,7 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#f4f6f9">
   <title>АПРЕЛЬ тур — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20261016-flexible-dates">
+  <link rel="stylesheet" href="./styles.css?v=20261016-nights-field">
   <script defer src="./vk-bridge.js?v=2.15.0"></script>
 </head>
 <body>
@@ -65,8 +65,8 @@
           <label for="nights-mode">Длительность поездки</label>
           <select id="nights-mode" class="full-input" aria-label="Длительность поездки"><option value="exact">Точное число ночей</option><option value="range">Диапазон ночей</option></select>
           <label for="nights">Ночей</label>
-          <input id="nights" name="nights" type="number" min="3" max="28" inputmode="numeric" value="10" required>
-          <div id="nights-range-fields" hidden><label for="nights-to">До скольких ночей</label><input id="nights-to" name="nightsTo" type="number" min="3" max="28" inputmode="numeric" disabled></div>
+          <input id="nights" class="full-input" name="nights" type="number" min="3" max="28" inputmode="numeric" value="10" required>
+          <div id="nights-range-fields" hidden><label for="nights-to">До скольких ночей</label><input id="nights-to" class="full-input" name="nightsTo" type="number" min="3" max="28" inputmode="numeric" disabled></div>
         </div>
       </section>
 
