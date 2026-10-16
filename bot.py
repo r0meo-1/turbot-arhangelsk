@@ -4696,13 +4696,14 @@ def _publish_package_preview(chat_id: int, owner: Dict[str, Any], token: str, re
         owner.pop('_package_progress_result', None)
         owner['_package_offers'] = [offer.__dict__.copy() for offer in result.offers] if result else []
         owner['_package_warning'] = result.warning if result else ''
+    departure_unsupported = bool(result and not result.offers and result.error_code == 'departure_unsupported')
     _edit_package_wait(chat_id, owner.get('_package_wait_message_id'),
+        '🛫 Поиск не выполнен: город вылета не поддерживается. Подробности ниже.' if departure_unsupported else
         '✅ Поиск завершён. Результат ниже.' if result and not result.error and not result.partial else
         '⚠️ Поиск завершён не полностью. Подробности ниже.', inline_keyboard([]))
     if result and result.offers:
         _show_package_page(chat_id, owner)
         return
-    departure_unsupported = bool(result and result.error_code == 'departure_unsupported')
     text = (unsupported_departure_text(owner.get('origin')) if departure_unsupported else
             ('⚠️ ' + result.warning) if result and result.partial else
             '⚠️ Поиск не выполнен. Наличие туров не проверено.' if not result or result.error else
