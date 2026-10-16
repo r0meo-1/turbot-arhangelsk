@@ -38,7 +38,7 @@ def test_same_origin_save_works_with_cross_origin_api_blocked_and_retry_is_stabl
         from urllib.parse import urlsplit
         def asset(route):
             name = urlsplit(route.request.url).path.removeprefix('/tg/miniapp/') or 'index.html'
-            assert name in ('index.html', 'app.js', 'styles.css', 'vendor/telegram-web-app.js')
+            assert name in ('index.html', 'app.js', 'styles.css', 'vendor/telegram-web-app.js', 'departure-support.js')
             route.fulfill(path=MINIAPP_DIR / name)
         page.route(origin + '/tg/miniapp/**', asset)
         def submit(route):

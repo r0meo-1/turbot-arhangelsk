@@ -2,6 +2,7 @@
 
 STATE_CONSENT = "consent"
 STATE_DESTINATION = "destination"
+STATE_ORIGIN_REVIEW = "origin_review"  # Edit only departure on an already reviewed trip.
 STATE_ORIGIN = "origin"  # departure city — needed for a real transport search
 STATE_DATES = "dates"
 STATE_NIGHTS = "nights"

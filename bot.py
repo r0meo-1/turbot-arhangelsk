@@ -34,6 +34,7 @@ from shared.constants import (
     STATE_NIGHTS,
     STATE_DESTINATION,
     STATE_ORIGIN,
+    STATE_ORIGIN_REVIEW,
     STATE_PEOPLE,
     STATE_KIDS,
     STATE_KIDS_AGES,
@@ -3809,6 +3810,12 @@ def _step_origin(chat_id: int, text: str, message: Dict[str, Any], info: Dict[st
         )
         return
     info["origin"] = city
+    if info.get("state") == STATE_ORIGIN_REVIEW:
+        info['state'] = STATE_REVIEW
+        info['review_token'] = secrets.token_hex(8)
+        _mark_dirty(chat_id, user=False)
+        _ask_review(chat_id, info)
+        return
     info["state"] = STATE_DATES
     _ask_dates(chat_id)
 
@@ -4220,8 +4227,9 @@ def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict
         info.pop('selected_tour', None)
         info.pop('_package_offers', None)
         info["review_token"] = None
-        info["phone"] = None
-        info["state"] = action
+        if action != STATE_ORIGIN:
+            info["phone"] = None
+        info["state"] = STATE_ORIGIN_REVIEW if action == STATE_ORIGIN else action
         _prompt_for_state(chat_id, action)
 
 
@@ -4230,6 +4238,7 @@ STATE_HANDLERS: Dict[str, Callable[[int, str, Dict[str, Any], Dict[str, Any]], N
     STATE_CONSENT:     _step_consent,
     STATE_DESTINATION: _step_destination,
     STATE_ORIGIN:      _step_origin,
+    STATE_ORIGIN_REVIEW: _step_origin,
     STATE_DATES:       _step_dates,
     STATE_NIGHTS:      _step_nights,
     STATE_PEOPLE:      _step_people,
@@ -4274,7 +4283,7 @@ def _prompt_for_state(chat_id: int, state: str) -> None:
             reply_markup=kb_destinations(),
             parse_mode="HTML",
         )
-    elif state == STATE_ORIGIN:
+    elif state in (STATE_ORIGIN, STATE_ORIGIN_REVIEW):
         _ask_origin(chat_id)
     elif state == STATE_DATES:
         _ask_dates(chat_id)
@@ -4309,6 +4318,12 @@ def _go_back(chat_id: int) -> None:
     """Move the user one step back in the dialog."""
     info = user_data.get(chat_id, {})
     state = info.get("state")
+    if state == STATE_ORIGIN_REVIEW:
+        info['state'] = STATE_REVIEW
+        info['review_token'] = secrets.token_hex(8)
+        _mark_dirty(chat_id, user=False)
+        _ask_review(chat_id, info)
+        return
     previous = PREVIOUS_STATE.get(state)
     if state == STATE_PEOPLE and _duration_from_dates(info.get("dates", "")) is not None:
         previous = STATE_DATES
@@ -5002,7 +5017,7 @@ def telegram_miniapp_asset(name: str = 'index.html') -> Response:
     """Serve the Telegram form beside its authenticated API, without CORS hops."""
     from pathlib import Path
     from flask import send_from_directory, abort
-    if name not in ('index.html', 'app.js', 'styles.css', 'vendor/telegram-web-app.js'):
+    if name not in ('index.html', 'app.js', 'styles.css', 'vendor/telegram-web-app.js', 'departure-support.js'):
         abort(404)
     response = send_from_directory(Path(__file__).resolve().parent / 'miniapp', name)
     response.headers['Cache-Control'] = 'no-store'
@@ -5012,6 +5027,16 @@ def telegram_miniapp_asset(name: str = 'index.html') -> Response:
         response = compress_public_asset(response)
         if set(request.args) == {'v'} and request.args.get('v'):
             response.headers['Cache-Control'] = 'public, max-age=86400'
+    return response
+
+
+@app.get('/miniapp/departures')
+def miniapp_departures():
+    from shared.departure_catalog import public_departures
+    from shared.tour_providers import ProviderSettings
+    result = public_departures(ProviderSettings(order=('alean',), alean=_alean.AleanSettings.from_env()), telegram_session)
+    response = _miniapp_json(result)
+    response.headers['Cache-Control'] = 'no-store'
     return response
 
 
@@ -5514,7 +5539,7 @@ def _process_callback(data: Dict[str, Any]) -> None:
         return
 
     if cb_data.startswith(CB_ORIGIN_PREFIX):
-        if info.get("state") != STATE_ORIGIN:
+        if info.get("state") not in (STATE_ORIGIN, STATE_ORIGIN_REVIEW):
             send_message(chat_id, "Сейчас это действие недоступно. Продолжите текущий шаг.")
             return
         _step_origin(chat_id, cb_data, synthetic, info)

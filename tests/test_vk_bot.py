@@ -78,7 +78,19 @@ def test_unsupported_departure_explanation_survives_worker_and_city_edit(monkeyp
     assert bot.TOUR_SEND_MANAGER_TEXT in str(json.loads(sent[-1][1]['keyboard']))
     assert info['origin'] == 'Архангельск' and info['budget'] == 270123
     bot._step_review(42, '🛫 Изменить город вылета', {}, info)
-    assert info['state'] == bot.STATE_ORIGIN and '_tour_search_marker' not in info
+    assert info['state'] == bot.STATE_ORIGIN_REVIEW and '_tour_search_marker' not in info
+    bot.set_session(42, info)
+    info = bot.get_session(42)
+    bot.user_data[42] = info
+    assert info['state'] == bot.STATE_ORIGIN_REVIEW
+    info.update(dates='2026-12-10 — 2026-12-15', nights=10, people=2, kids_ages=[7], budget_scope='total')
+    before = {key: info.get(key) for key in ('dates', 'nights', 'people', 'kids_ages', 'budget', 'budget_scope')}
+    bot._step_origin(42, 'Москва', {}, info)
+    assert info['state'] == bot.STATE_REVIEW and info['origin'] == 'Москва'
+    assert {key: info.get(key) for key in before} == before
+    bot._step_review(42, '🛫 Изменить город вылета', {}, info)
+    bot._go_back(42)
+    assert info['state'] == bot.STATE_REVIEW and info['origin'] == 'Москва'
 
 
 def _vk_message(user_id, text=None, ref=None, ref_source=None):
