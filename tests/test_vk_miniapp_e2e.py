@@ -471,6 +471,9 @@ def test_server_delivery_and_native_return_never_need_a_manual_command(platform,
         from datetime import date, timedelta
         first_date = page.locator('#date').input_value()
         last_date = (date.fromisoformat(first_date) + timedelta(days=7)).isoformat()
+        page.locator('#nights-mode').select_option('range')
+        page.locator('#nights').fill('7')
+        page.locator('#nights-to').fill('10')
         page.locator('#date-mode').select_option('range')
         page.locator('#date-to').fill(last_date)
         page.locator('#consent').check()
@@ -479,7 +482,7 @@ def test_server_delivery_and_native_return_never_need_a_manual_command(platform,
         page.locator('#save').click()
         playwright_sync.expect(page.locator('#status')).to_have_text('Параметры отправлены в чат. Заявка менеджеру не отправлена.')
         assert len(saved) == 1 and saved[0]['budget'] == 270123
-        assert saved[0]['dates'] == f'{first_date} — {last_date}' and saved[0]['nights'] == 10
+        assert saved[0]['dates'] == f'{first_date} — {last_date}' and saved[0]['nights'] == '7-10'
         if platform == 'desktop_app_messenger':
             page.locator('#return-chat').click()
             if close_result != 'success':

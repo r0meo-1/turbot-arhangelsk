@@ -93,6 +93,9 @@ def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asse
         if flexible:
             from datetime import date, timedelta
             last_date = (date.fromisoformat(page.locator('#date').input_value()) + timedelta(days=10)).isoformat()
+            page.locator('#nights-mode').select_option('range')
+            page.locator('#nights').fill('7')
+            page.locator('#nights-to').fill('10')
             page.locator('#date-mode').select_option('range')
             page.locator('#date-to').fill(last_date)
         page.locator("#consent").check()
@@ -109,6 +112,9 @@ def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asse
             assert page.locator('#date-to').get_attribute('min') == '2099-12-01'
             assert page.locator('#date-to').get_attribute('max') == '2099-12-31'
             last_date = '2099-12-11'
+            page.locator('#nights-mode').select_option('range')
+            page.locator('#nights').fill('7')
+            page.locator('#nights-to').fill('10')
             page.locator('#date-mode').select_option('range')
             page.locator('#date-to').fill(last_date)
             page.locator('#submit').click()
@@ -118,6 +124,7 @@ def test_real_sdk_loads_without_telegram_org_and_preserves_native_init_data(asse
         assert submissions[0]["initData"] == INIT_DATA
         if flexible:
             assert submissions[0]['payload']['dateTo'] == last_date
+            assert submissions[0]['payload']['nights'] == 7 and submissions[0]['payload']['nightsTo'] == 10
         assert external == []
 
 
