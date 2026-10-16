@@ -21,6 +21,10 @@
 set -euo pipefail
 
 main() {
+  if [[ -f /etc/turbot/vk-moderation-freeze && "${1:-}" != "--check" ]]; then
+    echo "VK moderation freeze: use the Telegram-only deployment workflow" >&2
+    return 1
+  fi
   local app_dir="${APP_DIR:-/opt/turbot}"
   local branch="${DEPLOY_BRANCH:-main}"
   local check_only=0
