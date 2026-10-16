@@ -44,3 +44,20 @@ def test_incompatible_or_untrusted_payload_is_refused_before_mutation(tmp_path,c
     with pytest.raises((ValueError,OSError)):
         m.deploy(root,tmp_path/'state',p,run=lambda *a,**kw:pytest.fail('must not restart'))
     assert (root/'bot.py').read_bytes()==b'old = True\n'
+
+
+def test_release_workflow_has_valid_top_level_keys_and_moderation_gate():
+    import re
+    for name in ('deploy.yml','deploy-bundle.yml','bootstrap-deploy.yml','bootstrap-deployer.yml','deploy-telegram-only.yml'):
+        text=(Path('.github/workflows')/name).read_text(encoding='utf-8-sig')
+        keys=set(re.findall(r'^([^\s#][^:]*):',text,re.MULTILINE))
+        assert keys <= {'name','on','concurrency','permissions','jobs'}, (name,keys)
+        assert {'name','on','jobs'} <= keys
+        assert 'vars.VK_MODERATION_FREEZE' in text
+
+
+def test_sender_pins_production_identity_independently_of_host_alias():
+    text=Path('deploy/send-telegram-only.py').read_text()
+    assert 'StrictHostKeyChecking=yes' in text
+    assert 'HostKeyAlias=turbot-production' in text
+    assert 'accept-new' not in text and 'ssh-keyscan' not in text
