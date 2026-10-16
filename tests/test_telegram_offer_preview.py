@@ -34,6 +34,22 @@ def offers():
                          provider='alean',tour_id=f'alean:{i}') for i in range(5)]
 
 
+def test_iso_departure_and_night_ranges_remain_independent_after_restore(monkeypatch, preview):
+    info, sent = preview
+    monkeypatch.setenv('TOUR_PROVIDER_ORDER', 'alean')
+    settings = bot._alean.AleanSettings(enabled=True, username='fixture', password='fixture')
+    monkeypatch.setattr(bot._alean.AleanSettings, 'from_env', lambda: settings)
+    captured = []
+    monkeypatch.setattr(bot._alean, 'search_tours', lambda config, session, query, **kw: captured.append(query) or tv.SearchResult())
+    info.update(dates='2099-10-15 — 2099-10-22', nights='7-10')
+    bot.set_session(42, info)
+    restored = bot.get_session(42)
+    bot._alean_search(restored)
+    assert captured[0]['dates_are_trip'] is False and captured[0]['nights'] == '7-10'
+    assert captured[0]['dates'] == info['dates']
+    assert 'phone' not in captured[0]
+
+
 def test_unsupported_departure_explains_limits_and_requires_explicit_city_change(monkeypatch, preview):
     info, sent = preview
     info['origin'] = 'Архангельск'

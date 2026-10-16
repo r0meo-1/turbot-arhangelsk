@@ -6,7 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#f4f6f9">
   <title>АПРЕЛЬ тур — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20261015-search">
+  <link rel="stylesheet" href="./styles.css?v=20261016-flexible-dates">
   <script defer src="./vk-bridge.js?v=2.15.0"></script>
 </head>
 <body>
@@ -56,29 +56,34 @@
         </div>
       </section>
 
-      <section class="grid two-col">
+      <section class="grid">
         <label class="card field-card">
           <span>Вылет</span>
           <input id="departure" name="departure" type="text" maxlength="100" placeholder="Архангельск" value="Архангельск" required>
         </label>
-        <label class="card field-card">
-          <span>Ночей</span>
-          <input id="nights" name="nights" type="number" min="3" max="30" inputmode="numeric" value="10" required>
-        </label>
+        <div class="card field-card">
+          <label for="nights-mode">Длительность поездки</label>
+          <select id="nights-mode" class="full-input" aria-label="Длительность поездки"><option value="exact">Точное число ночей</option><option value="range">Диапазон ночей</option></select>
+          <label for="nights">Ночей</label>
+          <input id="nights" name="nights" type="number" min="3" max="28" inputmode="numeric" value="10" required>
+          <div id="nights-range-fields" hidden><label for="nights-to">До скольких ночей</label><input id="nights-to" name="nightsTo" type="number" min="3" max="28" inputmode="numeric" disabled></div>
+        </div>
       </section>
 
       <section class="card">
+        <label for="date-mode">Когда готовы вылететь?</label>
+        <select id="date-mode" class="full-input"><option value="exact">Точная дата</option><option value="range">Диапазон дат — до 31 дня</option></select>
         <div class="section-row">
           <label for="date-display">Дата вылета</label>
-          <span class="hint">можно примерно</span>
+          <span class="hint">даты вылета</span>
         </div>
         <div class="date-field full-input">
           <input id="date-display" type="text" inputmode="decimal" placeholder="ДД.ММ.ГГГГ" maxlength="10" autocomplete="off" required>
           <input id="date" name="date" type="date" aria-label="Выбрать дату в календаре" title="Выбрать дату в календаре" required>
         </div>
-        <label for="date-to">Последняя возможная дата вылета — необязательно</label>
-        <input id="date-to" name="dateTo" class="full-input" type="date">
-        <p class="hint">Гибкие даты: до 31 дня. Длительность поездки задайте отдельно.</p>
+        <div id="date-range-fields" hidden><label for="date-to">Последняя возможная дата вылета</label>
+        <input id="date-to" name="dateTo" class="full-input" type="date" disabled></div>
+        <p class="hint">Это даты вылета, а не начала и конца отпуска. Число ночей задайте отдельно.</p>
       </section>
 
       <section class="grid two-col">
@@ -172,7 +177,7 @@
     </dialog>
   </main>
 
-  <script defer src="./app.js?v=20261015-date-range"></script>
+  <script defer src="./app.js?v=20261016-flexible-dates"></script>
   <script defer src="./departure-support.js?v=20261016-origin"></script>
 </body>
 </html>

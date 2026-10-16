@@ -148,6 +148,12 @@ def validate_trip_request(payload: Any) -> Dict[str, Any]:
             dates = f'{date_raw} — {date_to}'
 
     nights = _bounded_int(payload, "nights", 3, 30)
+    if payload.get('nightsTo') not in (None, ''):
+        if type(payload['nightsTo']) is not int or type(payload['nights']) is not int:
+            raise MiniAppValidationError('nightsTo is invalid')
+        nights_to = _bounded_int(payload, 'nightsTo', nights, 28)
+        if nights_to != nights:
+            nights = f'{nights}-{nights_to}'
     adults = _bounded_int(payload, "adults", 1, 8)
     children = _bounded_int(payload, "children", 0, 6)
     budget = _bounded_int(payload, "budgetMaxRub", 100_000, 600_000)
