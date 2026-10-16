@@ -128,9 +128,19 @@ def validate_vk_trip(payload):
     return info
 
 
-def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=None, departures=None):
+def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=None, departures=None, admit_write=None):
     bp = Blueprint("vk_miniapp", __name__)
     static = Path(__file__).resolve().parents[1] / "vk-miniapp"
+
+    def write_limit(uid):
+        retry_after = admit_write(uid) if admit_write else 0
+        if retry_after:
+            response = jsonify(ok=False, retryable=True,
+                error="Слишком много попыток. Подождите минуту и повторите переход.")
+            response.status_code = 429
+            response.headers['Retry-After'] = str(retry_after)
+            return response
+        return None
 
     @bp.after_request
     def headers(response):
@@ -200,11 +210,14 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
             return jsonify(ok=False, error="Некорректные данные поиска."), 400
         raw_launch = body.get("launchParams")
         try:
-            validate_launch_params(raw_launch, secret, app_id, group_id)
+            uid = validate_launch_params(raw_launch, secret, app_id, group_id)
             info = validate_vk_trip(body.get("payload"))
         except MiniAppValidationError as exc:
             current_app.logger.warning("vk_booking_link status=rejected reason=%s", str(exc))
             return jsonify(ok=False, error="Откройте приложение заново из VK и проверьте параметры."), 401
+        limited = write_limit(uid)
+        if limited is not None:
+            return limited
         try:
             url = _travelpayouts_booking.create_booking_partner_link(info)
         except _travelpayouts_booking.BookingLinkNotConfigured as exc:
@@ -246,6 +259,9 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
                 error="Откройте приложение заново из VK.",
                 authReason=str(exc),
             ), 401
+        limited = write_limit(uid)
+        if limited is not None:
+            return limited
         try:
             info = validate_vk_trip(body.get("payload"))
         except MiniAppValidationError:
@@ -281,6 +297,9 @@ def create_blueprint(save_draft, settings, continue_draft=None, cancel_continue=
             uid = validate_launch_params(body.get("launchParams"), secret, app_id, group_id)
         except MiniAppValidationError:
             return jsonify(dict(base, ok=False, error="Откройте приложение заново из VK.")), 401
+        limited = write_limit(uid)
+        if limited is not None:
+            return limited
         try:
             info = validate_vk_trip(body.get("payload"))
             request_id = body.get("requestId")
