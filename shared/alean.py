@@ -213,6 +213,12 @@ def search_tours(settings, session, info, *, log=None, cancelled=None, on_progre
         if info.get("budget_open_ended"):
             cap = 0
 
+        # Explicit total-RUB floor, used by Telegram's "from" budget. VK's
+        # uncapped above-budget retry does not set it and stays unchanged.
+        floor = info.get("budget_min_rub", 0)
+        if type(floor) is not int or not 0 <= floor <= 2147483647 or (cap and floor > cap):
+            return tv.SearchResult(error="Для Alean уточните бюджет")
+
         # Derive once per search, rather than repeating the KDF for every catalog.
         account = _account_key(settings)
         def catalog(action):
@@ -248,6 +254,8 @@ def search_tours(settings, session, info, *, log=None, cancelled=None, on_progre
             params["resortCIDs"] = resort["cid"]
         if ages:
             params["kidsAges"] = ",".join(map(str, ages))
+        if floor > 0:
+            params["priceMin"] = floor
         if cap > 0:
             params["priceMax"] = cap
         hotels = catalog("GetHotels")
@@ -306,7 +314,7 @@ def search_tours(settings, session, info, *, log=None, cancelled=None, on_progre
                 hotel = hotel_map.get(row.get("hotelId"))
                 if not supplier_price.is_finite() or not hotel or not hotel.get("name"):
                     continue
-                if supplier_price <= 0 or (cap > 0 and supplier_price > cap):
+                if supplier_price <= 0 or supplier_price < floor or (cap > 0 and supplier_price > cap):
                     continue
                 numeric_price = float(supplier_price)
                 if not math.isfinite(numeric_price) or numeric_price <= 0:

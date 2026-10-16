@@ -97,3 +97,15 @@ def test_progress_also_obeys_open_ended_budget(monkeypatch, enabled):
     monkeypatch.setattr(bot._alean, 'search_tours', search)
     bot._alean_search(dict(budget=100000,budget_scope='total',budget_open_ended=True),on_progress=lambda r:seen.append(list(r.offers)))
     assert seen == [[]]
+
+
+@pytest.mark.parametrize('scope,expected', [('total',100000), ('per_person',400000)])
+def test_minimum_budget_is_sent_to_supplier_as_total_rubles(monkeypatch, enabled, scope, expected):
+    captured = {}
+    def search(settings, session, query, **kwargs):
+        captured.update(query)
+        return tv.SearchResult()
+    monkeypatch.setattr(bot._alean, 'search_tours', search)
+    bot._alean_search(dict(people=2, kids_ages=[1,15], budget=100000,
+                          budget_scope=scope, budget_open_ended=True))
+    assert captured['budget_min_rub'] == expected

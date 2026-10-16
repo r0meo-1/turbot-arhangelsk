@@ -644,3 +644,40 @@ def test_vk_health_and_selected_offer_show_alean_without_secrets(monkeypatch):
     offer = alean.search_tours(settings(),Session(),info()).offers[0]
     summary = vk_bot._selected_tour_summary({"selected_tour":asdict(offer)})
     assert "Провайдер: Алеан" in summary and "трансфер не включён" in summary
+
+
+def test_minimum_price_reaches_supplier_before_result_limit():
+    class LimitedInventory(Session):
+        def get(self, url, **kwargs):
+            response = super().get(url, **kwargs)
+            p = kwargs['params']
+            if p['action'] != 'GetTours':
+                return response
+            template = ET.fromstring(response.content).find('tour').attrib
+            root = ET.Element('getToursResult')
+            prices = [50000, 99999, 100000, 100001, 150000]
+            matching = [price for price in prices if price >= p.get('priceMin', 0)]
+            for i, price in enumerate(matching[:p['count']]):
+                ET.SubElement(root, 'tour', dict(template, offerId=str(i), price=str(price)))
+            return Response(ET.tostring(root))
+    session = LimitedInventory()
+    result = alean.search_tours(settings(max_offers=2), session,
+        info(budget=100000, budget_open_ended=True, budget_min_rub=100000))
+    query = session.calls[-1][1]['params']
+    assert query['priceMin'] == 100000
+    assert 'priceMax' not in query
+    assert [offer.price for offer in result.offers] == [100000, 100001]
+
+
+@pytest.mark.parametrize('price,accepted', [('99999.99',False), ('100000',True), ('100000.01',True)])
+def test_minimum_price_is_rechecked_before_local_result_limit(price, accepted):
+    result = alean.search_tours(settings(), Session(change={'price':price}),
+        info(budget=100000, budget_open_ended=True, budget_min_rub=100000))
+    assert bool(result.offers) is accepted
+
+
+@pytest.mark.parametrize('floor', [-1, 2147483648, True, '100000', 100000.5])
+def test_invalid_minimum_budget_never_reaches_supplier(floor):
+    session = Session()
+    result = alean.search_tours(settings(), session, info(budget_min_rub=floor))
+    assert result.error and not session.calls

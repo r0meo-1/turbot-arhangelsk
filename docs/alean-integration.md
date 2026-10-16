@@ -210,3 +210,10 @@ with a successful `GetTours` response verifies access, not available inventory.
 The Telegram Tutu fallback now uses separately selected nights to derive the
 return date when the customer supplies a departure date or preset. Explicit trip
 ranges keep their stated return date.
+
+
+Telegram minimum budgets use an explicit total-RUB `budget_min_rub` boundary,
+translated to SAPI `priceMin` before the supplier applies `count`. The floor is
+also checked locally before truncating offers. SAPI 2.3 pages 10-11 document
+`currencyCode`, `priceMin` (Int32) and `priceMax`. VK uncapped retry queries do
+not set this boundary and retain their existing behavior.
