@@ -54,3 +54,10 @@ def test_release_workflow_has_valid_top_level_keys_and_moderation_gate():
         assert keys <= {'name','on','concurrency','permissions','jobs'}, (name,keys)
         assert {'name','on','jobs'} <= keys
         assert 'vars.VK_MODERATION_FREEZE' in text
+
+
+def test_sender_pins_production_identity_independently_of_host_alias():
+    text=Path('deploy/send-telegram-only.py').read_text()
+    assert 'StrictHostKeyChecking=yes' in text
+    assert 'HostKeyAlias=turbot-production' in text
+    assert 'accept-new' not in text and 'ssh-keyscan' not in text

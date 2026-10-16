@@ -18,7 +18,7 @@ def main():
     if expected!=head or expected!=remote:raise RuntimeError("Only current tested main is deployable")
     subprocess.run(["git","diff","--exit-code","HEAD","--"],check=True,capture_output=True)
     raw=b"TURBOT_TELEGRAM_ONLY_V1\n"+json.dumps(payload(expected)).encode()+b"\n"
-    subprocess.run(["ssh","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes","root@"+os.environ["DEPLOY_HOST"],"true"],input=raw,check=True)
+    subprocess.run(["ssh","-o","BatchMode=yes","-o","StrictHostKeyChecking=yes","-o","HostKeyAlias=turbot-production","root@"+os.environ["DEPLOY_HOST"],"true"],input=raw,check=True)
 
 
 if __name__=="__main__":main()
