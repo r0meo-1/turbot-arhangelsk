@@ -17,10 +17,10 @@
     // A blur/change event must not remove a suggestion under the pointer
     // between pointerdown and click.
     if (catalog && renderedCity === city) return;
+    renderedCity = catalog ? city : undefined;
     box.replaceChildren();
     box.hidden = true;
     if (!city || !catalog) return;
-    renderedCity = city;
     if (!catalog.complete) {
       box.hidden = false;
       box.textContent = 'Поддержку города проверим при поиске. Параметры можно сохранить.';

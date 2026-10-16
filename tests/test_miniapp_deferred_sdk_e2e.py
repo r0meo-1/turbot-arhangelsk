@@ -65,6 +65,9 @@ def test_departure_advice_never_changes_city_without_explicit_choice(surface, co
             assert page.get_by_role('button', name='Вылет из: Санкт-Петербург').count() == 0
             if complete:
                 assert 'наличие не проверено' in page.locator('#departure-support').inner_text()
+                page.locator('#departure').fill('')
+                page.locator('#departure').fill('Архангельск')
+                pw.expect(page.locator('#departure-support')).to_be_visible()
                 page.get_by_role('button', name='Вылет из: Москва').click()
                 assert page.locator('#departure').input_value() == 'Москва'
             else:
