@@ -4193,7 +4193,9 @@ def _process_review(chat_id: int, data: str, message: Dict[str, Any], info: Dict
             _show_package_page(chat_id, info, index)
         elif kind == 'details':
             offer = _tourvisor.TourOffer(**offers[index])
-            text = _tourvisor.format_client_message(_tourvisor.SearchResult(offers=[offer]))
+            from shared import tour_cards
+            info['_package_page'] = index // 3
+            text = tour_cards.card(offers[index], info, number=index+1)
             send_message(chat_id, text + '\n\nСостав: ' + _party_text(info) + '\nЗаявка менеджеру не отправлена.',
                 reply_markup=inline_keyboard([
                     [_inline_btn('⭐ В избранное', f'{CB_REVIEW_PREFIX}fav_{index}:{parts[2]}')],
@@ -4596,16 +4598,20 @@ def _decode_selected_package(selected):
 
 
 def _show_package_page(chat_id: int, info: Dict[str, Any], page: int = 0) -> None:
+    from shared import tour_cards
     pool = info.get('_package_offers') or []
     count = max(1, (len(pool) + 2) // 3)
     page %= count
+    info['_package_page'] = page
     token = info['review_token']
     offset = page * 3
     shown = pool[offset:offset+3]
     result = _tourvisor.SearchResult(offers=[_tourvisor.TourOffer(**row) for row in shown],
         partial=bool(info.get('_package_warning')), warning=info.get('_package_warning') or '')
     text = f'Страница {page+1} из {count}\nСостав: {_party_text(info)}\n\n'
-    text += _tourvisor.format_client_message(result, max_len=2800, start_index=offset+1)
+    if result.partial:
+        text += '⚠️ ' + (result.warning or 'Результаты неполные: часть диапазона не проверена.') + '\n\n'
+    text += tour_cards.results(shown, info, start_index=offset+1)
     text += '\n\nЦены указаны на всех туристов. Заявка менеджеру не отправлена.'
     buttons = [[_inline_btn(f'Подробнее №{offset+i+1}', f'{CB_REVIEW_PREFIX}details_{offset+i}:{token}')]
                for i in range(len(shown))]
@@ -4629,10 +4635,10 @@ def _show_package_favorites(chat_id, info, *, compare=False):
     if len(offers) >= 2:
         buttons.append([_inline_btn('⚖️ Сравнить 2–3 тура', f'{CB_REVIEW_PREFIX}compare:{token}')])
     buttons.extend([
-        [_inline_btn('◀️ К предложениям', f'{CB_REVIEW_PREFIX}page_0:{token}')],
+        [_inline_btn('◀️ К предложениям', f'{CB_REVIEW_PREFIX}page_{info.get("_package_page", 0)}:{token}')],
         [_inline_btn('◀️ К параметрам', f'{CB_REVIEW_PREFIX}show:{token}')],
         [_inline_btn(CANCEL_BUTTON_TEXT, f'{CB_REVIEW_PREFIX}cancel:{token}')]])
-    send_message(chat_id, favorites.render(offers, compare=compare), reply_markup=inline_keyboard(buttons))
+    send_message(chat_id, favorites.render(offers, compare=compare, info=info), reply_markup=inline_keyboard(buttons))
 
 
 @_serialized_dialog

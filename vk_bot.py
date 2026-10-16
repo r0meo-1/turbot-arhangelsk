@@ -2070,6 +2070,7 @@ def _no_tours_keyboard(show_over_budget: bool = False) -> str:
     if show_over_budget:
         rows.append([_btn(TOUR_SHOW_OVER_BUDGET_TEXT, "primary")])
     rows.extend([
+        [_btn('🔎 Повторить поиск', 'primary')],
         [_btn(TOUR_SEND_MANAGER_TEXT, "positive")],
         [_btn(TOUR_EDIT_DATES_TEXT, "secondary"), _btn(TOUR_EDIT_BUDGET_TEXT, "secondary")],
         [_btn(BACK_BUTTON_TEXT, "secondary"), _btn(CANCEL_BUTTON_TEXT, "negative")],
@@ -3264,7 +3265,8 @@ def _send_tour_results_page(user_id: int, page: int) -> None:
     header += f"👥 Состав: {party}. Цены — за тур на всех туристов.\n\n"
     if live.get("_tour_partial_notice"):
         header = "⚠️ " + live["_tour_partial_notice"] + "\n\n" + header
-    content = _tourvisor.format_client_message(result, start_index=offset + 1)
+    from shared import tour_cards
+    content = tour_cards.results(offers, live, start_index=offset + 1)
     send_message(
         user_id,
         header + content,
@@ -3283,8 +3285,7 @@ def _selected_tour_summary(info: Dict[str, Any], *, include_internal: bool = Tru
     parts = [f"🏨 {title}"]
     if offer.get("region"):
         parts.append(f"📍 {offer['region']}")
-    if offer.get("departure"):
-        parts.append(f"🛫 Вылет из {offer['departure']}")
+    parts.append(f"🛫 Вылет из {offer.get('departure') or info.get('origin') or 'не указан'}")
     trip_details = []
     if offer.get("date"):
         trip_details.append(_tourvisor.display_date(offer["date"]))
@@ -3296,7 +3297,10 @@ def _selected_tour_summary(info: Dict[str, Any], *, include_internal: bool = Tru
         parts.append(f"🍽 {_tourvisor.meal_label(offer['meal'])}")
     if offer.get("room"):
         parts.append(f"🛏 Номер: {offer['room']}")
-    parts.append(f"💰 {_compact_tour_price(offer)} за тур")
+    from shared import tour_cards
+    parts.append(f"💰 {tour_cards.facts(offer, info)['Цена на всех']} за тур на всех туристов")
+    if info.get('people'):
+        parts.append('👥 Состав: ' + tour_cards.party(info))
     if offer.get("operator"):
         parts.append(f"Туроператор: {offer['operator']}")
     provider = str(offer.get("provider") or "").strip().lower()
@@ -3425,7 +3429,7 @@ def _actualize_selected_tour_worker(
         price_line = "\nЦена и наличие остаются предварительными до проверки менеджером."
 
     message_text = (
-        f"{intro}\n\n{_selected_tour_summary({'selected_tour': current}, include_internal=False)}\n\n"
+        f"{intro}\n\n{_selected_tour_summary(dict(user_data.get(user_id) or {}, selected_tour=current), include_internal=False)}\n\n"
         f"{_client_tour_status(current, actual)}"
         f"{price_line}\n\n"
         "Можно передать этот вариант Наталье для финальной проверки 👇"
@@ -3480,7 +3484,7 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
         provider_label = "Слетать.ру" if provider == "sletat" else "Tourvisor"
         send_message(
             user_id,
-            f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer}, include_internal=False)}\n\n"
+            f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary(dict(live, selected_tour=offer), include_internal=False)}\n\n"
             f"⏳ Перепроверяю цену и наличие в {provider_label}…",
             keyboard=_hide_keyboard(),
         )
@@ -3500,7 +3504,7 @@ def _select_tour(user_id: int, number: int, *, selection: Optional[Dict[str, Any
     )
     send_message(
         user_id,
-        f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary({'selected_tour': offer}, include_internal=False)}\n\n"
+        f"✅ Вы выбрали вариант №{number}:\n\n{_selected_tour_summary(dict(live, selected_tour=offer), include_internal=False)}\n\n"
         f"{_client_tour_status(offer, actual)}\n\n"
         "Цена и наличие предварительные до проверки менеджером. "
         "Можно передать вариант Наталье 👇",
@@ -3639,7 +3643,7 @@ def _show_tour_favorites(user_id, *, compare=False):
         rows.append([_btn('⚖️ Сравнить 2–3 тура', 'primary', {'command': 'favorite_compare'})])
     rows.append([_btn('◀️ К предложениям', 'secondary', {'command': 'favorite_back'}),
                  _btn(CANCEL_BUTTON_TEXT, 'negative')])
-    send_message(user_id, favorites.render(offers, compare=compare), keyboard=_keyboard(rows))
+    send_message(user_id, favorites.render(offers, compare=compare, info=info), keyboard=_keyboard(rows))
 
 
 def _favorite_action(user_id, payload):
@@ -3797,6 +3801,7 @@ def _step_review(user_id: int, text: str, message: Dict[str, Any], info: Dict[st
         "показать варианты",
         "показать туры",
         "показать отели",
+        '🔎 Повторить поиск',
     ):
         _start_tour_search(user_id, info)
         return

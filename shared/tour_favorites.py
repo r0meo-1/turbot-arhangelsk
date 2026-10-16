@@ -75,17 +75,18 @@ def change(cursor, user_id, info, offer=None, *, remove=None):
         return 'added'
 
 
-def render(offers, *, compare=False):
+def render(offers, *, compare=False, info=None):
     if compare and len(offers) < 2:
         return 'Для сравнения добавьте в избранное 2–3 тура.'
     if not offers:
         return '⭐ Избранное пока пусто. Откройте предложение и добавьте его в избранное.'
+    from shared import tour_cards
+    if compare:
+        return tour_cards.comparison(offers[:3], info)
     title = '⚖️ Сравнение туров' if compare else '⭐ Избранное'
     lines = [title + f' ({len(offers)}/3)',
              'Сохранённые цены предварительные; наличие и итоговую стоимость нужно проверить заново.']
     for number, offer in enumerate(offers, 1):
-        lines.append(tourvisor.format_client_message(
-            tourvisor.SearchResult(offers=[tourvisor.TourOffer(**_snapshot(offer))]),
-            max_len=950, start_index=number))
+        lines.append(tour_cards.card(_snapshot(offer), info, number=number))
     lines.append('Цены — на всех туристов текущего подбора. Заявка менеджеру не отправлена.')
     return '\n\n'.join(lines)
