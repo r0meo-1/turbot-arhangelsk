@@ -53,18 +53,19 @@
           <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Страна или курорт" required>
         </div>
         <div class="chips" aria-label="Популярные направления">
-          <button class="chip" type="button" data-destination="Таиланд">Таиланд</button>
-          <button class="chip" type="button" data-destination="Египет">Египет</button>
-          <button class="chip" type="button" data-destination="Турция">Турция</button>
           <button class="chip" type="button" data-destination="Сочи">Сочи</button>
+          <button class="chip" type="button" data-destination="Казань">Казань</button>
+          <button class="chip" type="button" data-destination="Калининград">Калининград</button>
+          <button class="chip" type="button" data-destination="Кисловодск">Кисловодск</button>
         </div>
-        <p class="hint destination-hint">Список меняется в зависимости от выбранного направления.</p>
+        <p class="hint destination-hint">Здесь выберите, куда едете. Для вылета укажите российский город ниже.</p>
       </section>
 
       <section class="grid">
         <label class="card field-card">
-          <span>Вылет</span>
-          <input id="departure" name="departure" type="text" maxlength="100" placeholder="Архангельск" value="Архангельск" required>
+          <span>Город вылета по России</span>
+          <input id="departure" name="departure" type="text" autocomplete="off" maxlength="100" placeholder="Выберите российский город" value="Архангельск" aria-describedby="departure-hint" required>
+          <small id="departure-hint" class="hint">Выберите город из российского списка.</small>
         </label>
         <div class="card field-card">
           <label for="nights-mode">Длительность поездки</label>

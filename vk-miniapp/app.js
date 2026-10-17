@@ -165,6 +165,16 @@
   const setDestinationDirection = (direction) => {
     if (!DESTINATIONS[direction]) return;
     activeDestinationDirection = direction;
+    if (destination.value.trim() && !DESTINATIONS[direction].includes(destination.value.trim())) {
+      destination.value = '';
+      destination.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const hint = document.querySelector('.destination-hint');
+    if (hint) {
+      hint.textContent = direction === 'domestic'
+        ? 'Выберите российский город или курорт. Ниже укажите российский город вылета.'
+        : 'Выберите страну или курорт. Ниже укажите российский город вылета.';
+    }
     document.querySelectorAll('[data-destination-direction]').forEach((button) => {
       const active = button.dataset.destinationDirection === direction;
       button.classList.toggle('active', active);
@@ -219,6 +229,17 @@
     departure.setAttribute('autocomplete', 'off');
     departure.insertAdjacentElement('afterend', suggestions);
   };
+
+  const updateDepartureValidity = () => {
+    const value = departure.value.trim().toLocaleLowerCase('ru-RU');
+    const allowed = DEPARTURE_CITIES.some((city) => city.toLocaleLowerCase('ru-RU') === value);
+    departure.setCustomValidity(value && !allowed
+      ? 'Выберите город вылета из списка российских городов.'
+      : '');
+  };
+  departure.addEventListener('input', updateDepartureValidity);
+  departure.addEventListener('change', updateDepartureValidity);
+  updateDepartureValidity();
 
 
   const money = (n) => `${Number(n).toLocaleString('ru-RU')} ₽`;
