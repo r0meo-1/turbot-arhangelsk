@@ -186,3 +186,30 @@ def test_production_entrypoints_use_guarded_vk_runtime():
     assert '"$repo/deploy/vk-turbot.service"' in deploy
     assert "/etc/systemd/system/turbot.service" in deploy
     assert "/etc/systemd/system/vk-turbot.service" in deploy
+
+
+def test_followup_copy_distinguishes_resume_restart_and_cancel():
+    text = vk_followup.followup_text("Москва")
+    assert "подбор тура по направлению «Москва»" in text
+    assert "Напишите «Начать»" in text
+    assert "продолжить с сохранёнными параметрами или начать заново" in text
+    assert "Чтобы отменить подбор, напишите «Отмена»" in text
+    assert "Напишите «Начать», чтобы начать заново" not in text
+
+
+def test_legacy_vk_followup_uses_the_same_resume_instructions(monkeypatch):
+    import vk_bot as bot
+
+    user_id = 987_654_321
+    sent = []
+    monkeypatch.setattr(bot, "FOLLOWUP_DELAY_HOURS", 1)
+    monkeypatch.setattr(bot, "DIALOG_TIMEOUT_HOURS", 0)
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: sent.append((uid, text)))
+    monkeypatch.setattr(bot, "_mark_dirty", lambda *args, **kwargs: None)
+    bot.user_data[user_id] = {"updated_at": int(time.time()) - 7200, "destination": "Москва"}
+    try:
+        assert bot._send_followups() == 1
+        assert sent[0][0] == user_id
+        assert sent[0][1] == vk_followup.followup_text("Москва")
+    finally:
+        bot.user_data.pop(user_id, None)

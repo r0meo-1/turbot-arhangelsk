@@ -20,6 +20,18 @@ from typing import Any
 _TABLE = "vk_followup_claims"
 
 
+def followup_text(destination: str = "") -> str:
+    """Explain the actual resume/restart/cancel choices without ambiguity."""
+    destination = " ".join(str(destination or "").split())[:80]
+    hint = f" по направлению «{destination}»" if destination else ""
+    return (
+        f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
+        "Продолжить подбор или начать заново? Напишите «Начать» — "
+        "бот предложит продолжить с сохранёнными параметрами или начать заново.\n"
+        "Чтобы отменить подбор, напишите «Отмена»."
+    )
+
+
 def _cutoffs(bot: Any, now: int) -> tuple[int, int]:
     delay_cutoff = now - int(bot.FOLLOWUP_DELAY_HOURS) * 3600
     timeout_hours = int(bot.DIALOG_TIMEOUT_HOURS)
@@ -165,12 +177,9 @@ def send_followups(bot: Any) -> int:
         ):
             continue
 
-        destination = str(row["destination"] or "")
-        hint = f" в {destination}" if destination else ""
         response = bot.send_message(
             chat_id,
-            f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
-            "Продолжить? Напишите «Начать», чтобы начать заново, «Отмена», чтобы отменить.",
+            followup_text(str(row["destination"] or "")),
         )
         if response is None:
             # A known API failure is safe to retry later because VK did not

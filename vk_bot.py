@@ -96,6 +96,7 @@ from shared.log_privacy import correlation_id as _log_correlation
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared.ai_provider import build_selection_provider
 from shared import mdt as mdt_shared
+from shared import vk_followup as _vk_followup
 
 load_dotenv()
 
@@ -4507,12 +4508,7 @@ def _send_followups() -> int:
         ]
     for cid, info in candidates:
         dest = info.get("destination", "")
-        hint = f" в {dest}" if dest else ""
-        send_message(
-            cid,
-            f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
-            "Напишите «Начать», чтобы продолжить подбор или начать заново, «Отмена», чтобы отменить.",
-        )
+        send_message(cid, _vk_followup.followup_text(dest))
         with _lock:
             if cid in user_data:
                 user_data[cid]["_followed_up"] = True
