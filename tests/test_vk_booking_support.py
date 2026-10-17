@@ -246,7 +246,35 @@ def test_booking_support_requires_a_category_before_free_text(tmp_path):
     session = support._get_session(bot, user_id)
     assert session["stage"] == "change"
     assert session["category"] == "payment"
-    assert "условия и сроки проверит менеджер" in bot.sent[-1][1].casefold()
+    assert "данные банковской карты" in bot.sent[-1][1].casefold()
+
+
+def test_category_guidance_sets_cancellation_expectations(tmp_path):
+    bot = FakeBot(tmp_path / "vk.sqlite")
+    user_id = 708
+    support.handle_message(bot, _event(user_id, "Моя бронь"))
+    support.handle_message(bot, _event(user_id, "12115906"))
+    support.handle_message(bot, _event(user_id, "Ivan Ivanov"))
+    support.handle_message(bot, _event(user_id, "↩️ Отмена и возврат"))
+
+    text = bot.sent[-1][1].casefold()
+    assert "а не отмена брони" in text
+    assert "условия, сроки и возможный возврат" in text
+
+
+def test_payment_card_with_spaces_is_rejected_without_persisting(tmp_path):
+    bot = FakeBot(tmp_path / "vk.sqlite")
+    user_id = 709
+    support.handle_message(bot, _event(user_id, "Моя бронь"))
+    support.handle_message(bot, _event(user_id, "12115906"))
+    support.handle_message(bot, _event(user_id, "Ivan Ivanov"))
+    support.handle_message(bot, _event(user_id, "💳 Оплата и остаток"))
+
+    assert support.handle_message(bot, _event(user_id, "Карта 4111 1111 1111 1111"))
+    session = support._get_session(bot, user_id)
+    assert session["stage"] == "change"
+    assert session["change_text"] is None
+    assert "реквизиты" in bot.sent[-1][1].casefold()
 
 
 def test_existing_booking_schema_migrates_category_without_losing_session(tmp_path):
