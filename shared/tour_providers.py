@@ -115,6 +115,7 @@ def search_tours(
     last_search_id = None
     partial_results = []
     attempted_results = []
+    direct_filter_skipped = False
 
     failed_before_success = False
     for name in settings.enabled_names():
@@ -123,6 +124,7 @@ def search_tours(
         # Travelata's current adapter has no verified direct-flight filter.
         # Falling back to it would silently drop an explicit customer condition.
         if info.get("direct_only") and name == "travelata":
+            direct_filter_skipped = True
             errors.append("travelata: фильтр прямого перелёта не поддерживается")
             continue
         attempted = True
@@ -181,6 +183,11 @@ def search_tours(
         failed_before_success = True
 
     if not attempted:
+        if direct_filter_skipped and info.get("direct_only"):
+            return _tourvisor.SearchResult(
+                error="Подключённые источники не выполнили поиск с фильтром прямого перелёта",
+                error_code="manual_selection",
+            ), ""
         return _tourvisor.SearchResult(
             error="; ".join(errors) or "Автоматический поиск туров сейчас не настроен"
         ), ""

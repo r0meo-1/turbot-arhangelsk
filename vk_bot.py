@@ -3143,9 +3143,18 @@ def _tour_search_worker(
 def _publish_tour_search_result(user_id, marker, snapshot, result, provider_names, wait_message_id):
     search_failed = bool(result.error) and not result.offers
     departure_unsupported = search_failed and result.error_code == 'departure_unsupported'
+    manual_selection = search_failed and result.error_code == 'manual_selection'
     if departure_unsupported:
         failure_title = '🛫 Этот город вылета не поддерживается автоматическим поиском. Наличие туров не проверено.'
         failure_text = unsupported_departure_text(snapshot.get('origin'))
+    elif manual_selection:
+        failure_title = "🛫 Нужна ручная проверка прямого перелёта."
+        failure_text = (
+            "🛫 Подключённые источники не смогли проверить варианты только с прямым перелётом. "
+            "Это не означает, что таких туров нет.\n\n"
+            "Измените условие перелёта или отдельно попросите менеджера проверить варианты. "
+            "Заявка менеджеру не отправлена."
+        )
     elif search_failed and result.warning:
         failure_title = "⚠️ Диапазон проверен не полностью."
         failure_text = result.warning + " Нельзя утверждать, что подходящих туров нет."
@@ -3248,7 +3257,7 @@ def _publish_tour_search_result(user_id, marker, snapshot, result, provider_name
         [_btn('🛫 Изменить город вылета', 'primary')],
         [_btn(TOUR_SEND_MANAGER_TEXT, 'positive')],
         [_btn(BACK_BUTTON_TEXT), _btn(CANCEL_BUTTON_TEXT, 'negative')],
-    ]) if departure_unsupported else _no_tours_keyboard(can_show_over))
+    ]) if departure_unsupported or manual_selection else _no_tours_keyboard(can_show_over))
     send_message(user_id, message_text, keyboard=keyboard)
 
 

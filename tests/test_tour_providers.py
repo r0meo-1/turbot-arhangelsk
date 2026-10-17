@@ -198,7 +198,8 @@ def test_direct_only_with_only_unsupported_provider_returns_no_inventory(monkeyp
     monkeypatch.setattr(settings, "enabled_names", lambda: ["travelata"])
     result, name = tour_providers.search_tours(settings, object(), dict(_info(), direct_only=True))
     assert not result.offers and not name
-    assert "фильтр прямого перелёта не поддерживается" in result.error
+    assert "не выполнили поиск с фильтром прямого перелёта" in result.error
+    assert result.error_code == "manual_selection"
 
 
 def test_sletat_direct_only_reaches_gateway_filter():
