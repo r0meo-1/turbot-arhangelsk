@@ -1,4 +1,6 @@
 """Bounded client-facing tour facts; no search, booking or enquiry effects."""
+from decimal import Decimal
+
 from shared import tourvisor as tv
 
 
@@ -97,7 +99,10 @@ def comparison(offers, info=None):
             else:
                 lines.append(key + ': ' + rows[0][key])
     if len({offer.get('currency') or 'RUB' for offer in offers}) == 1 and all((offer.get('price') or 0) > 0 for offer in offers):
-        totals = [(offer.get('price') or 0) + (offer.get('fuel_charge') or 0) for offer in offers]
+        totals = [
+            Decimal(str(offer.get('price') or 0)) + Decimal(str(offer.get('fuel_charge') or 0))
+            for offer in offers
+        ]
         spread = max(totals) - min(totals)
         if spread:
             lines.append('\nРазница между максимальной и минимальной ценой: ' + tv._format_price(spread, offers[0].get('currency') or 'RUB'))

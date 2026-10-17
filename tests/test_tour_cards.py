@@ -42,3 +42,9 @@ def test_long_supplier_fields_fit_messenger_limits_without_internal_ids():
     text = cards.comparison(offers)
     assert len(text) < 4096 and 'private:offer' not in text
     assert len(cards.results(offers, dict(people=2))) < 4096
+
+
+def test_comparison_rounds_currency_spread_without_binary_float_noise():
+    text = cards.comparison([offer(price=370.04, fuel_charge=0), offer(price=370.03, fuel_charge=0)])
+    assert '0.01 ₽' in text
+    assert '0.009999' not in text

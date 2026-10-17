@@ -96,6 +96,7 @@ from shared.log_privacy import correlation_id as _log_correlation
 from shared.ai import generate_ai_selection as _shared_generate_ai
 from shared.ai_provider import build_selection_provider
 from shared import mdt as mdt_shared
+from shared import vk_followup as _vk_followup
 
 load_dotenv()
 
@@ -3143,9 +3144,18 @@ def _tour_search_worker(
 def _publish_tour_search_result(user_id, marker, snapshot, result, provider_names, wait_message_id):
     search_failed = bool(result.error) and not result.offers
     departure_unsupported = search_failed and result.error_code == 'departure_unsupported'
+    manual_selection = search_failed and result.error_code == 'manual_selection'
     if departure_unsupported:
         failure_title = '🛫 Этот город вылета не поддерживается автоматическим поиском. Наличие туров не проверено.'
         failure_text = unsupported_departure_text(snapshot.get('origin'))
+    elif manual_selection:
+        failure_title = "🛫 Нужна ручная проверка прямого перелёта."
+        failure_text = (
+            "🛫 Подключённые источники не смогли проверить варианты только с прямым перелётом. "
+            "Это не означает, что таких туров нет.\n\n"
+            "Измените условие перелёта или отдельно попросите менеджера проверить варианты. "
+            "Заявка менеджеру не отправлена."
+        )
     elif search_failed and result.warning:
         failure_title = "⚠️ Диапазон проверен не полностью."
         failure_text = result.warning + " Нельзя утверждать, что подходящих туров нет."
@@ -3248,7 +3258,7 @@ def _publish_tour_search_result(user_id, marker, snapshot, result, provider_name
         [_btn('🛫 Изменить город вылета', 'primary')],
         [_btn(TOUR_SEND_MANAGER_TEXT, 'positive')],
         [_btn(BACK_BUTTON_TEXT), _btn(CANCEL_BUTTON_TEXT, 'negative')],
-    ]) if departure_unsupported else _no_tours_keyboard(can_show_over))
+    ]) if departure_unsupported or manual_selection else _no_tours_keyboard(can_show_over))
     send_message(user_id, message_text, keyboard=keyboard)
 
 
@@ -4498,12 +4508,7 @@ def _send_followups() -> int:
         ]
     for cid, info in candidates:
         dest = info.get("destination", "")
-        hint = f" в {dest}" if dest else ""
-        send_message(
-            cid,
-            f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
-            "Напишите «Начать», чтобы продолжить подбор или начать заново, «Отмена», чтобы отменить.",
-        )
+        send_message(cid, _vk_followup.followup_text(dest))
         with _lock:
             if cid in user_data:
                 user_data[cid]["_followed_up"] = True
