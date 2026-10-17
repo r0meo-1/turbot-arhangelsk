@@ -87,7 +87,7 @@ class FakeSletatSession:
         row[9] = "Deluxe Sea View"
         row[10] = "AI"
         row[11] = "DBL"
-        row[12] = "16.10.2026"
+        row[12] = "16.11.2026"
         row[14] = 10
         row[15] = "219000 RUB"
         row[18] = "FUN&SUN"
@@ -163,7 +163,7 @@ def _info():
     return {
         "destination": "Таиланд",
         "origin": "Архангельск",
-        "dates": "16-17 октября 2026",
+        "dates": "16-17 ноября 2026",
         "nights": 10,
         "dates_are_trip": False,
         "people": "2",
@@ -280,7 +280,7 @@ def test_sletat_search_maps_gateway_result_to_turbot_offer():
     assert offer.hotel == "Phuket Beach Resort"
     assert offer.category == 5
     assert offer.region == "Пхукет"
-    assert offer.date == "16.10.2026"
+    assert offer.date == "16.11.2026"
     assert offer.nights == 10
     assert offer.meal == "AI"
     assert offer.operator == "FUN&SUN"
@@ -297,8 +297,8 @@ def test_sletat_search_maps_gateway_result_to_turbot_offer():
     assert params["password"] == "secret"
     assert params["cityFromId"] == 17
     assert params["countryId"] == 92
-    assert params["s_departFrom"] == "16/10/2026"
-    assert params["s_departTo"] == "17/10/2026"
+    assert params["s_departFrom"] == "16/11/2026"
+    assert params["s_departTo"] == "17/11/2026"
     assert params["s_nightsMin"] == 10
     assert params["s_nightsMax"] == 10
     assert params["s_priceMax"] == 250000
@@ -365,7 +365,7 @@ def test_router_prefers_configured_sletat_even_with_legacy_order(monkeypatch):
         hotel="Sletat First",
         category=5,
         region="Пхукет",
-        date="16.10.2026",
+        date="16.11.2026",
         nights=10,
         meal="AI",
         room="DBL",
