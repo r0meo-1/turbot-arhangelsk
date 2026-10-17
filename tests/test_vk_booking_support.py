@@ -87,7 +87,9 @@ def _submit_request(bot: FakeBot, user_id: int = 101) -> int:
     assert support.handle_message(bot, _event(user_id, "Моя бронь"))
     assert support.handle_message(bot, _event(user_id, "12115906"))
     assert support.handle_message(bot, _event(user_id, "Mikhail Korelskii"))
+    assert support.handle_message(bot, _event(user_id, "👤 Данные туриста"))
     assert support.handle_message(bot, _event(user_id, "исправить фамилию на KORELSKII"))
+    assert "Тема: 👤 Данные туриста" in bot.sent[-1][1]
     assert support.handle_message(bot, _event(user_id, "Подтвердить"))
     with bot._db_cursor() as cur:
         row = cur.execute(
@@ -113,6 +115,7 @@ def test_booking_support_collects_safe_request_and_persists_it(tmp_path):
     assert row["booking_no"] == "12115906"
     assert row["tourist_name"] == "Mikhail Korelskii"
     assert row["change_text"] == "исправить фамилию на KORELSKII"
+    assert row["category"] == "traveler_details"
     assert row["status"] == "new"
     assert session is None
     assert "Статус брони 12115906" in bot.sent[-1][1]
@@ -124,6 +127,7 @@ def test_support_rejects_passport_number_and_attachments(tmp_path):
     support.handle_message(bot, _event(user_id, "Моя бронь"))
     support.handle_message(bot, _event(user_id, "12115906"))
     support.handle_message(bot, _event(user_id, "Ivan Ivanov"))
+    support.handle_message(bot, _event(user_id, "👤 Данные туриста"))
 
     assert support.handle_message(bot, _event(user_id, "паспорт 1234567890"))
     session = support._get_session(bot, user_id)
@@ -216,3 +220,43 @@ def test_install_adds_existing_booking_button_and_intercepts_trigger(tmp_path):
     normal = _event(607, "какой сегодня день")
     bot._process_message(normal)
     assert bot.original_calls == [normal]
+
+
+def test_booking_support_requires_a_category_before_free_text(tmp_path):
+    bot = FakeBot(tmp_path / "vk.sqlite")
+    user_id = 707
+    support.handle_message(bot, _event(user_id, "Моя бронь"))
+    support.handle_message(bot, _event(user_id, "12115906"))
+    support.handle_message(bot, _event(user_id, "Ivan Ivanov"))
+
+    session = support._get_session(bot, user_id)
+    assert session["stage"] == "category"
+    keyboard = json.loads(bot.sent[-1][2]["keyboard"])
+    labels = [button["action"]["label"] for row in keyboard["buttons"] for button in row]
+    assert "💳 Оплата и остаток" in labels
+    assert "📄 Документы и статус" in labels
+    assert "👤 Данные туриста" in labels
+    assert "🧳 Багаж и доп. услуги" in labels
+    assert "↩️ Отмена и возврат" in labels
+    assert "❔ Другое" in labels
+
+    support.handle_message(bot, _event(user_id, "оплата"))
+    assert support._get_session(bot, user_id)["stage"] == "category"
+    support.handle_message(bot, _event(user_id, "💳 Оплата и остаток"))
+    session = support._get_session(bot, user_id)
+    assert session["stage"] == "change"
+    assert session["category"] == "payment"
+    assert "условия и сроки проверит менеджер" in bot.sent[-1][1].casefold()
+
+
+def test_existing_booking_schema_migrates_category_without_losing_session(tmp_path):
+    bot = FakeBot(tmp_path / "vk.sqlite")
+    support._upsert_session(bot, 808, stage="category", booking_no="12115906", tourist_name="Test Tourist")
+    with bot._db_cursor(commit=True) as cur:
+        cur.execute(f"ALTER TABLE {support.SESSION_TABLE} DROP COLUMN category")
+        cur.execute(f"ALTER TABLE {support.REQUEST_TABLE} DROP COLUMN category")
+    support.ensure_schema(bot)
+    session = support._get_session(bot, 808)
+    assert session["stage"] == "category"
+    assert session["booking_no"] == "12115906"
+    assert session["category"] is None

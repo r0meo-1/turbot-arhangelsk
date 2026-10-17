@@ -21,6 +21,16 @@ from typing import Any, Optional
 SESSION_TABLE = "vk_booking_support_sessions"
 REQUEST_TABLE = "booking_support_requests"
 BOOKING_BUTTON_TEXT = "🧾 Моя бронь"
+_ISSUE_CATEGORIES = (
+    ("payment", "💳 Оплата и остаток"),
+    ("documents_status", "📄 Документы и статус"),
+    ("traveler_details", "👤 Данные туриста"),
+    ("extras", "🧳 Багаж и доп. услуги"),
+    ("cancellation_refund", "↩️ Отмена и возврат"),
+    ("other", "❔ Другое"),
+)
+_CATEGORY_BY_LABEL = {label.casefold(): value for value, label in _ISSUE_CATEGORIES}
+_CATEGORY_LABEL = {value: label for value, label in _ISSUE_CATEGORIES}
 
 _TRIGGER_TEXTS = {
     "моя бронь",
@@ -61,6 +71,7 @@ def ensure_schema(bot: Any) -> None:
                 stage TEXT NOT NULL,
                 booking_no TEXT,
                 tourist_name TEXT,
+                category TEXT,
                 change_text TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
@@ -75,6 +86,7 @@ def ensure_schema(bot: Any) -> None:
                 source TEXT NOT NULL DEFAULT 'vk',
                 booking_no TEXT NOT NULL,
                 tourist_name TEXT NOT NULL,
+                category TEXT,
                 change_text TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'new',
                 external_case_no TEXT,
@@ -84,6 +96,10 @@ def ensure_schema(bot: Any) -> None:
             )
             """
         )
+        for table in (SESSION_TABLE, REQUEST_TABLE):
+            columns = {row[1] for row in cur.execute(f"PRAGMA table_info({table})")}
+            if "category" not in columns:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN category TEXT")
         cur.execute(
             f"CREATE INDEX IF NOT EXISTS idx_{REQUEST_TABLE}_user_booking "
             f"ON {REQUEST_TABLE}(user_id, booking_no, id)"
@@ -117,18 +133,20 @@ def _upsert_session(bot: Any, user_id: int, **fields: Any) -> None:
         "stage": fields.get("stage", current.get("stage", "booking")),
         "booking_no": fields.get("booking_no", current.get("booking_no")),
         "tourist_name": fields.get("tourist_name", current.get("tourist_name")),
+        "category": fields.get("category", current.get("category")),
         "change_text": fields.get("change_text", current.get("change_text")),
     }
     with bot._db_cursor(commit=True) as cur:
         cur.execute(
             f"""
             INSERT INTO {SESSION_TABLE}
-                (user_id, stage, booking_no, tourist_name, change_text, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (user_id, stage, booking_no, tourist_name, category, change_text, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 stage=excluded.stage,
                 booking_no=excluded.booking_no,
                 tourist_name=excluded.tourist_name,
+                category=excluded.category,
                 change_text=excluded.change_text,
                 updated_at=excluded.updated_at
             """,
@@ -137,6 +155,7 @@ def _upsert_session(bot: Any, user_id: int, **fields: Any) -> None:
                 data["stage"],
                 data["booking_no"],
                 data["tourist_name"],
+                data["category"],
                 data["change_text"],
                 int(current.get("created_at") or now),
                 now,
@@ -149,9 +168,13 @@ def _clear_session(bot: Any, user_id: int) -> None:
         cur.execute(f"DELETE FROM {SESSION_TABLE} WHERE user_id = ?", (user_id,))
 
 
-def _keyboard(bot: Any, *, confirm: bool = False) -> Optional[str]:
+def _keyboard(bot: Any, *, confirm: bool = False, categories: bool = False) -> Optional[str]:
     try:
         rows = []
+        if categories:
+            labels = [label for _, label in _ISSUE_CATEGORIES]
+            rows.extend([labels[i:i + 2] for i in range(0, len(labels), 2)])
+            rows = [[bot._btn(label, "secondary") for label in row] for row in rows]
         if confirm:
             rows.append([bot._btn("✅ Подтвердить", "positive")])
         rows.append([bot._btn("Отмена", "negative")])
@@ -160,8 +183,15 @@ def _keyboard(bot: Any, *, confirm: bool = False) -> Optional[str]:
         return None
 
 
-def _send(bot: Any, user_id: int, text: str, *, confirm: bool = False) -> None:
-    keyboard = _keyboard(bot, confirm=confirm)
+def _send(
+    bot: Any,
+    user_id: int,
+    text: str,
+    *,
+    confirm: bool = False,
+    categories: bool = False,
+) -> None:
+    keyboard = _keyboard(bot, confirm=confirm, categories=categories)
     if keyboard is None:
         bot.send_message(user_id, text)
     else:
@@ -197,8 +227,8 @@ def start(bot: Any, user_id: int) -> None:
         bot,
         user_id,
         prefix
-        + "🧾 Помогу передать изменение по уже существующей брони.\n\n"
-        "1/3. Напишите номер заявки туроператора. Например: 12115906.\n\n"
+        + "🧾 Помогу передать вопрос по уже существующей брони.\n\n"
+        "1/4. Напишите номер заявки туроператора. Например: 12115906.\n\n"
         "🔐 Важно: не отправляйте сюда фото паспорта, серию или номер документа. "
         "Такие данные менеджер вносит только в защищённом кабинете туроператора.",
     )
@@ -259,12 +289,13 @@ def _notify_manager(bot: Any, request_id: int, user_id: int, session: dict[str, 
         )
         return
     text = (
-        "🧾 Изменение по существующей брони из VK\n\n"
+        "🧾 Вопрос по существующей брони из VK\n\n"
         f"Внутренний запрос: #{request_id}\n"
         f"VK: https://vk.com/id{user_id}\n"
         f"Номер брони: {session['booking_no']}\n"
         f"Турист: {session['tourist_name']}\n"
-        f"Что изменить: {session['change_text']}\n\n"
+        f"Тема: {_CATEGORY_LABEL.get(session.get('category'), 'Другое')}\n"
+        f"Что нужно: {session['change_text']}\n\n"
         "⚠️ Паспортные номера в VK не собирались. Если нужны реквизиты документа, "
         "запросите их у клиента по защищённому каналу и внесите в агентском кабинете."
     )
@@ -291,13 +322,14 @@ def _submit(bot: Any, user_id: int, session: dict[str, Any]) -> int:
         cur.execute(
             f"""
             INSERT INTO {REQUEST_TABLE}
-                (user_id, source, booking_no, tourist_name, change_text, status, created_at, updated_at)
-            VALUES (?, 'vk', ?, ?, ?, 'new', ?, ?)
+                (user_id, source, booking_no, tourist_name, category, change_text, status, created_at, updated_at)
+            VALUES (?, 'vk', ?, ?, ?, ?, 'new', ?, ?)
             """,
             (
                 user_id,
                 session["booking_no"],
                 session["tourist_name"],
+                session.get("category") or "other",
                 session["change_text"],
                 now,
                 now,
@@ -446,7 +478,7 @@ def handle_message(bot: Any, event: dict[str, Any]) -> bool:
         _send(
             bot,
             user_id,
-            "2/3. Напишите имя и фамилию туриста так, как они сейчас указаны в бронировании. "
+            "2/4. Напишите имя и фамилию туриста так, как они сейчас указаны в бронировании. "
             "Для зарубежного тура лучше латиницей.",
         )
         return True
@@ -459,13 +491,33 @@ def handle_message(bot: Any, event: dict[str, Any]) -> bool:
                 "Нужны только имя и фамилия туриста текстом. Паспортные данные и документы сюда не отправляйте.",
             )
             return True
-        _upsert_session(bot, user_id, stage="change", tourist_name=text.strip())
+        _upsert_session(bot, user_id, stage="category", tourist_name=text.strip())
         _send(
             bot,
             user_id,
-            "3/3. Коротко напишите, что нужно исправить. Например: «фамилию на KORELSKII», "
-            "«дату рождения» или «срок действия паспорта».\n\n"
-            "Не пишите серию/номер паспорта и не прикладывайте его фото.",
+            "3/4. Выберите тему обращения. Затем я попрошу коротко описать вопрос.",
+            categories=True,
+        )
+        return True
+
+    if stage == "category":
+        category = _CATEGORY_BY_LABEL.get(lowered)
+        if category is None:
+            _send(
+                bot,
+                user_id,
+                "Выберите тему кнопкой: оплата, документы и статус, данные туриста, "
+                "багаж и дополнительные услуги, отмена и возврат или другое.",
+                categories=True,
+            )
+            return True
+        _upsert_session(bot, user_id, stage="change", category=category)
+        _send(
+            bot,
+            user_id,
+            "4/4. Коротко опишите вопрос одним сообщением, до 300 символов.\n\n"
+            "Не пишите серию/номер паспорта и не прикладывайте фото документов. "
+            "Условия и сроки проверит менеджер по вашей брони.",
         )
         return True
 
@@ -489,7 +541,8 @@ def handle_message(bot: Any, event: dict[str, Any]) -> bool:
             "Проверьте запрос:\n\n"
             f"Бронь: {session.get('booking_no')}\n"
             f"Турист: {session.get('tourist_name')}\n"
-            f"Изменить: {session.get('change_text')}\n\n"
+            f"Тема: {_CATEGORY_LABEL.get(session.get('category'), 'Другое')}\n"
+            f"Вопрос: {session.get('change_text')}\n\n"
             "Подтвердить передачу менеджеру?",
             confirm=True,
         )
@@ -565,8 +618,9 @@ def install(bot: Any) -> None:
     bot._soft_start_keyboard = soft_start_keyboard
     if "Моя бронь" not in str(getattr(bot, "USER_HELP", "")):
         bot.USER_HELP = str(getattr(bot, "USER_HELP", "")) + (
-            "\n\n🧾 Уже есть бронь? Напишите «Моя бронь» — передам менеджеру запрос "
-            "на исправление данных без отправки паспортных номеров в VK."
+            "\n\n🧾 Уже есть бронь? Напишите «Моя бронь» — передам менеджеру вопрос "
+            "по оплате, документам, туристам, услугам или изменению/отмене. "
+            "Паспортные номера в VK не отправляйте."
         )
     bot._booking_support_installed = True
     bot.logger.info("VK existing-booking support installed")
