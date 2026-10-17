@@ -110,31 +110,93 @@
     $('trip-glance').textContent = `${adults} взр.${children ? ` · детей: ${children}` : ''} · ночей: ${nights} · до ${money($('budget').value)} на всех`;
   };
 
-  const DESTINATIONS = Object.freeze([
-    'Таиланд', 'Пхукет, Таиланд', 'Паттайя, Таиланд',
-    'Вьетнам', 'Нячанг, Вьетнам', 'Фукуок, Вьетнам',
-    'Шри-Ланка', 'Бентота, Шри-Ланка', 'Хиккадува, Шри-Ланка',
-    'Египет', 'Хургада, Египет', 'Шарм-эль-Шейх, Египет',
-    'ОАЭ', 'Дубай, ОАЭ', 'Рас-эль-Хайма, ОАЭ',
-    'Турция', 'Анталья, Турция', 'Аланья, Турция', 'Кемер, Турция',
-    'Мальдивы', 'Мале, Мальдивы',
-    'Индонезия', 'Бали, Индонезия',
-    'Китай', 'Хайнань, Китай',
-    'Куба', 'Варадеро, Куба',
-    'Танзания', 'Занзибар, Танзания',
-    'Индия', 'Гоа, Индия',
-    'Греция', 'Крит, Греция', 'Родос, Греция',
-    'Кипр', 'Пафос, Кипр', 'Ларнака, Кипр',
-    'Тунис', 'Монастир, Тунис', 'Хаммамет, Тунис',
-    'Доминикана', 'Пунта-Кана, Доминикана',
-    'Сочи', 'Адлер', 'Кисловодск', 'Ессентуки', 'Пятигорск', 'Абхазия'
-  ]);
+  const DESTINATIONS = Object.freeze({
+    domestic: Object.freeze([
+      'Сочи', 'Адлер', 'Казань', 'Калининград', 'Кисловодск', 'Ессентуки', 'Пятигорск'
+    ]),
+    abroad: Object.freeze([
+      'Таиланд', 'Пхукет, Таиланд', 'Паттайя, Таиланд',
+      'Вьетнам', 'Нячанг, Вьетнам', 'Фукуок, Вьетнам',
+      'Шри-Ланка', 'Бентота, Шри-Ланка', 'Хиккадува, Шри-Ланка',
+      'Египет', 'Хургада, Египет', 'Шарм-эль-Шейх, Египет',
+      'ОАЭ', 'Дубай, ОАЭ', 'Рас-эль-Хайма, ОАЭ',
+      'Турция', 'Анталья, Турция', 'Аланья, Турция', 'Кемер, Турция',
+      'Мальдивы', 'Мале, Мальдивы',
+      'Индонезия', 'Бали, Индонезия',
+      'Китай', 'Хайнань, Китай',
+      'Куба', 'Варадеро, Куба',
+      'Танзания', 'Занзибар, Танзания',
+      'Индия', 'Гоа, Индия',
+      'Греция', 'Крит, Греция', 'Родос, Греция',
+      'Кипр', 'Пафос, Кипр', 'Ларнака, Кипр',
+      'Тунис', 'Монастир, Тунис', 'Хаммамет, Тунис',
+      'Доминикана', 'Пунта-Кана, Доминикана', 'Абхазия'
+    ])
+  });
+  const POPULAR_DESTINATIONS = Object.freeze({
+    domestic: Object.freeze(['Сочи', 'Казань', 'Калининград', 'Кисловодск']),
+    abroad: Object.freeze(['Таиланд', 'Египет', 'Турция', 'ОАЭ'])
+  });
+  let activeDestinationDirection = 'domestic';
+
+  const updateDestinationValidity = () => {
+    const value = destination.value.trim();
+    const allowed = DESTINATIONS[activeDestinationDirection].includes(value);
+    destination.setCustomValidity(value && !allowed
+      ? `Выберите направление из списка «${activeDestinationDirection === 'domestic' ? 'По России' : 'За границу'}».`
+      : '');
+  };
+
+  const renderDestinationChips = () => {
+    const chips = document.querySelector('.destination-card .chips');
+    if (!chips) return;
+    chips.replaceChildren(...POPULAR_DESTINATIONS[activeDestinationDirection].map((place) => {
+      const button = document.createElement('button');
+      button.className = 'chip';
+      button.type = 'button';
+      button.dataset.destination = place;
+      button.setAttribute('aria-pressed', String(destination.value.trim() === place));
+      button.classList.toggle('active', destination.value.trim() === place);
+      button.textContent = place;
+      return button;
+    }));
+  };
+
+  const setDestinationDirection = (direction) => {
+    if (!DESTINATIONS[direction]) return;
+    activeDestinationDirection = direction;
+    if (destination.value.trim() && !DESTINATIONS[direction].includes(destination.value.trim())) {
+      destination.value = '';
+      destination.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const hint = document.querySelector('.destination-hint');
+    if (hint) {
+      hint.textContent = direction === 'domestic'
+        ? 'Выберите российский город или курорт. Ниже укажите российский город вылета.'
+        : 'Выберите страну или курорт. Ниже укажите российский город вылета.';
+    }
+    document.querySelectorAll('[data-destination-direction]').forEach((button) => {
+      const active = button.dataset.destinationDirection === direction;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    renderDestinationChips();
+    const suggestions = document.getElementById('destination-options');
+    if (suggestions) {
+      suggestions.replaceChildren(...DESTINATIONS[direction].map((place) => {
+        const option = document.createElement('option');
+        option.value = place;
+        return option;
+      }));
+    }
+    updateDestinationValidity();
+  };
 
   const installDestinationAutocomplete = () => {
     if (!destination || document.getElementById('destination-options')) return;
     const suggestions = document.createElement('datalist');
     suggestions.id = 'destination-options';
-    DESTINATIONS.forEach((place) => {
+    DESTINATIONS[activeDestinationDirection].forEach((place) => {
       const option = document.createElement('option');
       option.value = place;
       suggestions.append(option);
@@ -142,6 +204,8 @@
     destination.setAttribute('list', suggestions.id);
     destination.setAttribute('autocomplete', 'off');
     destination.insertAdjacentElement('afterend', suggestions);
+    renderDestinationChips();
+    setDestinationDirection(activeDestinationDirection);
   };
 
   const DEPARTURE_CITIES = Object.freeze([
@@ -165,6 +229,17 @@
     departure.setAttribute('autocomplete', 'off');
     departure.insertAdjacentElement('afterend', suggestions);
   };
+
+  const updateDepartureValidity = () => {
+    const value = departure.value.trim().toLocaleLowerCase('ru-RU');
+    const allowed = DEPARTURE_CITIES.some((city) => city.toLocaleLowerCase('ru-RU') === value);
+    departure.setCustomValidity(value && !allowed
+      ? 'Выберите город вылета из списка российских городов.'
+      : '');
+  };
+  departure.addEventListener('input', updateDepartureValidity);
+  departure.addEventListener('change', updateDepartureValidity);
+  updateDepartureValidity();
 
 
   const money = (n) => `${Number(n).toLocaleString('ru-RU')} ₽`;
@@ -225,14 +300,19 @@
   });
   updateGlance();
 
-  document.querySelectorAll('.chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      destination.value = chip.dataset.destination;
-      destination.dispatchEvent(new Event('input'));
-    });
+  document.querySelector('.destination-card .chips')?.addEventListener('click', (event) => {
+    const chip = event.target instanceof Element ? event.target.closest('[data-destination]') : null;
+    if (!chip) return;
+    destination.value = chip.dataset.destination;
+    destination.dispatchEvent(new Event('input'));
+  });
+
+  document.querySelectorAll('[data-destination-direction]').forEach((button) => {
+    button.addEventListener('click', () => setDestinationDirection(button.dataset.destinationDirection));
   });
 
   destination.addEventListener('input', () => {
+    updateDestinationValidity();
     document.querySelectorAll('.chip').forEach((chip) => {
       const active = chip.dataset.destination === destination.value.trim();
       chip.classList.toggle('active', active);

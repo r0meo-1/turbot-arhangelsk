@@ -1954,8 +1954,7 @@ def _chunk_buttons(labels: List[str], color: str = "primary", per_row: int = 2) 
 
 
 def _dest_keyboard() -> str:
-    shortcuts = [_btn(DEST_HOT_TOURS_LABEL, "positive")]
-    shortcuts.append(_btn(DEST_DIRECT_FLIGHTS_LABEL, "primary"))
+    shortcuts = [_btn(DEST_DIRECT_FLIGHTS_LABEL, "primary")]
     shortcuts.append(_btn("🌍 Другие", "secondary"))
     return _keyboard([
         [_btn("Турция", "primary"), _btn("Египет", "primary"), _btn("ОАЭ", "primary")],

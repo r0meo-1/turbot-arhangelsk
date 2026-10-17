@@ -87,6 +87,8 @@ def _assert_zoom_and_default_contrast(page):
 
 def _fill_review_and_save(page, destination="Пхукет, Таиланд"):
     page.locator('#trip-form[data-ready="true"]').wait_for()
+    if destination not in ("Сочи", "Казань", "Калининград", "Кисловодск", "Ессентуки", "Пятигорск", "Адлер"):
+        page.locator('[data-destination-direction="abroad"]').click()
     page.locator("#destination").fill(destination)
     page.locator("#departure").fill("Архангельск")
     page.locator("#consent").check()
@@ -303,7 +305,7 @@ def test_vk_miniapp_browser_roundtrip_uses_server_review_without_bridge_payload(
 
             for label in (
                 "Направление",
-                "Вылет",
+                "Город вылета по России",
                 "Ночей",
                 "Дата вылета",
                 "Взрослых",
@@ -331,6 +333,13 @@ def test_vk_miniapp_browser_roundtrip_uses_server_review_without_bridge_payload(
             assert focused["isChip"] is True
             assert focused["outlineStyle"] != "none"
             assert focused["outlineWidth"] != "0px"
+            destination_options = page.locator("#destination-options option").evaluate_all(
+                "els => els.map((el) => el.value)"
+            )
+            assert "Сочи" in destination_options
+            assert "Казань" in destination_options
+            assert "Пхукет, Таиланд" not in destination_options
+            page.locator('[data-destination-direction="abroad"]').click()
             destination_options = page.locator("#destination-options option").evaluate_all(
                 "els => els.map((el) => el.value)"
             )
@@ -417,6 +426,7 @@ def test_vk_form_initializes_before_bridge_launch_params(bridge_result):
             page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/')
             page.locator('#trip-form[data-ready="true"]').wait_for()
             page.wait_for_function("document.getElementById('date').value !== ''", timeout=2000)
+            page.locator('[data-destination-direction="abroad"]').click()
             page.get_by_role('button', name='Таиланд', exact=True).click()
             assert page.locator('#destination').input_value() == 'Таиланд'
             page.locator('#children').fill('2')
@@ -564,6 +574,7 @@ def test_failed_draft_keeps_review_and_allows_explicit_retry(failure):
         page.route("**/vk/miniapp/continue", submit)
         page.goto(f"http://127.0.0.1:{server.server_port}/vk/miniapp/?{_signed_launch_params()}")
         page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.locator('[data-destination-direction="abroad"]').click()
         page.locator("#destination").fill("Пхукет, Таиланд")
         page.locator("#departure").fill("Архангельск")
         page.locator("#consent").check()

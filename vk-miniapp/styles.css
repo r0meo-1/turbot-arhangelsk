@@ -47,6 +47,10 @@ input::placeholder { color: color-mix(in srgb, var(--muted) 72%, transparent); }
 .chips::-webkit-scrollbar { display: none; }
 .chip { flex: 0 0 auto; border: 1px solid var(--border); border-radius: 999px; padding: 8px 11px; background: rgba(255,255,255,.04); color: var(--tg-theme-text-color, #f8fafc); }
 .chip.active { border-color: var(--accent); background: rgba(42, 171, 238, .13); }
+.direction-tabs { display: flex; gap: 8px; margin: 0 0 12px; }
+.direction-tab { flex: 1 1 0; min-height: 44px; border: 1px solid var(--border); border-radius: 999px; padding: 8px 14px; background: var(--field, transparent); color: inherit; font-weight: 700; cursor: pointer; }
+.direction-tab.active { border-color: var(--accent); color: var(--tg-theme-link-color, var(--accent)); box-shadow: inset 0 0 0 1px var(--accent); }
+.destination-hint { margin: 8px 0 0; }
 .section-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .hint, output, .range-labels, .privacy-note { color: var(--muted); font-size: 12px; }
 output { color: var(--tg-theme-text-color, #f8fafc); font-weight: 800; font-size: 15px; }

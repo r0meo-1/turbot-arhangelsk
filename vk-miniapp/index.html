@@ -6,7 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#f4f6f9">
   <title>АПРЕЛЬ тур — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20261016-editable-fields">
+  <link rel="stylesheet" href="./styles.css?v=20261017-destination-direction">
   <script defer src="./vk-bridge.js?v=2.15.0"></script>
 </head>
 <body>
@@ -44,23 +44,29 @@
     <form id="trip-form" novalidate>
       <section class="card destination-card">
         <label for="destination">Направление</label>
+        <div class="direction-tabs" role="group" aria-label="Тип направления">
+          <button class="direction-tab active" type="button" data-destination-direction="domestic" aria-pressed="true">По России</button>
+          <button class="direction-tab" type="button" data-destination-direction="abroad" aria-pressed="false">За границу</button>
+        </div>
         <div class="input-wrap">
           <span aria-hidden="true">🌴</span>
           <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Страна или курорт" required>
         </div>
         <div class="chips" aria-label="Популярные направления">
-          <button class="chip" type="button" data-destination="Таиланд">Таиланд</button>
-          <button class="chip" type="button" data-destination="Египет">Египет</button>
-          <button class="chip" type="button" data-destination="Турция">Турция</button>
           <button class="chip" type="button" data-destination="Сочи">Сочи</button>
+          <button class="chip" type="button" data-destination="Казань">Казань</button>
+          <button class="chip" type="button" data-destination="Калининград">Калининград</button>
+          <button class="chip" type="button" data-destination="Кисловодск">Кисловодск</button>
         </div>
+        <p class="hint destination-hint">Здесь выберите, куда едете. Для вылета укажите российский город ниже.</p>
       </section>
 
       <section class="grid">
-        <label class="card field-card">
-          <span>Вылет</span>
-          <input id="departure" name="departure" type="text" maxlength="100" placeholder="Архангельск" value="Архангельск" required>
-        </label>
+        <div class="card field-card">
+          <label for="departure">Город вылета по России</label>
+          <input id="departure" name="departure" type="text" autocomplete="off" maxlength="100" placeholder="Выберите российский город" value="Архангельск" aria-describedby="departure-hint" required>
+          <small id="departure-hint" class="hint">Выберите город из российского списка.</small>
+        </div>
         <div class="card field-card">
           <label for="nights-mode">Длительность поездки</label>
           <select id="nights-mode" class="full-input" aria-label="Длительность поездки"><option value="exact">Точное число ночей</option><option value="range">Диапазон ночей</option></select>
@@ -177,7 +183,7 @@
     </dialog>
   </main>
 
-  <script defer src="./app.js?v=20261016-flexible-dates"></script>
+  <script defer src="./app.js?v=20261017-destination-direction"></script>
   <script defer src="./departure-support.js?v=20261016-origin"></script>
 </body>
 </html>
