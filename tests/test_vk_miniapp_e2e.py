@@ -334,6 +334,13 @@ def test_vk_miniapp_browser_roundtrip_uses_server_review_without_bridge_payload(
             destination_options = page.locator("#destination-options option").evaluate_all(
                 "els => els.map((el) => el.value)"
             )
+            assert "Сочи" in destination_options
+            assert "Казань" in destination_options
+            assert "Пхукет, Таиланд" not in destination_options
+            page.locator('[data-destination-direction="abroad"]').click()
+            destination_options = page.locator("#destination-options option").evaluate_all(
+                "els => els.map((el) => el.value)"
+            )
             departure_options = page.locator("#departure-cities option").evaluate_all(
                 "els => els.map((el) => el.value)"
             )

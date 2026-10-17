@@ -6,7 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#f4f6f9">
   <title>АПРЕЛЬ тур — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20261016-editable-fields">
+  <link rel="stylesheet" href="./styles.css?v=20261017-destination-direction">
   <script defer src="./vk-bridge.js?v=2.15.0"></script>
 </head>
 <body>
@@ -44,6 +44,10 @@
     <form id="trip-form" novalidate>
       <section class="card destination-card">
         <label for="destination">Направление</label>
+        <div class="direction-tabs" role="group" aria-label="Тип направления">
+          <button class="direction-tab active" type="button" data-destination-direction="domestic" aria-pressed="true">По России</button>
+          <button class="direction-tab" type="button" data-destination-direction="abroad" aria-pressed="false">За границу</button>
+        </div>
         <div class="input-wrap">
           <span aria-hidden="true">🌴</span>
           <input id="destination" name="destination" type="text" autocomplete="off" maxlength="100" placeholder="Страна или курорт" required>
@@ -54,6 +58,7 @@
           <button class="chip" type="button" data-destination="Турция">Турция</button>
           <button class="chip" type="button" data-destination="Сочи">Сочи</button>
         </div>
+        <p class="hint destination-hint">Список меняется в зависимости от выбранного направления.</p>
       </section>
 
       <section class="grid">
@@ -177,7 +182,7 @@
     </dialog>
   </main>
 
-  <script defer src="./app.js?v=20261016-flexible-dates"></script>
+  <script defer src="./app.js?v=20261017-destination-direction"></script>
   <script defer src="./departure-support.js?v=20261016-origin"></script>
 </body>
 </html>
