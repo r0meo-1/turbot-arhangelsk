@@ -13,6 +13,7 @@ preferring at-most-once delivery over duplicate customer messages.
 """
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -21,15 +22,33 @@ _TABLE = "vk_followup_claims"
 
 
 def followup_text(destination: str = "") -> str:
-    """Explain the actual resume/restart/cancel choices without ambiguity."""
+    """Explain distinct resume, restart, and cancel actions."""
     destination = " ".join(str(destination or "").split())[:80]
     hint = f" по направлению «{destination}»" if destination else ""
     return (
         f"👋 Вы начали подбор тура{hint}, но не завершили заявку.\n\n"
-        "Продолжить подбор или начать заново? Напишите «Начать» — "
-        "бот предложит продолжить с сохранёнными параметрами или начать заново.\n"
-        "Чтобы отменить подбор, напишите «Отмена»."
+        "Продолжить с сохранёнными параметрами — «Продолжить».\n"
+        "Начать новый подбор — «🧳 Новый подбор».\n"
+        "Отменить текущий подбор — «❌ Отмена». Заявка менеджеру не отправлена."
     )
+
+
+def followup_keyboard(
+    new_selection_label: str = "🧳 Новый подбор",
+    cancel_label: str = "❌ Отмена",
+) -> str:
+    """Offer the same distinct actions as buttons for VK clients."""
+    def button(label: str, color: str) -> dict[str, Any]:
+        return {"action": {"type": "text", "label": label}, "color": color}
+
+    return json.dumps({
+        "one_time": False,
+        "inline": False,
+        "buttons": [
+            [button("Продолжить", "primary"), button(new_selection_label, "secondary")],
+            [button(cancel_label, "negative")],
+        ],
+    }, ensure_ascii=False)
 
 
 def _cutoffs(bot: Any, now: int) -> tuple[int, int]:
@@ -180,6 +199,10 @@ def send_followups(bot: Any) -> int:
         response = bot.send_message(
             chat_id,
             followup_text(str(row["destination"] or "")),
+            keyboard=followup_keyboard(
+                str(getattr(bot, "NEW_SELECTION_BUTTON_TEXT", "🧳 Новый подбор")),
+                str(getattr(bot, "CANCEL_BUTTON_TEXT", "❌ Отмена")),
+            ),
         )
         if response is None:
             # A known API failure is safe to retry later because VK did not

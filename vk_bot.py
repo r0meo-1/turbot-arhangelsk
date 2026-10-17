@@ -3596,10 +3596,12 @@ def _apply_tour_filter(user_id: int, mode: str) -> None:
         if not offers:
             send_message(
                 user_id,
-                "Среди найденных туров нет вариантов «всё включено». "
-                "Попробуйте другой бюджет или даты.",
+                "В этой подборке нет вариантов с питанием «всё включено».\n\n"
+                "Текущий список оставлен без изменений. Можно посмотреть его снова "
+                "или выбрать «💰 Дешевле» / «⭐ Лучше».",
                 keyboard=_tour_results_keyboard(),
             )
+            _send_tour_results_page(user_id, current_page)
             return
         offers.sort(key=_offer_total_price)
 
@@ -4507,7 +4509,14 @@ def _send_followups() -> int:
         ]
     for cid, info in candidates:
         dest = info.get("destination", "")
-        send_message(cid, _vk_followup.followup_text(dest))
+        send_message(
+            cid,
+            _vk_followup.followup_text(dest),
+            keyboard=_vk_followup.followup_keyboard(
+                NEW_SELECTION_BUTTON_TEXT,
+                CANCEL_BUTTON_TEXT,
+            ),
+        )
         with _lock:
             if cid in user_data:
                 user_data[cid]["_followed_up"] = True

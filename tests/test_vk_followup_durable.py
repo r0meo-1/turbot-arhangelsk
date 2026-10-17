@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -24,6 +25,7 @@ class FakeBot:
         self._lock = threading.Lock()
         self.user_data: dict[int, dict] = {}
         self.sent = sent if sent is not None else []
+        self.sent_messages: list[tuple[int, str, dict]] = []
         self.fail_send = False
         self.logger = SimpleNamespace(info=lambda *args, **kwargs: None)
 
@@ -40,10 +42,11 @@ class FakeBot:
         finally:
             conn.close()
 
-    def send_message(self, chat_id: int, text: str):
+    def send_message(self, chat_id: int, text: str, **kwargs):
         if self.fail_send:
             return None
         self.sent.append(chat_id)
+        self.sent_messages.append((chat_id, text, kwargs))
         return {"message_id": len(self.sent)}
 
 
@@ -79,6 +82,16 @@ def test_followup_is_durable_across_calls_and_process_restart(tmp_path):
 
     assert vk_followup.send_followups(first) == 1
     assert vk_followup.send_followups(first) == 0
+    sent_text = first.sent_messages[0][1]
+    sent_keyboard = json.loads(first.sent_messages[0][2]["keyboard"])
+    labels = [
+        button["action"]["label"]
+        for row in sent_keyboard["buttons"]
+        for button in row
+    ]
+    assert "Продолжить с сохранёнными параметрами" in sent_text
+    assert "Заявка менеджеру не отправлена" in sent_text
+    assert labels == ["Продолжить", "🧳 Новый подбор", "❌ Отмена"]
 
     # A fresh bot object simulates a new process after a deploy/restart. The
     # SQLite claim, unlike the old user_data flag, survives it.
@@ -191,10 +204,21 @@ def test_production_entrypoints_use_guarded_vk_runtime():
 def test_followup_copy_distinguishes_resume_restart_and_cancel():
     text = vk_followup.followup_text("Москва")
     assert "подбор тура по направлению «Москва»" in text
-    assert "Напишите «Начать»" in text
-    assert "продолжить с сохранёнными параметрами или начать заново" in text
-    assert "Чтобы отменить подбор, напишите «Отмена»" in text
+    assert "Продолжить с сохранёнными параметрами — «Продолжить»" in text
+    assert "Начать новый подбор — «🧳 Новый подбор»" in text
+    assert "Отменить текущий подбор — «❌ Отмена»" in text
+    assert "Заявка менеджеру не отправлена" in text
     assert "Напишите «Начать», чтобы начать заново" not in text
+
+
+def test_followup_keyboard_has_distinct_resume_restart_and_cancel_actions():
+    keyboard = json.loads(vk_followup.followup_keyboard())
+    labels = [
+        button["action"]["label"]
+        for row in keyboard["buttons"]
+        for button in row
+    ]
+    assert labels == ["Продолжить", "🧳 Новый подбор", "❌ Отмена"]
 
 
 def test_legacy_vk_followup_uses_the_same_resume_instructions(monkeypatch):
@@ -204,12 +228,13 @@ def test_legacy_vk_followup_uses_the_same_resume_instructions(monkeypatch):
     sent = []
     monkeypatch.setattr(bot, "FOLLOWUP_DELAY_HOURS", 1)
     monkeypatch.setattr(bot, "DIALOG_TIMEOUT_HOURS", 0)
-    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: sent.append((uid, text)))
+    monkeypatch.setattr(bot, "send_message", lambda uid, text, **kwargs: sent.append((uid, text, kwargs)))
     monkeypatch.setattr(bot, "_mark_dirty", lambda *args, **kwargs: None)
     bot.user_data[user_id] = {"updated_at": int(time.time()) - 7200, "destination": "Москва"}
     try:
         assert bot._send_followups() == 1
         assert sent[0][0] == user_id
         assert sent[0][1] == vk_followup.followup_text("Москва")
+        assert "keyboard" in sent[0][2]
     finally:
         bot.user_data.pop(user_id, None)

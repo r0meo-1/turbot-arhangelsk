@@ -1437,6 +1437,34 @@ def test_vk_tour_filters_reuse_existing_results(monkeypatch):
     assert shown[1] == ["All Inclusive"]
 
 
+def test_vk_all_inclusive_empty_filter_explains_filter_and_keeps_current_results(monkeypatch):
+    offers = [
+        {"hotel": "Option A", "category": 3, "meal": "RO", "price": 90000, "fuel_charge": 0},
+        {"hotel": "Option B", "category": 4, "meal": "BB", "price": 110000, "fuel_charge": 0},
+    ]
+    original = [dict(offer) for offer in offers]
+    bot.user_data[963] = {
+        "state": bot.STATE_REVIEW,
+        "_tour_offers": list(offers),
+        "_tour_offers_base": list(offers),
+    }
+    sent = []
+    shown = []
+    monkeypatch.setattr(
+        bot, "send_message",
+        lambda uid, text, **kwargs: sent.append((text, kwargs.get("keyboard"))),
+    )
+    monkeypatch.setattr(bot, "_send_tour_results_page", lambda uid, page: shown.append(page))
+
+    bot._apply_tour_filter(963, "all_inclusive")
+
+    assert sent
+    assert "нет вариантов с питанием «всё включено»" in sent[-1][0]
+    assert "Текущий список оставлен без изменений" in sent[-1][0]
+    assert bot.user_data[963]["_tour_offers"] == original
+    assert shown == [0]
+
+
 def test_vk_fallback_sends_text_and_buttons_together(monkeypatch):
     sent = []
     bot.user_data[962] = {
