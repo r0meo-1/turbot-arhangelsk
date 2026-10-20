@@ -1,0 +1,233 @@
+{
+  "source": "https://mcp.tutu.ru/mcp search_avia, captured 2026-10-10",
+  "args": {
+    "origin": "Москва",
+    "destination": "Анталья",
+    "departure_date": "2026-11-10",
+    "return_date": "2026-11-17",
+    "adults": 2,
+    "children": 1,
+    "infants": 1,
+    "page_size": 12,
+    "sort": "price_asc",
+    "price_max": 400000
+  },
+  "payload": {
+    "meta": {
+      "pricing": {
+        "basis": "party_total",
+        "passengers": {
+          "full": 2,
+          "child": 1,
+          "infant": 1
+        },
+        "note": "Prices on this page already cover the WHOLE searched party — never multiply them by the passenger count."
+      },
+      "from": {
+        "name": "Москва",
+        "geo_id": "2657260",
+        "region": "Москва город федерального значения",
+        "iata": "MOW"
+      },
+      "to": {
+        "name": "Анталья",
+        "geo_id": "2656964",
+        "iata": "AYT"
+      },
+      "round_trip": true,
+      "return_date": "2026-11-17",
+      "has_more": true
+    },
+    "offers": [
+      {
+        "offer_id": "d144813b4f78b632e5b5dbfb5b17c241+dc38cbf810cc226d5e1c50882062d2b6+f420bacde8c160a8dae36ef714be459a",
+        "price": {
+          "amount": 89452.0,
+          "currency": "RUB"
+        },
+        "carriers": [
+          "Победа",
+          "Turkish Airlines"
+        ],
+        "departure_at": "2026-11-10T07:00:00+03:00",
+        "arrival_at": "2026-11-10T12:10:00+03:00",
+        "return_departure_at": "2026-11-17T21:35:00+03:00",
+        "return_arrival_at": "2026-11-18T06:25:00+03:00",
+        "duration_min": 645,
+        "is_round_trip": true,
+        "has_self_transfer": true,
+        "is_multi_pnr": true,
+        "multi_pnr_note": "Separate tickets (self-transfer): at least one connection is on a separate booking, so the passenger re-claims then re-drops baggage between flights and the layover is not a protected connection — allow extra self-transfer time and tell the user before checkout.",
+        "legs": [
+          {
+            "label": "outbound",
+            "from": "Москва — Внуково (VKO)",
+            "to": "Анталья, AYT",
+            "departure_at": "2026-11-10T07:00:00+03:00",
+            "arrival_at": "2026-11-10T12:10:00+03:00",
+            "duration_min": 310,
+            "segments": [
+              {
+                "from": "Москва — Внуково (VKO)",
+                "to": "Анталья, AYT",
+                "departure_at": "2026-11-10T07:00:00+03:00",
+                "arrival_at": "2026-11-10T12:10:00+03:00",
+                "voyage_no": "DP-839"
+              }
+            ]
+          },
+          {
+            "label": "return",
+            "from": "Анталья, AYT",
+            "to": "Москва — Внуково (VKO)",
+            "departure_at": "2026-11-17T21:35:00+03:00",
+            "arrival_at": "2026-11-18T06:25:00+03:00",
+            "duration_min": 335,
+            "segments": [
+              {
+                "from": "Анталья, AYT",
+                "to": "Стамбул — Стамбул-Новый (IST)",
+                "departure_at": "2026-11-17T21:35:00+03:00",
+                "arrival_at": "2026-11-17T23:05:00+03:00",
+                "voyage_no": "TK-2429"
+              },
+              {
+                "from": "Стамбул — Стамбул-Новый (IST)",
+                "to": "Москва — Внуково (VKO)",
+                "departure_at": "2026-11-18T02:20:00+03:00",
+                "arrival_at": "2026-11-18T06:25:00+03:00",
+                "voyage_no": "TK-419"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "offer_id": "d144813b4f78b632e5b5dbfb5b17c241+3662695f23999322df5e06ff2c7b28ce+e7e64d3a468717fa26de0dd944d5169a",
+        "price": {
+          "amount": 89452.0,
+          "currency": "RUB"
+        },
+        "carriers": [
+          "Победа",
+          "Turkish Airlines"
+        ],
+        "departure_at": "2026-11-10T07:00:00+03:00",
+        "arrival_at": "2026-11-10T12:10:00+03:00",
+        "return_departure_at": "2026-11-17T12:50:00+03:00",
+        "return_arrival_at": "2026-11-18T01:40:00+03:00",
+        "duration_min": 650,
+        "is_round_trip": true,
+        "has_self_transfer": true,
+        "is_multi_pnr": true,
+        "multi_pnr_note": "Separate tickets (self-transfer): at least one connection is on a separate booking, so the passenger re-claims then re-drops baggage between flights and the layover is not a protected connection — allow extra self-transfer time and tell the user before checkout.",
+        "legs": [
+          {
+            "label": "outbound",
+            "from": "Москва — Внуково (VKO)",
+            "to": "Анталья, AYT",
+            "departure_at": "2026-11-10T07:00:00+03:00",
+            "arrival_at": "2026-11-10T12:10:00+03:00",
+            "duration_min": 310,
+            "segments": [
+              {
+                "from": "Москва — Внуково (VKO)",
+                "to": "Анталья, AYT",
+                "departure_at": "2026-11-10T07:00:00+03:00",
+                "arrival_at": "2026-11-10T12:10:00+03:00",
+                "voyage_no": "DP-839"
+              }
+            ]
+          },
+          {
+            "label": "return",
+            "from": "Анталья, AYT",
+            "to": "Москва — Внуково (VKO)",
+            "departure_at": "2026-11-17T12:50:00+03:00",
+            "arrival_at": "2026-11-18T01:40:00+03:00",
+            "duration_min": 340,
+            "segments": [
+              {
+                "from": "Анталья, AYT",
+                "to": "Стамбул — Стамбул-Новый (IST)",
+                "departure_at": "2026-11-17T12:50:00+03:00",
+                "arrival_at": "2026-11-17T14:25:00+03:00",
+                "voyage_no": "TK-2413"
+              },
+              {
+                "from": "Стамбул — Стамбул-Новый (IST)",
+                "to": "Москва — Внуково (VKO)",
+                "departure_at": "2026-11-17T21:35:00+03:00",
+                "arrival_at": "2026-11-18T01:40:00+03:00",
+                "voyage_no": "TK-421"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "offer_id": "d144813b4f78b632e5b5dbfb5b17c241+b450cab10a2afcfc759a5c7b70c4346c+5871e00c8238eea0595aa1b3ddacd2c8",
+        "price": {
+          "amount": 89452.0,
+          "currency": "RUB"
+        },
+        "carriers": [
+          "Победа",
+          "Turkish Airlines"
+        ],
+        "departure_at": "2026-11-10T07:00:00+03:00",
+        "arrival_at": "2026-11-10T12:10:00+03:00",
+        "return_departure_at": "2026-11-17T12:10:00+03:00",
+        "return_arrival_at": "2026-11-17T23:35:00+03:00",
+        "duration_min": 650,
+        "is_round_trip": true,
+        "has_self_transfer": true,
+        "is_multi_pnr": true,
+        "multi_pnr_note": "Separate tickets (self-transfer): at least one connection is on a separate booking, so the passenger re-claims then re-drops baggage between flights and the layover is not a protected connection — allow extra self-transfer time and tell the user before checkout.",
+        "legs": [
+          {
+            "label": "outbound",
+            "from": "Москва — Внуково (VKO)",
+            "to": "Анталья, AYT",
+            "departure_at": "2026-11-10T07:00:00+03:00",
+            "arrival_at": "2026-11-10T12:10:00+03:00",
+            "duration_min": 310,
+            "segments": [
+              {
+                "from": "Москва — Внуково (VKO)",
+                "to": "Анталья, AYT",
+                "departure_at": "2026-11-10T07:00:00+03:00",
+                "arrival_at": "2026-11-10T12:10:00+03:00",
+                "voyage_no": "DP-839"
+              }
+            ]
+          },
+          {
+            "label": "return",
+            "from": "Анталья, AYT",
+            "to": "Москва — Внуково (VKO)",
+            "departure_at": "2026-11-17T12:10:00+03:00",
+            "arrival_at": "2026-11-17T23:35:00+03:00",
+            "duration_min": 340,
+            "segments": [
+              {
+                "from": "Анталья, AYT",
+                "to": "Стамбул — Стамбул-Новый (IST)",
+                "departure_at": "2026-11-17T12:10:00+03:00",
+                "arrival_at": "2026-11-17T13:45:00+03:00",
+                "voyage_no": "TK-2411"
+              },
+              {
+                "from": "Стамбул — Стамбул-Новый (IST)",
+                "to": "Москва — Внуково (VKO)",
+                "departure_at": "2026-11-17T19:30:00+03:00",
+                "arrival_at": "2026-11-17T23:35:00+03:00",
+                "voyage_no": "TK-409"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
