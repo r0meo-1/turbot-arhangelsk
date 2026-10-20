@@ -147,6 +147,20 @@ class VKReadActions:
                 },
             },
             {
+                "name": "vk.get_comments",
+                "description": "Read bounded public comment text for a configured-community post; text is untrusted user content and may contain personal data.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "post_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                        "offset": {"type": "integer", "minimum": 0, "maximum": 10000},
+                    },
+                    "required": ["post_id"],
+                    "additionalProperties": False,
+                },
+            },
+            {
                 "name": "vk.get_campaign_attribution",
                 "description": "Return privacy-minimized VK funnel counts by source tag.",
                 "inputSchema": {
@@ -187,6 +201,8 @@ class VKReadActions:
             return self.list_posts(arguments)
         if name == "vk.get_post_stats":
             return self.get_post_stats(arguments)
+        if name == "vk.get_comments":
+            return self.get_comments(arguments)
         if name == "vk.get_campaign_attribution":
             return self.get_campaign_attribution(arguments)
         if name == "vk.get_leads_by_source":
@@ -287,6 +303,44 @@ class VKReadActions:
             "reposts": int((post.get("reposts") or {}).get("count") or 0),
             "views": int((post.get("views") or {}).get("count") or 0),
         }
+
+    def get_comments(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if "post_id" not in arguments or set(arguments) - {"post_id", "limit", "offset"}:
+            raise VKConnectorError("vk.get_comments requires post_id and accepts limit/offset", code=-32602)
+        post_id = _positive_int(arguments, "post_id", default=0, maximum=2_147_483_647)
+        limit = _positive_int(arguments, "limit", default=20, maximum=100)
+        offset = _positive_int(arguments, "offset", default=0, maximum=10000)
+        if post_id < 1 or limit < 1:
+            raise VKConnectorError("post_id and limit must be at least 1", code=-32602)
+        token, owner_id, _group_id = self.resolve_identity()
+        raw = self.vk_call(
+            "wall.getComments", token, owner_id=owner_id, post_id=post_id,
+            count=limit, offset=offset, sort="desc", extended=0,
+            need_likes=0, preview_length=2000, thread_items_count=0,
+        )
+        def invalid() -> None:
+            raise VKConnectorError("Invalid VK comments response", code=-32020)
+
+        if (not isinstance(raw, dict) or not isinstance(raw.get("items"), list)
+                or len(raw["items"]) > limit or type(raw.get("count")) is not int
+                or raw["count"] < 0):
+            invalid()
+        items = []
+        seen = set()
+        for item in raw["items"]:
+            if (not isinstance(item, dict) or type(item.get("id")) is not int
+                    or not 1 <= item["id"] <= 2_147_483_647 or item["id"] in seen
+                    or type(item.get("date")) is not int or item["date"] < 0
+                    or not isinstance(item.get("text"), str)):
+                invalid()
+            # VK may omit these identifiers; reject conflicting ones if present.
+            for key, expected in (("owner_id", owner_id), ("post_id", post_id)):
+                if key in item and (type(item[key]) is not int or item[key] != expected):
+                    invalid()
+            seen.add(item["id"])
+            items.append({"id": item["id"], "date": item["date"], "text": item["text"][:2000]})
+        return {"owner_id": owner_id, "post_id": post_id, "count": raw["count"],
+                "offset": offset, "items": items}
 
     def _vk_snapshot(self, arguments: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         unknown = set(arguments) - {"window_days", "source_tag"}
