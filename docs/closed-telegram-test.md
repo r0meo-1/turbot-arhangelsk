@@ -155,3 +155,6 @@ stop any previous poller first, use the same restrictive systemd properties,
 point ReadWritePaths at its dedicated state directory, and set a short runtime.
 Stop only that transient test unit after acceptance. Never use production env,
 token, database or service. The bot identity/webhook preflight still applies.
+
+Closed-test operator review and retention are documented in [receipt-review.md](receipt-review.md).
+The tool acts on marked metadata snapshots only and performs no resend.
