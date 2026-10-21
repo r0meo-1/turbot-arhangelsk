@@ -132,3 +132,30 @@ def test_server_requires_explicit_ai_env_before_reading_files(tmp_path):
     result=subprocess.run(args,capture_output=True,text=True)
     assert result.returncode==2 and 'requires --ai-env' in result.stderr
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.skipif(__import__('os').name=='nt',reason='The closed runtime uses Linux process locks')
+def test_bridge_does_not_start_next_batch_item_after_deadline(tmp_path,monkeypatch):
+    import sys
+    import tools.closed_https as module
+    import tools.closed_webhook as webhook
+    clock=[0.0];sent=[]
+    class Telegram:
+        def __init__(self,*args):self.session=SimpleNamespace(close=lambda:None)
+        def preflight(self):pass
+        def call(self,*args,**kwargs):return [{'update_id':1},{'update_id':2}]
+    config=tmp_path/'config';config.write_text('TEST_TELEGRAM_BOT_TOKEN=200:synthetic\nTEST_BOT_USERNAME=test\nTEST_USER_ID=42\nFORBIDDEN_PRODUCTION_BOT_ID=100\n')
+    secret=tmp_path/'secret';secret.write_text(SECRET)
+    state=tmp_path/'state.json';state.write_text('{"last_update":0}')
+    def post(update,*args):
+        sent.append(update['update_id']);clock[0]=2
+        return 200,{}
+    monkeypatch.setattr(webhook,'WebhookTelegram',Telegram)
+    monkeypatch.setattr(module,'time',SimpleNamespace(monotonic=lambda:clock[0]))
+    monkeypatch.setattr(module,'post_tls',post)
+    monkeypatch.setattr(module.logging,'disable',lambda *args:None)
+    monkeypatch.setattr(sys,'argv',['closed_https.py','bridge','--config',str(config),
+        '--state',str(state),'--ingress-secret',str(secret),'--duration','1'])
+    assert module.main()==0
+    assert sent==[1]
+    assert json.loads((tmp_path/'bridge-offset.json').read_text())==1

@@ -168,6 +168,8 @@ def main():
             while time.monotonic()<deadline:
                 updates=telegram.call('getUpdates',offset=offset+1,timeout=20,allowed_updates=['message','callback_query'])
                 for update in updates:
+                    if time.monotonic()>=deadline:
+                        break  # Leave unprocessed updates queued, without advancing offset.
                     started=time.monotonic()
                     status,body=post_tls(update,secret,args.state.with_name('tls.sock'))
                     print(json.dumps({'https_status':status,'elapsed_ms':round((time.monotonic()-started)*1000)}),flush=True)
