@@ -31,7 +31,7 @@ def generate_ai_selection(
         log.info("Template selection generated for '%s'", destination)
         return template_selection(destination, dates, people, budget)
 
-    if mode not in {"groq", "regcloud"}:
+    if mode not in {"groq", "regcloud", "yandex"}:
         log.warning("Unknown AI mode '%s' — using template fallback", mode)
         return template_selection(destination, dates, people, budget)
 
