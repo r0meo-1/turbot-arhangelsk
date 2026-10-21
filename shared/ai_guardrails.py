@@ -165,6 +165,7 @@ _UNVERIFIED_OUTPUT_PATTERNS = {
         ),
     ),
     "unverified_medical_claim": (
+        re.compile(r"(?i)\b(?:лекарств\w*|аптечк\w*|медикамент\w*)\b"),
         re.compile(r"(?i)\b(?:средств\w*|таблет\w*|лекарств\w*|препарат\w*)\s+от\s+укачивания\b"),
         re.compile(r"(?i)\b(?:ибупрофен\w*|парацетамол\w*|антибиотик\w*)\b"),
         re.compile(r"(?i)\bаптечк\w*\s+с\s+лекарств\w*\b"),

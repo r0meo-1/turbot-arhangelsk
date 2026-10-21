@@ -31,7 +31,7 @@ stopped, one-account synthetic test, never production SQLite.
 - Audit: retain for 30 days after decision and until receipt deletion.
 - Backups: retain at least 7 days; explicit prune command, scoped to backups of
   that exact database. This is not secure erasure or a legal retention policy.
-- Never delete `webhook_receipts`, offsets or replay fences in this tool.
+- Never delete `webhook_receipts`, `https_ingress_receipts`, offsets or replay fences in this tool.
 
 All inspection and purge operations default to preview. Before a modifying
 review/purge, the CLI creates a SQLite backup (mode 600). Keep the closed root

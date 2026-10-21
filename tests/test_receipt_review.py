@@ -13,6 +13,8 @@ def db(tmp_path):
     c.execute('CREATE TABLE ai_handoff_receipts(event_id TEXT PRIMARY KEY,subject TEXT,created_at INTEGER,outcomes TEXT)')
     c.execute('CREATE TABLE webhook_receipts(event_key TEXT PRIMARY KEY,state TEXT)')
     c.execute("INSERT INTO webhook_receipts VALUES ('keep-fence','complete')")
+    c.execute('CREATE TABLE https_ingress_receipts(update_id INTEGER PRIMARY KEY,status TEXT)')
+    c.execute("INSERT INTO https_ingress_receipts VALUES (1,'complete')")
     for key,outcomes in [('ok',{'telegram:0':'accepted'}),('failed',{'telegram:0':'failed'}),
             ('unknown',{'telegram:0':'uncertain'}),('empty',{}),
             ('partial',{'telegram:0':'accepted','telegram:1':'failed'})]:
@@ -49,6 +51,7 @@ def test_all_channels_must_be_reviewed_and_ttl_from_last_review(db):
     purge(db,now=8*DAY,apply=True)
     assert db.execute('select count(*) from receipt_review_audit').fetchone()[0]==2
     assert db.execute('select count(*) from webhook_receipts').fetchone()[0]==1
+    assert db.execute('select count(*) from https_ingress_receipts').fetchone()[0]==1
     assert purge(db,now=30*DAY)['audit_rows']==1
     assert purge(db,now=31*DAY,apply=True)['audit_rows']==2
 
