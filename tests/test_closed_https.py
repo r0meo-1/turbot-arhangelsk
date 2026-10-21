@@ -95,3 +95,40 @@ def test_nginx_template_has_no_tcp_listener():
     assert 'listen unix:' in text and text.count('listen ')==1
     assert 'server unix:' in text
     assert 'access_log off;' in text and 'ssl_protocols TLSv1.2 TLSv1.3;' in text
+
+
+def test_backend_closes_socket_on_handler_failure():
+    from tools.closed_https import serve_bounded
+    closed=[]
+    def fail():raise RuntimeError('synthetic failure')
+    server=SimpleNamespace(handle_request=fail,server_close=lambda:closed.append(True))
+    with pytest.raises(RuntimeError):serve_bounded(server,1)
+    assert closed==[True]
+
+
+@pytest.mark.skipif(__import__('os').name=='nt',reason='Unix socket runtime is verified on Ubuntu')
+def test_backend_exits_when_idle_without_systemd(tmp_path):
+    import time
+    import socket
+    from flask import Flask
+    from werkzeug.serving import make_server
+    from tools.closed_https import serve_bounded
+    path=tmp_path/'bounded.sock'
+    server=make_server('unix://'+str(path),0,Flask('bounded'),threaded=False)
+    started=time.monotonic();serve_bounded(server,1)
+    assert .9<=time.monotonic()-started<3
+    client=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+    try:
+        with pytest.raises(OSError):client.connect(str(path))
+    finally:client.close()
+
+
+def test_server_requires_explicit_ai_env_before_reading_files(tmp_path):
+    import subprocess,sys
+    from pathlib import Path
+    script=Path(__file__).resolve().parents[1]/'tools/closed_https.py'
+    args=[sys.executable,str(script),'server','--config',str(tmp_path/'missing'),
+          '--state',str(tmp_path/'state.json'),'--ingress-secret',str(tmp_path/'secret')]
+    result=subprocess.run(args,capture_output=True,text=True)
+    assert result.returncode==2 and 'requires --ai-env' in result.stderr
+    assert not list(tmp_path.iterdir())

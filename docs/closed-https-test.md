@@ -63,7 +63,11 @@ production /opt/turbot and /etc/turbot remain inaccessible to them.
 
 The entrypoints are `closed_https.py server` and `closed_https.py bridge`, with
 --config (dedicated bot), --state, --ingress-secret and --ai-env for server only.
-The bridge's duration is bounded; no loopback TCP or public-host option exists.
+Both bridge and backend stop accepting new work after --duration (1–900 seconds).
+An in-flight backend request may finish beyond that window, so RuntimeMaxSec
+remains the hard deadline for blocked I/O. Backend closes its listener on normal
+expiry or handler failure. Server requires an explicit --ai-env before reading
+configuration; implicit dotenv discovery is not allowed. No loopback TCP or public-host option exists.
 Private per-request logs contain only HTTP status and elapsed milliseconds.
 
 Acceptance: negative HTTP tests, trusted certificate + wrong-host rejection,

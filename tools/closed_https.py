@@ -108,6 +108,20 @@ def post_tls(update,secret,socket_path):
     finally:conn.close()
 
 
+def serve_bounded(server,duration):
+    """Bound the accept window even outside systemd; let an in-flight request finish.
+
+    RuntimeMaxSec is still required for a hard wall-clock deadline during I/O.
+    """
+    deadline=time.monotonic()+min(900,max(1,duration))
+    server.timeout=.25
+    try:
+        while time.monotonic()<deadline:
+            server.handle_request()
+    finally:
+        server.server_close()
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('mode',choices=['server','bridge'])
@@ -117,6 +131,8 @@ def main():
     p.add_argument('--ingress-secret',required=True,type=Path)
     p.add_argument('--duration',type=int,default=600)
     args=p.parse_args()
+    if args.mode=='server' and args.ai_env is None:
+        p.error('server mode requires --ai-env; implicit environment discovery is disabled')
     from dotenv import dotenv_values
     from tools.closed_telegram_ai import Settings
     from tools.closed_webhook import WebhookTelegram, ClosedWebhookTest
@@ -143,7 +159,7 @@ def main():
             # never overlap another request in this process.
             server=make_server('unix://'+str(args.state.with_name('app.sock')),0,app,threaded=False)
             print(json.dumps({'ready':True,'bind':'private-unix-socket','mode':'server'}),flush=True)
-            server.serve_forever()
+            serve_bounded(server,args.duration)
         else:
             offset_file=args.state.with_name('bridge-offset.json')
             offset=json.loads(offset_file.read_text()) if offset_file.exists() else json.loads(args.state.read_text())['last_update']

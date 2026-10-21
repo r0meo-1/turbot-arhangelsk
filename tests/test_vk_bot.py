@@ -1909,6 +1909,8 @@ def test_admin_crm_status_is_pii_free(client, monkeypatch):
 @pytest.mark.parametrize("content", [
     "Возьмите удобную обувь.", "Цена $1500.", "Номер свободен.",
     "Заявка отправлена.", "", None,
+    "Возьмите личные лекарства (если принимаете регулярно — уточните у врача).",
+    "Возьмите аптечку с лекарствами.",
 ])
 def test_yandex_vk_blurb_uses_guarded_shared_path_without_sending(monkeypatch, content):
     from types import SimpleNamespace
@@ -1931,6 +1933,8 @@ def test_yandex_vk_blurb_uses_guarded_shared_path_without_sending(monkeypatch, c
     if content == "Возьмите удобную обувь.":
         assert content in text
     else:
+        if content:
+            assert content not in text
         assert "предварительная информационная подсказка" not in text
 
 
