@@ -7,7 +7,6 @@ import os
 import socket
 import threading
 from contextlib import ExitStack
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 

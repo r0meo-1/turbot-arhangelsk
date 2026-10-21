@@ -1,6 +1,7 @@
 """One-account Telegram integration test. Not a production bot entrypoint.
 
-No bot.py, CRM, VK, bookings, supplier clients, webhook changes or public server.
+The default path imports no bot.py. --main-router uses an offline router bridge.
+No real CRM, VK, bookings, supplier calls, webhook changes or public server.
 One dedicated bot + one private user chat. Real notices go to that same user,
 playing the manager role. API acceptance and human /ack are separate evidence.
 """
