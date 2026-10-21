@@ -39,7 +39,7 @@ should only claim that a lead was delivered after confirmed delivery.
 ## Validation
 
 ```bash
-python -m pytest tests/test_ai_provider.py tests/test_ai_guardrails.py tests/test_ai_chat.py tests/test_yandex_ai_sdk.py tests/test_yandex_smoke.py
+python -m pytest tests/test_ai_provider.py tests/test_ai_guardrails.py tests/test_ai_chat.py tests/test_ai_extended.py tests/test_yandex_ai_sdk.py tests/test_yandex_smoke.py
 ```
 
 Tests use synthetic clients and make no model/supplier requests. Before rollout,
@@ -94,18 +94,48 @@ restoring because it was not changed. Remove the sandbox key after testing.
 - Explicit manager requests bypass the model and set `handoff_required`.
   The existing Telegram caller invokes the manager notification path. The shared
   reply does not claim delivery. Actual notification delivery is outside these
-  AI-only tests; a flag or attempted notification is not a delivery receipt.
+  live tests; offline webhook tests replace every outbound transport. They cover
+  `/ask`, `ИИ:`, safe replies, sensitive/high-risk questions, rejected output,
+  timeout, failed primary VK delivery with Telegram fallback, and replay dedup.
+  A flag or attempted notification is not a delivery receipt.
 - Both destination blurbs (Telegram/VK) and Telegram chat check generated text
   for unverified commercial facts and action language. Rejected blurbs use the
   deterministic template; rejected chat replies require a manager. Exceptions
   are logged by class only to avoid leaking provider error bodies.
 - Checks are conservative lexical safeguards, not a semantic guarantee against
-  every paraphrase, language or injection. Benign action mentions and budget
-  echoes can also be rejected. More natural multi-turn chat and a free-form VK
+  every paraphrase, language or injection. Some benign wording and budget
+  echoes can still be rejected. More natural multi-turn chat and a free-form VK
   route require separate work and acceptance testing before public rollout.
 - Before production: bounded live API test with the existing key, reviewed
   synthetic answer-quality evaluation, isolated bot routing/delivery tests with
   all outbound clients replaced, explicit traffic and deployment authorization.
+
+## Extended synthetic evaluation
+
+`tools/yandex_ai_eval.py` uses only shared helpers. Default is a presence probe;
+`--live --env-file <private-file> --output <report.json>` runs 18 synthetic cases,
+at most 14 metered model calls, with no bot imports or external delivery tools.
+`--cases <IDs...>` permits targeted reruns. Output includes synthetic answer text
+and usage; never use this runner with customer data. Automated contract checks
+are limited and require manual review of the saved answers.
+
+The 2026-10-21 extended pass made 14 model calls (6,994 tokens), followed by six
+targeted calls (3,197 tokens) after fixes. It exposed false handoffs on safe
+tour-operator explanations and negated sending capability, a medication packing
+suggestion, and guessed filler after admitting a destination was unknown.
+Focused tests and offline replay cover the fixes; the targeted live answers
+confirmed the safe explanations, shorter packing list and lack of medication
+advice in the rechecked Egypt blurb. Unknown-destination admission now selects
+the local fallback rather than appending guessed landscape. That final fallback
+change is verified offline against the captured answer, not by an extra paid call.
+
+Local templates now have no delivery confirmation, response-time promise or
+unconditional visa statement. Known destination labels replace raw client fields.
+Generated incomplete/filtered responses use fallback. Checks normalize zero-width
+characters, cover additional currency/inventory forms and redact labeled CVV,
+passwords and API keys. They reject generated contact details and selected
+medication recommendations. Positive action claims remain blocked while ordinary
+booking nouns and explicit inability to send are allowed.
 
 Model inference is metered separately from serverless hosting. Free-tier hosting
 does not make model calls free. Do not rely on the October promotion without

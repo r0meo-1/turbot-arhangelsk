@@ -1906,6 +1906,34 @@ def test_admin_crm_status_is_pii_free(client, monkeypatch):
     assert "Секретное направление" not in text
 
 
+@pytest.mark.parametrize("content", [
+    "Возьмите удобную обувь.", "Цена $1500.", "Номер свободен.",
+    "Заявка отправлена.", "", None,
+])
+def test_yandex_vk_blurb_uses_guarded_shared_path_without_sending(monkeypatch, content):
+    from types import SimpleNamespace
+    captured = []
+    def create(**kwargs):
+        captured.append(kwargs)
+        if content is None:
+            raise TimeoutError("synthetic timeout")
+        return SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content=content))])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    monkeypatch.setattr(bot, "AI_MODE", "yandex")
+    monkeypatch.setattr(bot, "selection_ai_provider", SimpleNamespace(client=client, model="synthetic-model"))
+    monkeypatch.setattr(bot, "send_message", lambda *a, **k: pytest.fail("blurb must not send"))
+    text = bot.generate_ai_selection("ОАЭ", "ноябрь", "2", "180000")
+    assert len(captured) == 1
+    assert captured[0]["model"] == "synthetic-model"
+    assert "Заявка у менеджера" not in text
+    assert "без оформления визы" not in text
+    if content == "Возьмите удобную обувь.":
+        assert content in text
+    else:
+        assert "предварительная информационная подсказка" not in text
+
+
 def test_template_selection():
     text = bot._template_selection("Турция", "15-22 июня", "2", "60000")
     assert "Турция" in text

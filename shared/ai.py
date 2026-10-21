@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 from shared.templates import template_selection
@@ -31,7 +32,7 @@ def generate_ai_selection(
     mode = (ai_mode or "template").lower().strip()
 
     if mode == "template":
-        log.info("Template selection generated for '%s'", destination)
+        log.info("Template selection generated")
         return template_selection(destination, dates, people, budget)
 
     if mode not in {"groq", "regcloud", "yandex"}:
@@ -57,7 +58,11 @@ def generate_ai_selection(
             "- Что обычно ожидает турист в этом направлении\n"
             "- Почему направление может подойти под такой запрос\n"
             "- Что обычно полезно взять с собой\n\n"
-            "Не называй конкретные отели и не добавляй непроверенные коммерческие факты."
+            "Не называй конкретные отели и не добавляй непроверенные коммерческие факты. "
+            "Не обещай погоду и не делай вывод о соответствии бюджету. "
+            "Если направление неизвестное или вымышленное, прямо скажи, что его нужно уточнить; "
+            "не приписывай ему климат, пляжи или инфраструктуру. "
+            "Это самостоятельное описание: не задавай вопросов и не предлагай продолжить чат или поиск."
         )
         response = groq_client.chat.completions.create(
             model=groq_model,
@@ -71,12 +76,22 @@ def generate_ai_selection(
             # thread that runs post-completion side effects.
             timeout=timeout,
         )
-        ai_text = str(response.choices[0].message.content or "").strip()
+        choice = response.choices[0]
+        if getattr(choice, "finish_reason", "stop") not in (None, "stop"):
+            raise ValueError("incomplete or filtered AI response")
+        raw_content = choice.message.content
+        if not isinstance(raw_content, str):
+            raise ValueError("non-text AI response")
+        ai_text = raw_content.strip()
         if not ai_text:
             raise ValueError("empty AI response")
         if classify_unverified_ai_output(ai_text):
             return template_selection(destination, dates, people, budget)
-        log.info("%s AI selection generated for '%s'", mode, destination)
+        if re.search(r"(?i)(?:вымышленн|неизвестн|нет информации|не располагаю информацией)", ai_text):
+            # Do not append guessed landscape/climate after admitting that the
+            # destination is unknown. Use the neutral local text instead.
+            return template_selection(destination, dates, people, budget)
+        log.info("%s AI selection generated", mode)
         # Not «подборка туров»: the bot has no hotels, transfers or packages —
         # Tutu returns flights only. Promising a tour and delivering a
         # paragraph about the destination is the kind of overclaim a client
