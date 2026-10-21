@@ -108,3 +108,50 @@ User and transport allowlists, persisted quotas, receipt verification, update
 consumption and time limit are inherited. Reuse state to preserve previous
 receipts and offset; stop the previous poller before starting this variant.
 Never run two pollers or reset a webhook.
+
+## Webhook + sender test
+
+`--webhook-router` selects `tools/closed_webhook.py`. This variant checks the
+actual Flask webhook, secret validation, `dispatch_update`/state flush, callback
+routing and `send_message`. It opens no port and sets no Telegram webhook.
+GetUpdates carries messages and callback queries into an exact-user/chat gate;
+callbacks additionally require an owned test-bot message and the `aiq:` prefix.
+Admin, funnel, arbitrary callback and other user/group routes are blocked before
+bot execution. `/start` creates only a test keyboard, never a lead.
+
+Bot code executes with disabled socket connect/DNS/workers, dummy credentials,
+disabled dotenv and separate SQLite databases. A probe pass captures a model
+request in `probe.sqlite`, without real sends; a final pass uses `webhook.sqlite`
+and the actual update ID for durable webhook receipts. The bounded SDK runs
+outside bot execution. Only the intercepted Telegram HTTP call can temporarily
+restore sockets to the existing dedicated, exact-recipient transport. VK is
+replaced with a no-op. No supplier/CRM/booking/payment route is allowed.
+
+The HTTP interceptor admits sendMessage, callback acknowledgement for an observed
+query and keyboard removal in the single test chat. Typing is local only.
+Actual API acceptance is matched to chat/message ID. A marked manager notice
+includes the private test /ack command. The agent must never send that /ack.
+
+`ai_handoff_receipts` stores event ID, correlation label, timestamp and channel
+outcomes, without question, trip context or recipient IDs. Channel slots remain
+independent even if privacy correlation is unavailable. Rows are written with
+uncertain outcomes before sends, then updated after each response. A matching
+Telegram receipt is accepted; explicit API refusal is failed; missing/malformed
+receipt or transport exception is uncertain. No configured recipients is
+not_configured. An accepted channel does not imply all channels succeeded.
+No automatic resend is performed. Review persisted channel outcomes alongside
+`ai_handoff_delivery` metrics; webhook complete means handler completion only.
+Receipts require an operator retention/reconciliation policy before public use;
+this change does not create an automatic retry worker or CRM ticket.
+
+Targeted validation (no live requests):
+
+```bash
+python -m pytest tests/test_closed_webhook.py tests/test_closed_main_router.py tests/test_closed_telegram_ai.py
+```
+
+Only a separate sandbox may use `--webhook-router --run`; preserve state/offset,
+stop any previous poller first, use the same restrictive systemd properties,
+point ReadWritePaths at its dedicated state directory, and set a short runtime.
+Stop only that transient test unit after acceptance. Never use production env,
+token, database or service. The bot identity/webhook preflight still applies.

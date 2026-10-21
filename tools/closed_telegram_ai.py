@@ -232,6 +232,7 @@ def main():
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--duration", type=int, default=3600)
     parser.add_argument("--main-router", action="store_true")
+    parser.add_argument("--webhook-router", action="store_true")
     args = parser.parse_args()
     from dotenv import dotenv_values
     logging.disable(logging.CRITICAL)
@@ -242,7 +243,11 @@ def main():
         proxy = os.getenv("TELEGRAM_PROXY_URL", "")
         if args.proxy_env:
             proxy = dotenv_values(args.proxy_env, interpolate=False).get("TELEGRAM_PROXY_URL", "") or proxy
-        telegram = Telegram(settings, proxy)
+        telegram_class = Telegram
+        if args.webhook_router:
+            from tools.closed_webhook import WebhookTelegram
+            telegram_class = WebhookTelegram
+        telegram = telegram_class(settings, proxy)
         identity = telegram.preflight()  # Only read-only API calls.
         if not args.run:
             print(json.dumps({"preflight_ok": True, "test_bot": identity["username"], "run": False}))
@@ -259,12 +264,15 @@ def main():
             if args.main_router:
                 from tools.closed_main_router import MainRouterTest
                 test_class = MainRouterTest
+            if args.webhook_router:
+                from tools.closed_webhook import ClosedWebhookTest
+                test_class = ClosedWebhookTest
             test = test_class(settings, telegram, args.state, provider)
             deadline = time.monotonic() + min(3600, max(1, args.duration))
             print(json.dumps({"running": True, "test_bot": identity["username"]}), flush=True)
             while time.monotonic() < deadline:
                 updates = telegram.call("getUpdates", offset=test.state["last_update"] + 1,
-                                        timeout=20, allowed_updates=["message"])
+                                        timeout=20, allowed_updates=["message", "callback_query"] if args.webhook_router else ["message"])
                 for update in updates:
                     test.handle(update)
             print(json.dumps(test.summary()), flush=True)
