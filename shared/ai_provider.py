@@ -53,12 +53,32 @@ def build_selection_provider(
     regcloud_api_key: str = "",
     regcloud_base_url: str = "",
     regcloud_model: str = "",
+    yandex_api_key: str = "",
+    yandex_model: str = "",
 ) -> AISelectionProvider:
     """Build the explicitly selected provider for destination blurbs."""
     selected = (mode or "template").strip().lower()
 
     if selected == "template":
         return AISelectionProvider("template")
+
+    if selected == "yandex":
+        key = (yandex_api_key or "").strip()
+        model = (yandex_model or "").strip()
+        # Require an explicit folder-qualified model URI; never guess a folder
+        # or silently send data to another provider. Endpoint is fixed.
+        parts = model.removeprefix("gpt://").split("/")
+        if (not key or not model.startswith("gpt://")
+                or len(parts) not in (2, 3) or not all(parts)
+                or any(not all(c.isalnum() or c in "-_." for c in p) for p in parts)
+                or OpenAI is None):
+            return AISelectionProvider("yandex")
+        return AISelectionProvider(
+            "yandex",
+            OpenAI(api_key=key, base_url="https://ai.api.cloud.yandex.net/v1",
+                   project=parts[0], max_retries=0),
+            model,
+        )
 
     if selected == "groq":
         key = (groq_api_key or "").strip()

@@ -1092,7 +1092,7 @@ def test_template_selection_uses_known_destination():
     """A destination note is kept only where there is something real to say."""
     text = bot._template_selection("Турция", "15-22 июня", "2", "60000")
     assert "Турция" in text
-    assert "Заявка у менеджера" in text
+    assert "О направлении" in text
     assert "всё включено" in text, "заготовка для Турции должна попасть в текст"
 
 
@@ -1102,7 +1102,7 @@ def test_template_selection_says_nothing_rather_than_filler():
     text = bot._template_selection("Урюпинск", "лето", "2", "50000")
     assert "отличное направление" not in text
     assert text.count("Урюпинск") == 0, "no echoing the input back as insight"
-    assert "Менеджер подберёт" in text
+    assert "нужна помощь менеджера" in text
 
 
 
@@ -2702,6 +2702,7 @@ def test_lead_assist_uses_recent_saved_trip_context_without_contact_pii(monkeypa
             "dates": "2027-01-19",
             "nights": 10,
             "people": "2",
+            "kids_ages": [6, 9],
             "budget": 270000,
             "budget_scope": "total",
             "direct_only": True,
@@ -2740,6 +2741,7 @@ def test_lead_assist_uses_recent_saved_trip_context_without_contact_pii(monkeypa
     assert "Направление: Таиланд" in context
     assert "Город вылета: Москва" in context
     assert "Бюджет: 270000 ₽ на всю поездку" in context
+    assert "Возраст детей: 6, 9" in context
     assert "+79991234567" not in context
     assert "Private Name" not in context
     assert "private_user" not in context
@@ -2828,6 +2830,63 @@ def test_ask_command_invokes_lead_assist_without_advancing_dialog(client, monkey
     assert response.status_code == 200
     assert called == [(chat_id, "Какой район спокойнее?", {"entrypoint": "ask"})]
     assert bot.user_data[chat_id]["state"] == bot.STATE_DESTINATION
+
+
+@pytest.mark.parametrize("prefix", ["/ask ", "ИИ: "])
+@pytest.mark.parametrize("case,question,model_text,expected_calls,handoff", [
+    ("manager", "Хочу менеджера", "unused", 0, True),
+    ("price", "Сколько стоит тур?", "unused", 0, True),
+    ("visa", "Нужна ли виза?", "unused", 0, True),
+    ("refund", "Хочу возврат", "unused", 0, True),
+    ("secret", "Мой CVV: 123", "unused", 0, True),
+    ("safe", "Что взять в поездку?", "Возьмите удобную обувь.", 1, False),
+    ("action", "Посоветуй отдых", "Заявка отправлена.", 1, True),
+    ("timeout", "Посоветуй отдых", None, 1, True),
+])
+def test_ai_extended_webhook_routes_real_guard_and_mocked_handoff(
+    client, monkeypatch, prefix, case, question, model_text, expected_calls, handoff,
+):
+    """Real webhook + AI helper + manager router; every outbound transport is fake."""
+    chat_id = 99220
+    info = {"state": bot.STATE_DESTINATION, "destination": "Турция", "people": "2",
+            "budget": 180000, "kids_ages": [9]}
+    bot.user_data[chat_id] = dict(info)
+    calls, sent, owner = [], [], []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if case == "timeout":
+            raise TimeoutError("synthetic timeout")
+        return SimpleNamespace(choices=[SimpleNamespace(
+            finish_reason="stop", message=SimpleNamespace(content=model_text))])
+
+    monkeypatch.setattr(bot, "AI_LEAD_ASSIST_ENABLED", True)
+    monkeypatch.setattr(bot, "selection_ai_provider", SimpleNamespace(
+        ready=True, model="synthetic-model", client=SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=create)))))
+    monkeypatch.setattr(bot, "LEAD_NOTIFY_IDS", [999])
+    monkeypatch.setattr(bot, "send_message", lambda cid, text, **kw:
+                        sent.append((cid, text)) or _OkResp())
+    # Simulate unavailable primary VK manager delivery: TG copy must still run.
+    monkeypatch.setattr(bot, "send_lead_owner_vk", lambda text: owner.append(text) or False)
+    payload = _update(chat_id, prefix + question)
+    payload["update_id"] = 992200
+    headers = {"X-Telegram-Bot-Api-Secret-Token": "secret123"}
+    assert client.post("/webhook", headers=headers, json=payload).status_code == 200
+    first_counts = (len(calls), len(sent), len(owner))
+    assert client.post("/webhook", headers=headers, json=payload).status_code == 200
+    assert first_counts == (len(calls), len(sent), len(owner)), "replay must not duplicate handoff"
+    assert len(calls) == expected_calls
+    assert len(owner) == int(handoff)
+    assert len([text for cid, text in sent if cid == 999]) == int(handoff)
+    assert len([text for cid, text in sent if cid == chat_id]) == 1
+    assert {k: v for k, v in bot.user_data[chat_id].items() if k != "updated_at"} == info
+    with bot._db_cursor() as cur:
+        assert cur.execute("SELECT COUNT(*) FROM leads WHERE chat_id = ?", (chat_id,)).fetchone()[0] == 0
+    assert not any("Заявка отправлена" in text for cid, text in sent if cid == chat_id)
+    if case == "secret":
+        assert all("CVV: 123" not in text for _, text in sent)
+        assert "CVV: 123" not in owner[0]
 
 
 def test_confirmation_offers_whitelisted_ai_quick_actions_when_enabled(monkeypatch):

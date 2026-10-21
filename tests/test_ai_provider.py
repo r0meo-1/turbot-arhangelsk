@@ -84,3 +84,41 @@ def test_groq_provider_still_works(monkeypatch):
     assert selected.ready is True
     assert selected.model == "openai/gpt-oss-120b"
     assert selected.client.kwargs == {"api_key": "groq-secret"}
+
+
+def test_yandex_uses_fixed_endpoint_and_explicit_model(monkeypatch):
+    monkeypatch.setattr(providers, "OpenAI", _FakeOpenAI)
+    selected = providers.build_selection_provider(
+        "yandex", yandex_api_key="test-only-key",
+        yandex_model="gpt://test-folder/aliceai-llm-flash/latest",
+    )
+    assert selected.ready
+    assert selected.mode == "yandex"
+    assert selected.model == "gpt://test-folder/aliceai-llm-flash/latest"
+    assert selected.client.kwargs == {
+        "api_key": "test-only-key",
+        "base_url": "https://ai.api.cloud.yandex.net/v1",
+        "project": "test-folder",
+        "max_retries": 0,
+    }
+
+
+def test_yandex_missing_or_invalid_config_never_constructs_client(monkeypatch):
+    def unexpected_client(**kwargs):
+        raise AssertionError("must not construct client")
+    monkeypatch.setattr(providers, "OpenAI", unexpected_client)
+    for key, model in (
+        ("", "gpt://folder/model"), ("k", ""), ("k", "aliceai-llm-flash"),
+        ("k", "https://example.invalid/model"), ("k", "gpt:///model"),
+        ("k", "gpt://folder/model?secret=x"), ("k", "gpt://folder/model/"),
+    ):
+        assert not providers.build_selection_provider(
+            "yandex", yandex_api_key=key, yandex_model=model,
+        ).ready
+
+
+def test_yandex_missing_sdk_fails_closed(monkeypatch):
+    monkeypatch.setattr(providers, "OpenAI", None)
+    assert not providers.build_selection_provider(
+        "yandex", yandex_api_key="k", yandex_model="gpt://folder/model",
+    ).ready
