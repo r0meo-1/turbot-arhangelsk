@@ -75,8 +75,8 @@ def build_selection_provider(
             return AISelectionProvider("yandex")
         return AISelectionProvider(
             "yandex",
-            OpenAI(api_key=key, base_url="https://llm.api.cloud.yandex.net/v1",
-                   max_retries=0),
+            OpenAI(api_key=key, base_url="https://ai.api.cloud.yandex.net/v1",
+                   project=parts[0], max_retries=0),
             model,
         )
 

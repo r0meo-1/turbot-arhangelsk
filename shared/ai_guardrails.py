@@ -23,6 +23,8 @@ TRAVEL_ASSISTANT_SYSTEM_PROMPT = """Ты — ИИ-помощник тураге�
 - Не проси номер банковской карты, CVV/CVC, пароль, токен, паспортные данные или скан документа.
 - Если вопрос касается договора, возврата, претензии, визы/въезда, здоровья, безопасности или правового спора, не делай самостоятельный вывод: направь к менеджеру или проверенному официальному источнику.
 - Не обещай бронирование, оплату или заключение договора от имени агентства.
+- У тебя нет инструментов отправки заявки, уведомления менеджера, бронирования или оплаты. Никогда не утверждай, что эти действия выполнены или будут выполнены тобой.
+- Последние явные исправления параметров в вопросе важнее сохранённого контекста. Не утверждай, что сохранил исправления в заявке. Задавай не больше одного уточняющего вопроса за раз.
 """
 
 
@@ -83,6 +85,12 @@ def classify_restricted_topic(message: object) -> Optional[str]:
 
 
 _UNVERIFIED_OUTPUT_PATTERNS = {
+    # These paths have no action tools or delivery receipts. Conservatively
+    # reject action language, including promises (even benign mentions).
+    "unverified_action_claim": (
+        re.compile(r"(?i)(?:заявк|брон[ьи]|бронир|заброни|оплат|плат[её]ж|переда[млт]|отправ|уведом|связал|оформил)"),
+        re.compile(r"(?i)\b(?:sent|submit\w*|forward\w*|notif\w*|booked|booking|paid|payment|reserved|reservation|contacted)\b"),
+    ),
     "unverified_commercial_claim": (
         re.compile(
             r"(?i)(?<!\w)\d[\d\s.,]*\s*(?:₽|руб(?:\.|ля|лей)?|rub|usd|eur|thb|vnd|₫|฿|\$|€)(?=\s|[.,;:!?)]|$)"
@@ -153,6 +161,9 @@ def guard_external_ai_message(message: object) -> GuardrailDecision:
             topic,
         )
 
+    if re.search(r"(?i)(?:менеджер|оператор|жив(?:ой|ым)\s+человек|\bhuman\b|\bmanager\b)", raw):
+        return GuardrailDecision(False, redact_external_ai_text(raw), "human_requested")
+
     return GuardrailDecision(True, redact_external_ai_text(raw))
 
 
@@ -165,7 +176,7 @@ def restricted_topic_handoff(topic: Optional[str] = None) -> str:
     if topic == "legal_or_contract":
         return (
             "По договору, возвратам и претензиям нужен ответ по конкретным документам "
-            "и действующим правилам. Передам вопрос менеджеру без выдуманного вывода."
+            "и действующим правилам. Здесь нужна помощь менеджера."
         )
     if topic in {"health_or_safety", "insurance"}:
         return (

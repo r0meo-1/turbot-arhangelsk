@@ -168,7 +168,8 @@ def generate_ai_chat_reply(
             handoff_required=False,
         )
     except Exception as exc:
-        log.error("AI chat provider failed: %s", exc)
+        # Provider exceptions may contain request bodies or credentials.
+        log.error("AI chat provider failed: %s", type(exc).__name__)
         return AIChatReply(
             text=_FALLBACK_TEXT,
             used_external_model=False,

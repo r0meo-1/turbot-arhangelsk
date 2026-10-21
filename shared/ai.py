@@ -6,7 +6,10 @@ import logging
 from typing import Any, Optional
 
 from shared.templates import template_selection
-from shared.ai_guardrails import TRAVEL_ASSISTANT_SYSTEM_PROMPT, redact_external_ai_text
+from shared.ai_guardrails import (
+    TRAVEL_ASSISTANT_SYSTEM_PROMPT, redact_external_ai_text,
+    classify_unverified_ai_output,
+)
 
 logger = logging.getLogger("turbot.shared.ai")
 
@@ -71,6 +74,8 @@ def generate_ai_selection(
         ai_text = str(response.choices[0].message.content or "").strip()
         if not ai_text:
             raise ValueError("empty AI response")
+        if classify_unverified_ai_output(ai_text):
+            return template_selection(destination, dates, people, budget)
         log.info("%s AI selection generated for '%s'", mode, destination)
         # Not «подборка туров»: the bot has no hotels, transfers or packages —
         # Tutu returns flights only. Promising a tour and delivering a
@@ -82,5 +87,5 @@ def generate_ai_selection(
             "Конкретные условия тура подтвердит менеджер."
         )
     except Exception as exc:
-        log.error("Error generating AI selection: %s", exc)
+        log.error("Error generating AI selection: %s", type(exc).__name__)
         return template_selection(destination, dates, people, budget)

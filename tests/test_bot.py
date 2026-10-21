@@ -2702,6 +2702,7 @@ def test_lead_assist_uses_recent_saved_trip_context_without_contact_pii(monkeypa
             "dates": "2027-01-19",
             "nights": 10,
             "people": "2",
+            "kids_ages": [6, 9],
             "budget": 270000,
             "budget_scope": "total",
             "direct_only": True,
@@ -2740,6 +2741,7 @@ def test_lead_assist_uses_recent_saved_trip_context_without_contact_pii(monkeypa
     assert "Направление: Таиланд" in context
     assert "Город вылета: Москва" in context
     assert "Бюджет: 270000 ₽ на всю поездку" in context
+    assert "Возраст детей: 6, 9" in context
     assert "+79991234567" not in context
     assert "Private Name" not in context
     assert "private_user" not in context

@@ -97,7 +97,8 @@ def test_yandex_uses_fixed_endpoint_and_explicit_model(monkeypatch):
     assert selected.model == "gpt://test-folder/aliceai-llm-flash/latest"
     assert selected.client.kwargs == {
         "api_key": "test-only-key",
-        "base_url": "https://llm.api.cloud.yandex.net/v1",
+        "base_url": "https://ai.api.cloud.yandex.net/v1",
+        "project": "test-folder",
         "max_retries": 0,
     }
 

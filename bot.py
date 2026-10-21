@@ -2638,6 +2638,10 @@ def _format_lead_assist_context(info: Dict[str, Any]) -> str:
     for label, value in fields:
         if value not in (None, ""):
             lines.append(f"{label}: {value}")
+    raw_ages = info.get("kids_ages")
+    ages = raw_ages if isinstance(raw_ages, list) else _ages_from_db(raw_ages)
+    if ages:
+        lines.append("Возраст детей: " + ", ".join(str(age) for age in ages))
     budget = info.get("budget")
     if budget not in (None, ""):
         scope = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
@@ -2653,7 +2657,7 @@ def _latest_lead_assist_context(chat_id: int) -> Optional[Dict[str, Any]]:
     with _db_cursor() as cur:
         row = cur.execute(
             """
-            SELECT destination, origin, dates, nights, people, kids, infants,
+            SELECT destination, origin, dates, nights, people, kids, kids_ages, infants,
                    budget, budget_scope, direct_only, created_at
             FROM leads
             WHERE chat_id = ? AND created_at >= ?
