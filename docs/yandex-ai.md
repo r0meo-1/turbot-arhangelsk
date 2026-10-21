@@ -45,7 +45,14 @@ python -m pytest tests/test_ai_provider.py tests/test_ai_guardrails.py tests/tes
 Tests use synthetic clients and make no model/supplier requests. Before rollout,
 run a separate bounded live test with synthetic trip context and check fallback,
 latency, actual token usage, handling of unverified prices and human handoff.
-No API key was created and no live API smoke was performed for this code change.
+No API key was created by the integration work. On 2026-10-21, the existing
+operator-provided key was used for bounded synthetic live checks locally and in
+the isolated server sandbox: 10 model requests, 4,028 prompt tokens and 718
+completion tokens (4,746 total), no API errors, 0.341–5.164s per request.
+The model refused invented price/availability and fake action confirmations,
+and followed corrected budget/child age in the inspected samples. This is a small
+sample, not a comprehensive quality evaluation. Exact-price/inventory questions
+now route deterministically to a manager without model inference.
 Rollback: restore the previous `AI_MODE` and restart only the intended test process.
 
 ## Isolated server check (no bot processes)

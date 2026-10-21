@@ -38,6 +38,12 @@ _SECRET_RE = re.compile(
 )
 
 _RESTRICTED_TOPICS = {
+    "commercial_availability": (
+        "точная цена", "точную цену", "точной цен", "какая цена",
+        "сколько стоит", "стоимость тура", "есть ли места",
+        "наличие номер", "наличие мест", "подтверди наличие",
+        "exact price", "room availability", "seat availability",
+    ),
     "legal_or_contract": (
         "договор", "оферта", "претенз", "суд", "юрист", "юрид",
         "возврат", "компенсац", "неустойк", "chargeback", "refund",
@@ -168,6 +174,11 @@ def guard_external_ai_message(message: object) -> GuardrailDecision:
 
 
 def restricted_topic_handoff(topic: Optional[str] = None) -> str:
+    if topic == "commercial_availability":
+        return (
+            "Точную цену и наличие нужно проверить по актуальным предложениям. "
+            "Здесь нужна помощь менеджера; ИИ не будет угадывать условия."
+        )
     if topic == "visa_or_entry":
         return (
             "По визам и правилам въезда важны актуальные официальные требования. "

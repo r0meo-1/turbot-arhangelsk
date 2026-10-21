@@ -124,3 +124,19 @@ def test_explicit_manager_request_never_calls_model(provider):
     assert reply.reason == "human_requested"
     assert not reply.used_external_model
     assert "отправлен" not in reply.text
+
+
+@pytest.mark.parametrize("question", [
+    "Назови точную цену тура", "Подтверди наличие номера на ноябрь",
+])
+def test_exact_price_or_inventory_requires_manager_without_model(provider, question):
+    def unexpected(request):
+        pytest.fail("unverified commercial request must bypass the model")
+    install_transport(provider, unexpected)
+    reply = generate_ai_chat_reply(
+        question, enabled=True, groq_client=provider.client, groq_model=provider.model,
+    )
+    assert reply.handoff_required
+    assert not reply.used_external_model
+    assert reply.topic == "commercial_availability"
+    assert reply.reason == "verified_source_or_human_required"
