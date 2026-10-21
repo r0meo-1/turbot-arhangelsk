@@ -78,3 +78,33 @@ router is covered separately with mocked transports.
 test. The unit also expires automatically. Preserve the private receipt file for
 review. No production configuration or service restart is required. Do not revoke
 or remove the bot/key or delete chats without the user's authorization.
+
+## Offline main-router bridge
+
+`--main-router` selects `tools/closed_main_router.py`. It invokes the actual
+`bot._process_update`, `_handle_lead_assist`, shared guards and manager routing.
+Only synthetic `/ask` or `ИИ:` text reaches this router; `/manager` becomes an
+explicit manager question. Other harness controls remain local to the harness.
+This is not the production webhook server, callback routing or full lead funnel.
+
+During bot import and router execution, socket connect/DNS and thread start are
+blocked, dotenv loading is disabled, bot credentials are dummy, and the database
+is a separate file beside the test state. VK delivery and analytics are replaced;
+Telegram outputs are captured with an exact-recipient assertion. No network call
+from bot.py is permitted. No production configuration is sourced.
+
+For a safe model question the first offline pass captures the actual SDK request.
+Only that request is submitted outside the router scope via the bounded Yandex
+client. A second offline pass handles the response with the original helper and
+output guards. Intermediate outputs are discarded; only the final reply and
+handoff decision reach the existing closed Telegram transport. Local router
+metrics can therefore count two passes; do not treat them as live production
+metrics. Model failure is replayed as a generic provider error, without raw data.
+
+The real marked notice uses the harness transport and receipt/ack mechanism,
+not the production VK/TG transport implementation. This verifies the main
+handler's decision plus separate real delivery, not production CRM acceptance.
+User and transport allowlists, persisted quotas, receipt verification, update
+consumption and time limit are inherited. Reuse state to preserve previous
+receipts and offset; stop the previous poller before starting this variant.
+Never run two pollers or reset a webhook.

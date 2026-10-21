@@ -186,11 +186,16 @@ class ClosedTest:
         if len(question) > 800:
             self.telegram.send("ТЕСТ: максимум 800 символов; используйте только синтетические данные.")
             return
-        reply = generate_ai_chat_reply(
+        reply = self.generate_reply(question)
+        self.deliver_reply(question, reply)
+
+    def generate_reply(self, question):
+        return generate_ai_chat_reply(
             question, enabled=True, groq_client=self.model_client(),
             groq_model=self.provider.model if self.provider else "",
             verified_context=CONTEXT, timeout=10,
         )
+    def deliver_reply(self, question, reply):
         try:
             self.telegram.send("ТЕСТ · " + reply.text)
         except Exception as exc:
@@ -225,6 +230,7 @@ def main():
     parser.add_argument("--state", required=True, type=Path)
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--duration", type=int, default=3600)
+    parser.add_argument("--main-router", action="store_true")
     args = parser.parse_args()
     from dotenv import dotenv_values
     logging.disable(logging.CRITICAL)
@@ -248,7 +254,11 @@ def main():
                                                 yandex_model=ai.get("YANDEX_AI_MODEL", ""))
             if not provider.ready:
                 raise ValueError("AI not configured")
-            test = ClosedTest(settings, telegram, args.state, provider)
+            test_class = ClosedTest
+            if args.main_router:
+                from tools.closed_main_router import MainRouterTest
+                test_class = MainRouterTest
+            test = test_class(settings, telegram, args.state, provider)
             deadline = time.monotonic() + min(3600, max(1, args.duration))
             print(json.dumps({"running": True, "test_bot": identity["username"]}), flush=True)
             while time.monotonic() < deadline:
