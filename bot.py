@@ -2718,6 +2718,7 @@ def _notify_lead_assist_handoff(
         f"Ответить в Telegram: /send {chat_id}"
     )
     event_id = secrets.token_hex(12)
+    manager_text += f"\nКвитанция: {event_id}"
     outcomes = {}
     created_at = int(time.time())
 

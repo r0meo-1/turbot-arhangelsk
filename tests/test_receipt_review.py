@@ -117,3 +117,20 @@ def test_corrupt_timestamp_is_held(db):
     db.execute("insert into ai_handoff_receipts values ('bad-date','synthetic','broken','{}')");db.commit()
     assert next(r for r in inventory(db) if r['event_id']=='bad-date')['transport']=='invalid'
     assert purge(db,apply=True)['receipt_ids']==[]
+
+
+def test_manager_notice_exposes_same_receipt_id_as_database(tmp_path,monkeypatch):
+    from tests.test_closed_webhook import runner
+    from types import SimpleNamespace
+    import requests
+    r=runner(tmp_path);sent=[]
+    with r.offline() as bot:
+        def post(url,**kw):
+            sent.append(kw['json']['text']);response=requests.Response();response.status_code=200
+            response._content=json.dumps({'ok':True,'result':{'chat':{'id':42},'message_id':1}}).encode()
+            return response
+        monkeypatch.setattr(bot,'telegram_session',SimpleNamespace(post=post))
+        result=bot._notify_lead_assist_handoff(42,'Хочу менеджера','human_requested')
+        assert all('Квитанция: '+result['event_id'] in text for text in sent)
+        with bot._db_cursor() as cur:
+            assert cur.execute('select event_id from ai_handoff_receipts').fetchone()[0]==result['event_id']

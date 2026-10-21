@@ -11,7 +11,7 @@ stopped, one-account synthetic test, never production SQLite.
    API acceptance, not human acknowledgement. Inspect failed/uncertain/missing
    destinations, and overdue unreviewed records (7 days), including partial
    delivery. Never retry an uncertain send blindly.
-2. Match the event/channel to the private test notice and its actual /ack or
+2. Match the event/channel to the private test notice (its `Квитанция:` line uses the same event ID) and its actual /ack or
    direct visual observation. A timestamp alone is not sufficient where more
    than one candidate exists. If identity is ambiguous, leave it unresolved.
 3. `review --action received_confirmed --reason personal_ack` (or visual_review)
