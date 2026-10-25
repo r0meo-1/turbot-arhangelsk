@@ -63,3 +63,9 @@ def test_invalid_saved_selection_does_not_break_notification(owner_messages):
     info = {**request_info(), 'selected_tour': '{bad json'}
     assert bot._notify_admin(12345, info, 'Telegram @test_user', 'ТЕСТ')
     assert 'https://t.me/test_user' in owner_messages[0]
+
+
+def test_short_telegram_username_remains_a_link(owner_messages):
+    bot._notify_admin(12345, request_info(), 'Telegram @abcd', 'ТЕСТ', username='abcd')
+    assert 'https://t.me/abcd' in owner_messages[0]
+    assert '@abcd' not in owner_messages[0]

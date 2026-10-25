@@ -4484,7 +4484,7 @@ def send_lead_owner_vk(text: str) -> bool:
 def _telegram_contact_for_vk(contact: str) -> str:
     """VK treats @user as its own mention; use Telegram HTTPS links instead."""
     if contact.lstrip().startswith("@") or contact.lower().startswith("telegram"):
-        return re.sub(r"(?<![\w/])@([A-Za-z0-9_]{5,32})\b",
+        return re.sub(r"(?<![\w/])@([A-Za-z0-9_]{1,32})\b",
                       lambda match: "https://t.me/" + match.group(1), contact)
     return contact
 
@@ -4501,7 +4501,7 @@ def _notify_admin(
     recipients = LEAD_NOTIFY_IDS
     telegram_link = (
         f"https://t.me/{username}"
-        if re.fullmatch(r"[A-Za-z0-9_]{5,32}", username or "") else ""
+        if re.fullmatch(r"[A-Za-z0-9_]{1,32}", username or "") else ""
     )
     owner_contact = _telegram_contact_for_vk(phone)
     selected_package = _selected_package_text(info)
