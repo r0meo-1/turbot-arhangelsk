@@ -1,8 +1,10 @@
 from datetime import date
+import io
 import json
 
 import pytest
 import requests
+from urllib3.response import HTTPResponse
 
 from shared.biblio_globus import ExportClient, ExportError, ExportSettings
 
@@ -11,6 +13,8 @@ class Response:
     def __init__(self, payload=None, status=200, raw=None):
         self.status_code = status
         self.data = json.dumps(payload).encode() if raw is None else raw
+        self.headers = {}
+        self.raw = HTTPResponse(body=io.BytesIO(self.data), preload_content=False)
         self.closed = False
 
     def iter_content(self, chunk_size):
@@ -18,6 +22,7 @@ class Response:
 
     def close(self):
         self.closed = True
+        self.raw.close()
 
 
 class Session:

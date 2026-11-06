@@ -8,14 +8,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+import gzip
 import json
 import os
 import re
 import threading
 import time
+import zlib
 from typing import Any
 
 import requests
+from urllib3.exceptions import HTTPError, ReadTimeoutError
 
 
 class ExportError(RuntimeError):
@@ -44,6 +47,54 @@ def _id(value: str) -> str:
     if not re.fullmatch(r"[0-9]{1,20}", value):
         raise ExportError("invalid export identifier")
     return value
+
+
+class _DeadlineReader:
+    """Check elapsed time between raw reads, before gzip can buffer input."""
+
+    def __init__(self, raw, started):
+        self.raw = raw
+        self.started = started
+
+    def _check_time(self):
+        if time.monotonic() - self.started > 15:
+            raise ExportError("export timeout")
+
+    def read(self, size=-1):
+        if size == 0:
+            return b""
+        # read1 returns available bytes instead of waiting to fill a large
+        # decoded buffer. Older urllib3 versions can safely read one raw byte.
+        read1 = getattr(self.raw, "read1", None)
+        wanted = min(size, 65536) if size > 0 else 65536
+        data = bytearray()
+        while len(data) < wanted:
+            self._check_time()
+            if callable(read1):
+                chunk = read1(wanted - len(data), decode_content=False)
+            else:
+                chunk = self.raw.read(1, decode_content=False)
+            self._check_time()
+            if not chunk:
+                break
+            data.extend(chunk)
+        return bytes(data)
+
+
+def _read_chunks(response, started):
+    reader = _DeadlineReader(response.raw, started)
+    encoding = response.headers.get("Content-Encoding", "").strip().lower()
+    if encoding in ("gzip", "x-gzip"):
+        # Decode outside urllib3 so even a trickled gzip header is subject to
+        # the elapsed check; read1(decode_content=True) can buffer that header.
+        with gzip.GzipFile(fileobj=reader) as stream:
+            while chunk := stream.read(65536):
+                yield chunk
+    elif encoding in ("", "identity"):
+        while chunk := reader.read(65536):
+            yield chunk
+    else:
+        raise ExportError("unsupported export encoding")
 
 
 class ExportClient:
@@ -109,9 +160,7 @@ class ExportClient:
                         if response.status_code != 200:
                             raise ExportError(f"export HTTP {response.status_code}")
                         data = bytearray()
-                        for chunk in response.iter_content(chunk_size=65536):
-                            if time.monotonic() - started > 15:
-                                raise ExportError("export timeout")
+                        for chunk in _read_chunks(response, started):
                             data.extend(chunk)
                             if len(data) > self.settings.max_response_bytes:
                                 raise ExportError("export response exceeds size limit")
@@ -121,9 +170,9 @@ class ExportClient:
                         return payload
                     finally:
                         response.close()
-            except requests.Timeout:
+            except (requests.Timeout, ReadTimeoutError):
                 raise ExportError("export timeout") from None
-            except requests.RequestException:
+            except (requests.RequestException, HTTPError, OSError, EOFError, zlib.error):
                 raise ExportError("export transport failure") from None
             except (ValueError, UnicodeError):
                 raise ExportError("invalid export JSON") from None

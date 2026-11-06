@@ -1,13 +1,27 @@
 from __future__ import annotations
 
 import base64
+from datetime import date
 import json
 from typing import Any
+
+import pytest
 
 from shared import sletat
 from shared import tour_providers
 from shared import tourvisor
 from shared import travelata
+
+
+@pytest.fixture(autouse=True)
+def provider_fixture_date(monkeypatch):
+    """The recorded offers depart in October; keep their search date explicit."""
+    class FixtureDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 10, 1)
+
+    monkeypatch.setattr(tourvisor, "date", FixtureDate)
 
 
 class FakeResponse:

@@ -18,6 +18,18 @@ response size. One 401 may trigger form-body authentication and one replay;
 rotating session cookies are serialized. Diagnostics omit bodies, URLs and
 credentials. Never reuse the vendor session for another provider.
 
+Response bodies are read through elapsed-time checks on raw input, before gzip
+decoding. This prevents a slowly trickled body or gzip header from hiding inside
+a 64 KiB decoded read until the buffer is full. Identity, gzip and x-gzip bodies
+are accepted; other encodings fail closed. The size cap applies to decoded data,
+and malformed or truncated gzip closes the response with a redacted error.
+
+The 15-second elapsed check is per export attempt, not a hard deadline for the
+entire operation: an in-progress socket read can still take its configured read
+timeout, and DNS, headers, lock acquisition and authentication/replay have their
+existing behavior. Requests timeouts are not wall-clock limits; do not advertise
+this transport as providing a global 15-second cancellation guarantee.
+
 The export response is raw provider data. `minprice` is documented as per-person
 for a two-adult placement; it must not become TurBot's whole-trip price. Confirm
 the exact placement-level `prices.amount` / `RUR` scope before normalization.
