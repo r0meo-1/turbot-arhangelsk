@@ -36,6 +36,28 @@ def completion(text):
     })
 
 
+@pytest.mark.parametrize("route", ["chat", "blurb"])
+def test_yandex_requests_disable_provider_data_logging(provider, route):
+    logging_headers = []
+
+    def handler(request):
+        logging_headers.append(request.headers.get("x-data-logging-enabled"))
+        return completion("Подскажите город вылета.")
+
+    install_transport(provider, handler)
+    if route == "chat":
+        generate_ai_chat_reply(
+            "Что взять в дорогу?", enabled=True,
+            groq_client=provider.client, groq_model=provider.model,
+        )
+    else:
+        generate_ai_selection(
+            "Турция", "ноябрь", "2", "150000", ai_mode="yandex",
+            groq_client=provider.client, groq_model=provider.model,
+        )
+    assert logging_headers == ["false"]
+
+
 def test_real_sdk_request_and_trip_correction(provider):
     captured = []
 

@@ -100,6 +100,7 @@ def test_yandex_uses_fixed_endpoint_and_explicit_model(monkeypatch):
         "base_url": "https://ai.api.cloud.yandex.net/v1",
         "project": "test-folder",
         "max_retries": 0,
+        "default_headers": {"x-data-logging-enabled": "false"},
     }
 
 

@@ -21,7 +21,9 @@ OpenAI >=1.55.3 is required (1.50.0 fails to construct with HTTPX 0.28).
 Missing key,
 missing/invalid folder-qualified model URI, or missing SDK means no client.
 Automatic SDK retries are disabled; existing per-call timeouts and deterministic
-fallbacks apply. Set `AI_LEAD_ASSIST_ENABLED=true` only in the isolated test
+fallbacks apply. Every Yandex request sets `x-data-logging-enabled: false` to
+disable request logging by the provider; existing local logging is unchanged.
+Set `AI_LEAD_ASSIST_ENABLED=true` only in the isolated test
 process when validating the post-lead assistant. Do not send test TG/VK messages
 or deploy to production without the corresponding launch authorization.
 
@@ -146,3 +148,4 @@ Official references:
 - https://aistudio.yandex.ru/ru/docs/ai-studio/operations/get-api-key
 - https://aistudio.yandex.ru/ru/docs/ai-studio/pricing
 - https://aistudio.yandex.ru/ru/docs/ai-studio/operations/generation/completions-basic
+- https://aistudio.yandex.ru/ru/docs/ai-studio/operations/disable-logging
