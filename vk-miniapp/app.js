@@ -338,6 +338,32 @@
     }
   });
 
+  const exportText = $('export-text');
+  const exportFile = $('export-file');
+  const resetExport = () => {
+    if (exportFile.hasAttribute('href')) URL.revokeObjectURL(exportFile.href);
+    exportFile.removeAttribute('href');
+    exportText.value = '';
+    exportText.hidden = true;
+    $('export-status').textContent = '';
+  };
+  $('export-copy').addEventListener('click', async () => {
+    const text = exportText.value;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      if (exportText.value !== text) return;
+      exportText.hidden = true;
+      $('export-status').textContent = 'Текст заявки скопирован.';
+    } catch (_) {
+      if (exportText.value !== text) return;
+      exportText.hidden = false;
+      exportText.focus();
+      exportText.select();
+      $('export-status').textContent = 'Текст выделен. Выберите «Копировать» в меню устройства.';
+    }
+  });
+
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     syncDateRange();
@@ -389,6 +415,10 @@
       dd.textContent = value;
       $('summary').append(dt, dd);
     });
+    const lines = entries.map(([label, value]) => `${label}: ${value}`);
+    exportText.value = ['Заявка на подбор тура — АПРЕЛЬ тур', '', ...lines].join('\n');
+    const file = new Blob(['\uFEFF', exportText.value.replace(/\n/g, '\r\n')], { type: 'text/plain;charset=utf-8' });
+    exportFile.href = URL.createObjectURL(file);
 
     form.hidden = true;
     $('review').hidden = false;
@@ -400,6 +430,7 @@
 
   $('edit').addEventListener('click', async () => {
     try { await cancelOperation(); } catch (error) { $('status').textContent = error.message; return; }
+    resetExport();
     $('review').hidden = true;
     form.hidden = false;
     setJourney(false);
@@ -436,6 +467,7 @@
     $('budget-output').textContent = money($('budget').value);
     $('summary').replaceChildren();
     $('status').textContent = '';
+    resetExport();
     $('error').textContent = '';
     payload = undefined;
     $('review').hidden = true;

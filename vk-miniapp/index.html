@@ -6,7 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <meta name="theme-color" content="#f4f6f9">
   <title>АПРЕЛЬ тур — подбор тура</title>
-  <link rel="stylesheet" href="./styles.css?v=20261017-destination-direction">
+  <link rel="stylesheet" href="./styles.css?v=20261111-client-export">
   <script defer src="./vk-bridge.js?v=2.15.0"></script>
 </head>
 <body>
@@ -166,6 +166,12 @@
       <h2 id="review-title" tabindex="-1">Проверьте параметры</h2>
       <p>Заявка ещё не отправлена менеджеру.</p>
       <dl id="summary"></dl>
+      <div class="export-actions">
+        <a id="export-file" download="Заявка на подбор тура.txt">Скачать заявку</a>
+        <button id="export-copy" class="text-button" type="button">Скопировать текст</button>
+      </div>
+      <textarea id="export-text" aria-label="Текст заявки" rows="8" readonly hidden></textarea>
+      <p id="export-status" role="status"></p>
       <p class="review-note">Цену и наличие проверим при подборе. Сохранение параметров не бронирует тур.</p>
       <button id="edit" class="secondary" type="button">Назад к параметрам</button>
       <button id="save" class="primary" type="button">Сохранить и продолжить в боте</button>
@@ -183,7 +189,7 @@
     </dialog>
   </main>
 
-  <script defer src="./app.js?v=20261017-destination-direction"></script>
+  <script defer src="./app.js?v=20261111-client-export"></script>
   <script defer src="./departure-support.js?v=20261016-origin"></script>
 </body>
 </html>
