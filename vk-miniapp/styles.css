@@ -82,6 +82,10 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid 
 dl { display: grid; grid-template-columns: 1fr 1.5fr; gap: 14px; line-height: 1.5; }
 dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
 #chat { display: block; text-align: center; text-decoration: none; }
+.export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+.export-actions a, .export-actions .text-button { display: inline-flex; align-items: center; width: auto; min-height: 44px; padding: 0; }
+#export-text { width: 100%; padding: 8px; font: inherit; }
+#export-status:empty { margin: 0; }
 .field-card { min-width: 0; } input { min-width: 0; }
 
 .legal-links { display:flex; flex-wrap:wrap; justify-content:center; gap:8px 12px; margin:2px 8px 0; font-size:12px; }

@@ -118,6 +118,62 @@ def _mock_bridge(page):
     ))
 
 
+@pytest.mark.parametrize('signed', [False, True], ids=['preview', 'vk'])
+def test_client_exports_only_the_reviewed_trip(tmp_path, signed):
+    saved = []
+    app = Flask(__name__)
+    app.register_blueprint(create_blueprint(lambda *args: saved.append(args), lambda: (SECRET, APP_ID, GROUP_ID)))
+    server = make_server('127.0.0.1', 0, app)
+    with local_server(server), sync_playwright() as pw, ExitStack() as resources:
+        browser = pw.chromium.launch(channel='msedge', headless=True)
+        resources.callback(browser.close)
+        page = browser.new_page(viewport={'width': 390, 'height': 850})
+        _mock_bridge(page)
+        writes = []
+        page.on('request', lambda req: writes.append(req.url) if req.method == 'POST' else None)
+        launch = '?' + _signed_launch_params() if signed else ''
+        page.goto(f'http://127.0.0.1:{server.server_port}/vk/miniapp/{launch}')
+        page.locator('#trip-form[data-ready="true"]').wait_for()
+        page.get_by_role('button', name='Сочи', exact=True).click()
+        page.locator('#departure').fill('Архангельск')
+        page.locator('#children').fill('1')
+        page.locator('#children-ages input').fill('0')
+        page.locator('#consent').check()
+        page.locator('#terms-accepted').check()
+        page.locator('#submit').click()
+        summary = page.locator('#summary')
+        rows = zip(summary.locator('dt').all_text_contents(), summary.locator('dd').all_text_contents(), strict=True)
+        expected = ['Заявка на подбор тура — АПРЕЛЬ тур', '', *(f'{label}: {value}' for label, value in rows)]
+        download = page.get_by_role('link', name='Скачать заявку')
+        with page.expect_download() as event:
+            download.click(timeout=3000)
+        assert event.value.suggested_filename.endswith('.txt')
+        path = tmp_path / 'trip.txt'
+        event.value.save_as(path)
+        assert path.read_text(encoding='utf-8-sig').splitlines() == expected
+
+        # Embedded browsers may deny clipboard access. The same text must still be selectable.
+        page.evaluate("Object.defineProperty(navigator, 'clipboard', {configurable: true, value: undefined})")
+        page.get_by_role('button', name='Скопировать текст').click()
+        manual = page.get_by_role('textbox', name='Текст заявки')
+        assert manual.input_value().splitlines() == expected
+        assert manual.evaluate('el => el.selectionStart === 0 && el.selectionEnd === el.value.length')
+        page.locator('#edit').click()
+        page.get_by_role('button', name='Казань', exact=True).click()
+        page.locator('#submit').click()
+        assert manual.is_hidden()
+        page.evaluate("Object.defineProperty(navigator, 'clipboard', {value: {writeText: async text => window.copiedTrip = text}})")
+        page.get_by_role('button', name='Скопировать текст').click()
+        assert 'Казань' in page.evaluate('window.copiedTrip')
+        assert 'Сочи' not in page.evaluate('window.copiedTrip')
+        page.locator('#cancel-trip').click()
+        page.locator('#confirm-clear').click()
+        assert not download.is_visible()
+        assert not page.locator('#export-file').get_attribute('href')
+        assert not page.locator('#export-text').input_value()
+        assert saved == [] and writes == []
+
+
 def test_form_cannot_navigate_or_submit_before_app_handlers_load():
     app = Flask(__name__)
     saved = []
