@@ -4481,6 +4481,14 @@ def send_lead_owner_vk(text: str) -> bool:
     return False
 
 
+def _telegram_contact_for_vk(contact: str) -> str:
+    """VK treats @user as its own mention; use Telegram HTTPS links instead."""
+    if contact.lstrip().startswith("@") or contact.lower().startswith("telegram"):
+        return re.sub(r"(?<![\w/])@([A-Za-z0-9_]{1,32})\b",
+                      lambda match: "https://t.me/" + match.group(1), contact)
+    return contact
+
+
 def _notify_admin(
     chat_id: int,
     info: Dict[str, Any],
@@ -4491,12 +4499,18 @@ def _notify_admin(
     """2. Deliver the saved lead to Natalya in VK and optional ops copies."""
     global _last_lead_client_id
     recipients = LEAD_NOTIFY_IDS
+    telegram_link = (
+        f"https://t.me/{username}"
+        if re.fullmatch(r"[A-Za-z0-9_]{1,32}", username or "") else ""
+    )
+    owner_contact = _telegram_contact_for_vk(phone)
+    selected_package = _selected_package_text(info)
 
     owner_text = (
         f"🔔 Новая заявка (Telegram)\n"
         f"👩‍💼 Владелец: {LEAD_OWNER_NAME}\n\n"
         f"Клиент: {client_name or 'без имени'}"
-        + (f" @{username}" if username else "")
+        + (f" {telegram_link}" if telegram_link else "")
         + f"\nTelegram ID: {chat_id}\n"
         + (f"Источник: {info['source_tag']}\n" if info.get("source_tag") else "")
         + f"📍 {info.get('destination', '?')}\n"
@@ -4505,7 +4519,8 @@ def _notify_admin(
         + _trip_details_text(info, html=False)
         + f"👥 {_party_text(info)}\n"
         + f"💰 {'от' if info.get('budget_open_ended') else 'до'} {info.get('budget', '?')} ₽ {_budget_scope_text(info)}\n"
-        + f"📞 Связь клиента: {phone}\n\n"
+        + f"📞 Связь клиента: {owner_contact}\n\n"
+        + (selected_package + "\n\n" if selected_package else "")
         + "🔎 Подбор менеджеру:\n"
         + f"Tourvisor PRO: {MANAGER_TOURVISOR_URL}\n"
         + f"Sletat PRO: {MANAGER_SLETAT_URL}\n"
