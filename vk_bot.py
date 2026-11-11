@@ -520,6 +520,8 @@ selection_ai_provider = build_selection_provider(
     regcloud_api_key=REGCLOUD_API_KEY,
     regcloud_base_url=REGCLOUD_BASE_URL,
     regcloud_model=REGCLOUD_MODEL,
+    yandex_api_key=os.getenv("YANDEX_AI_API_KEY", ""),
+    yandex_model=os.getenv("YANDEX_AI_MODEL", ""),
 )
 
 # ---------------------------------------------------------------------------

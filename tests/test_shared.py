@@ -157,7 +157,7 @@ def test_budget_rejects_ambiguous_or_invalid_amount(text):
 def test_template_selection():
     text = template_selection("Турция", "15-22 июня", "2", "60000")
     assert "Турция" in text
-    assert "Заявка у менеджера" in text
+    assert "О направлении" in text
 
 
 def test_parse_russian_dates_basic():

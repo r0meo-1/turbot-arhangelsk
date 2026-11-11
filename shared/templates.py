@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Dict, Optional
 
 AI_FALLBACK_MESSAGE = (
-    "🌴 Спасибо за заявку! Менеджер подберёт варианты\n"
-    "и свяжется с вами в ближайшее время."
+    "🌴 Для подбора вариантов под ваши даты и бюджет нужна помощь менеджера."
 )
 
 # Текст уходит живым людям от имени агентства, поэтому здесь нет ни английских
@@ -30,8 +29,7 @@ TEMPLATE_INTROS: Dict[str, str] = {
         "и идеальной атмосферой для двоих."
     ),
     "оаэ": (
-        "Современный комфорт, роскошные отели, шопинг и пляжи с тёплым морем — "
-        "и всё это без оформления визы."
+        "Современная архитектура, шопинг и пляжные курорты."
     ),
 }
 
@@ -49,9 +47,9 @@ def template_selection(destination: str, dates: str, people: str, budget: str) -
     filler under a heading that promised results. Worse than saying nothing,
     because it reads as a bot padding for the sake of a reply.
 
-    What a client actually wants here is to know their request landed and when
-    someone will answer. A destination note is kept only where there is
-    something real to say.
+    This helper has no delivery receipt and must not confirm a lead or promise
+    a response time. A known destination note is kept without echoing arbitrary
+    client input; commercial and entry conditions require separate checks.
     """
     dest_lower = (destination or "").lower()
     intro: Optional[str] = None
@@ -60,11 +58,15 @@ def template_selection(destination: str, dates: str, people: str, budget: str) -
             intro = text
             break
 
-    parts = ["✅ Заявка у менеджера."]
+    parts = ["🌴 О направлении"]
     if intro:
-        parts.append(f"📍 {destination}. {intro}")
+        # Only a known label, never arbitrary client fields or injected text.
+        label = keyword.upper() if keyword == "оаэ" else keyword.capitalize()
+        parts.append(f"📍 {label}. {intro}")
+    else:
+        parts.append("Описание направления нужно уточнить.")
     parts.append(
-        "Менеджер подберёт варианты под ваши даты и бюджет и напишет сюда. "
-        "В рабочее время это обычно занимает до часа."
+        "Для подбора вариантов под ваши даты и бюджет нужна помощь менеджера. "
+        "Цену и наличие нужно проверить по актуальным предложениям."
     )
     return "\n\n".join(parts)
