@@ -641,6 +641,8 @@ selection_ai_provider = build_selection_provider(
     regcloud_api_key=REGCLOUD_API_KEY,
     regcloud_base_url=REGCLOUD_BASE_URL,
     regcloud_model=REGCLOUD_MODEL,
+    yandex_api_key=os.getenv("YANDEX_AI_API_KEY", ""),
+    yandex_model=os.getenv("YANDEX_AI_MODEL", ""),
 )
 
 # ---------------------------------------------------------------------------
@@ -1715,11 +1717,11 @@ def send_message(
         )
         if resp.status_code != 200:
             logger.error(
-                "Telegram %d for %s: %s", resp.status_code, _log_correlation(chat_id, namespace="tg-user"), resp.text[:200],
+                "Telegram HTTP %d for %s", resp.status_code, _log_correlation(chat_id, namespace="tg-user"),
             )
         return resp
     except requests.exceptions.RequestException as exc:
-        logger.error("send_message(%s) failed: %s", _log_correlation(chat_id, namespace="tg-user"), exc)
+        logger.error("send_message(%s) failed: %s", _log_correlation(chat_id, namespace="tg-user"), type(exc).__name__)
         return None
 
 
@@ -2636,6 +2638,10 @@ def _format_lead_assist_context(info: Dict[str, Any]) -> str:
     for label, value in fields:
         if value not in (None, ""):
             lines.append(f"{label}: {value}")
+    raw_ages = info.get("kids_ages")
+    ages = raw_ages if isinstance(raw_ages, list) else _ages_from_db(raw_ages)
+    if ages:
+        lines.append("Возраст детей: " + ", ".join(str(age) for age in ages))
     budget = info.get("budget")
     if budget not in (None, ""):
         scope = "на всю поездку" if info.get("budget_scope") == "total" else "на человека"
@@ -2651,7 +2657,7 @@ def _latest_lead_assist_context(chat_id: int) -> Optional[Dict[str, Any]]:
     with _db_cursor() as cur:
         row = cur.execute(
             """
-            SELECT destination, origin, dates, nights, people, kids, infants,
+            SELECT destination, origin, dates, nights, people, kids, kids_ages, infants,
                    budget, budget_scope, direct_only, created_at
             FROM leads
             WHERE chat_id = ? AND created_at >= ?
@@ -2663,12 +2669,30 @@ def _latest_lead_assist_context(chat_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def _ai_telegram_receipt(response, recipient: int) -> str:
+    """An HTTP response or completed webhook alone is not delivery evidence."""
+    if response is None:
+        return "uncertain"
+    try:
+        data = response.json()
+        if data.get("ok") is False:
+            return "failed"
+        result = data.get("result") or {}
+        if (response.status_code == 200 and data.get("ok") is True
+                and result.get("chat", {}).get("id") == recipient
+                and type(result.get("message_id")) is int and result["message_id"] > 0):
+            return "accepted"
+    except Exception:
+        pass
+    return "uncertain"
+
+
 def _notify_lead_assist_handoff(
     chat_id: int,
     question: str,
     reason: str,
     info: Optional[Dict[str, Any]] = None,
-) -> None:
+) -> Dict[str, Any]:
     """Tell the human owner when the guarded AI refuses or escalates a question."""
     global _last_lead_client_id
     safe_question = redact_external_ai_text(question).strip()[:1200] or "(пустой вопрос)"
@@ -2693,12 +2717,52 @@ def _notify_lead_assist_handoff(
         f"{context_block}\n\n"
         f"Ответить в Telegram: /send {chat_id}"
     )
-    send_lead_owner_vk(manager_text)
+    event_id = secrets.token_hex(12)
+    manager_text += f"\nКвитанция: {event_id}"
+    outcomes = {}
+    created_at = int(time.time())
+
+    def persist():
+        with _db_cursor(commit=True) as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS ai_handoff_receipts (
+                event_id TEXT PRIMARY KEY, subject TEXT NOT NULL,
+                created_at INTEGER NOT NULL, outcomes TEXT NOT NULL)""")
+            cur.execute("INSERT OR REPLACE INTO ai_handoff_receipts VALUES (?, ?, ?, ?)",
+                        (event_id, _log_correlation(chat_id, namespace="tg-user"),
+                         created_at, json.dumps(outcomes)))
+
+    # Fence an interrupted send in persistent metadata before any side effect.
+    # No raw question, trip fields, credentials or recipient IDs are stored.
+    if VK_ACCESS_TOKEN and LEAD_OWNER_VK_ID > 0:
+        outcomes["vk"] = "uncertain"
+    for index, recipient in enumerate(LEAD_NOTIFY_IDS):
+        outcomes[f"telegram:{index}"] = "uncertain"
+    persist()
+    try:
+        vk_ok = send_lead_owner_vk(manager_text)
+        if "vk" in outcomes:
+            outcomes["vk"] = "accepted" if vk_ok else "uncertain"
+    except Exception as exc:
+        logger.warning("AI handoff VK failure: %s", type(exc).__name__)
+    persist()
     with _lock:
         _last_lead_client_id = chat_id
     reply_kb = kb_admin_reply(chat_id)
-    for recipient in LEAD_NOTIFY_IDS:
-        send_message(recipient, manager_text, reply_markup=reply_kb)
+    for index, recipient in enumerate(LEAD_NOTIFY_IDS):
+        key = f"telegram:{index}"
+        try:
+            response = send_message(recipient, manager_text, reply_markup=reply_kb)
+            outcomes[key] = _ai_telegram_receipt(response, recipient)
+        except Exception as exc:
+            logger.warning("AI handoff Telegram failure: %s", type(exc).__name__)
+            outcomes[key] = "uncertain"
+        persist()
+    status = ("accepted" if "accepted" in outcomes.values() else
+              "uncertain" if "uncertain" in outcomes.values() else
+              "failed" if outcomes else "not_configured")
+    record_funnel_event("telegram", str((info or {}).get("source_tag") or "direct"),
+                        "ai_handoff_delivery", status)
+    return {"event_id": event_id, "status": status, "channels": outcomes}
 
 
 def _handle_lead_assist(
@@ -2754,7 +2818,10 @@ def _handle_lead_assist(
     entrypoint_key = _safe_ai_metric_label(entrypoint, default="generic", limit=16)
     metric_source = "lead_assist" if entrypoint_key == "generic" else f"lead_{entrypoint_key}"
     record_ai_chat_outcome(reply, source=metric_source)
-    send_message(chat_id, f"🤖 {reply.text}")
+    try:
+        send_message(chat_id, f"🤖 {reply.text}")
+    except Exception as exc:
+        logger.warning("AI client reply failed: %s", type(exc).__name__)
     if reply.handoff_required or reply.reason in {"provider_unavailable", "provider_error"}:
         _notify_lead_assist_handoff(chat_id, question, reply.reason, info=info)
     return True

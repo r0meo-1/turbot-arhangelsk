@@ -179,3 +179,30 @@ def test_output_guard_flags_only_high_risk_unverified_claims():
         == "unverified_legal_or_refund_claim"
     )
     assert classify_unverified_ai_output("Возьмите лёгкую одежду и зарядку.") is None
+
+
+def test_yandex_blurb_preserves_redaction_policy_and_timeout():
+    captured = {}
+    result = generate_ai_selection(
+        "Турция test@example.com", "ноябрь", "2", "150000",
+        ai_mode="yandex", groq_client=_FakeGroq(captured),
+        groq_model="gpt://test-folder/aliceai-llm-flash/latest", timeout=3,
+    )
+    assert result.startswith("🌴 О направлении")
+    assert captured["model"] == "gpt://test-folder/aliceai-llm-flash/latest"
+    assert captured["timeout"] == 3
+    assert captured["messages"][0]["content"] == TRAVEL_ASSISTANT_SYSTEM_PROMPT
+    assert "test@example.com" not in captured["messages"][1]["content"]
+
+
+def test_yandex_failure_returns_local_template():
+    class Unavailable:
+        def create(self, **kwargs):
+            raise TimeoutError("synthetic timeout")
+    client = SimpleNamespace(chat=SimpleNamespace(completions=Unavailable()))
+    result = generate_ai_selection(
+        "Турция", "ноябрь", "2", "150000",
+        ai_mode="yandex", groq_client=client,
+    )
+    from shared.templates import template_selection
+    assert result == template_selection("Турция", "ноябрь", "2", "150000")
